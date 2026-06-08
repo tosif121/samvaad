@@ -4,6 +4,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../services/api_service.dart';
 import '../services/sip_socket_service.dart';
 import '../widgets/dial_button.dart';
+import '../services/ringtone_service.dart';
 
 class OutgoingCallScreen extends StatefulWidget {
   final String phoneNumber;
@@ -23,6 +24,7 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
   bool _conferenceStatus = false;
   bool _isMerged = false;
   bool _showConferenceKeypad = false;
+  bool _isEndingCall = false;
   String _conferenceNumber = '';
   String? _conferenceBridgeID;
   int _seconds = 0;
@@ -32,6 +34,7 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
   @override
   void initState() {
     super.initState();
+    RingtoneService().stopRinging();
     Helper.setSpeakerphoneOn(false);
 
     if (_sip.callState == CallState.onCall) {
@@ -53,7 +56,7 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
           break;
         case 'callEnded':
         case 'callFailed':
-          Navigator.of(context).pop();
+          if (!_isEndingCall) Navigator.of(context).pop();
           break;
       }
 
@@ -150,6 +153,7 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
   }
 
   Future<void> _endCall() async {
+    _isEndingCall = true;
     if (_conferenceStatus) {
       await _disconnectConference();
     }
@@ -355,12 +359,13 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
             else
               _buildKeypad(),
             // End call button (hidden during add-to-call keypad)
+            if (!_showConferenceKeypad) const SizedBox(height: 16),
             if (!_showConferenceKeypad)
               GestureDetector(
                 onTap: _endCall,
                 child: Container(
-                  width: 72,
-                  height: 72,
+                  width: 60,
+                  height: 60,
                   decoration: BoxDecoration(
                     color: Colors.redAccent,
                     shape: BoxShape.circle,
@@ -545,7 +550,9 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
       children: digits
           .map((d) => DialButton(digit: d, onPressed: () {
-                setState(() => _conferenceNumber += d);
+                if (_conferenceNumber.length < 10) {
+                  setState(() => _conferenceNumber += d);
+                }
               }))
           .toList(),
     );

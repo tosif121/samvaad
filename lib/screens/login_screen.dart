@@ -30,10 +30,37 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
-  // Check for auto-login on app start
+  // Auto-login with saved credentials if available
   Future<void> _checkAutoLogin() async {
-    await AuthService.clearAuthData();
-    return;
+    // Pre-fill username from saved credentials
+    final prefsUsername = await AuthService.getSavedUsername();
+    if (prefsUsername != null) {
+      _usernameController.text = prefsUsername;
+    }
+
+    final isLoggedIn = await AuthService.isLoggedIn();
+    if (!isLoggedIn) return;
+
+    setState(() => _isLoading = true);
+
+    final result = await AuthService.autoLogin();
+    if (!mounted) return;
+
+    if (result == null) {
+      if (mounted) setState(() => _isLoading = false);
+      return;
+    }
+
+    if (result['success'] == true) {
+      final userData = result['data']!['userData'];
+      final micGranted = await _requestPermissions();
+      if (mounted) _navigateToDialpad(userData);
+    } else if (result['conflict'] == true) {
+      await AuthService.clearAuthData();
+      if (mounted) setState(() => _isLoading = false);
+    } else {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 
   void _navigateToDialpad(Map<String, dynamic> userData) {

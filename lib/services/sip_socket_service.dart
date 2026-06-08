@@ -52,6 +52,7 @@ class SipSocketService implements sip.SipUaHelperListener {
   dynamic _remoteStream;
 
   sip.Call? _activeCall;
+  bool _endingCall = false;
 
   // Stream controller for UI events
   final _eventController = StreamController<Map<String, dynamic>>.broadcast();
@@ -62,6 +63,7 @@ class SipSocketService implements sip.SipUaHelperListener {
   bool get isRegistered => _isRegistered;
   bool get isConnected => _isConnected;
   String get bridgeID => _bridgeID;
+  Map<String, dynamic>? connectionData;
 
   SipSocketService._internal() {
     _helper.addSipUaHelperListener(this);
@@ -143,7 +145,6 @@ class SipSocketService implements sip.SipUaHelperListener {
       case sip.RegistrationStateEnum.REGISTERED:
         _isRegistered = true;
         _log('SIP REGISTERED successfully');
-        _emit(SipEvent.registered);
         _onRegistered();
         break;
       case sip.RegistrationStateEnum.UNREGISTERED:
@@ -189,6 +190,7 @@ class SipSocketService implements sip.SipUaHelperListener {
     
     switch (state.state) {
       case sip.CallStateEnum.CALL_INITIATION:
+        _endingCall = false;
         if (call.direction == 'INCOMING') {
           final remoteNumber = call.remote_identity ?? 'Unknown';
           
@@ -237,7 +239,7 @@ class SipSocketService implements sip.SipUaHelperListener {
         break;
       case sip.CallStateEnum.FAILED:
         _log('Call FAILED: ${state.cause}');
-        _callState = CallState.idle;
+        _onCallEnded();
         _emit(SipEvent.callFailed, data: {'reason': state.cause});
         break;
       case sip.CallStateEnum.ENDED:
@@ -300,6 +302,8 @@ class SipSocketService implements sip.SipUaHelperListener {
     _log('userReady after registration: $result');
 
     final connResult = await ApiService.userConnection();
+    connectionData = connResult['data'] as Map<String, dynamic>?;
+    _log('Initial userConnection response', data: connectionData);
     if (connResult['success'] == true) {
       final msg = connResult['data']['message'];
       if (msg == 'poor connection problem ,please login again') {
@@ -307,6 +311,9 @@ class SipSocketService implements sip.SipUaHelperListener {
         _handlePoorConnection();
       }
     }
+
+    // Emit registered AFTER connectionData is populated
+    _emit(SipEvent.registered);
   }
 
   // ─── Load Call Context ────────────────────────────────────────────────────
@@ -323,6 +330,8 @@ class SipSocketService implements sip.SipUaHelperListener {
   // ─── Call Ended ───────────────────────────────────────────────────────────
 
   Future<void> _onCallEnded() async {
+    if (_endingCall) return;
+    _endingCall = true;
     _log('Call ended. Cleaning up...');
     _callState = CallState.disposition;
     _emit(SipEvent.callEnded, data: {'bridgeID': _bridgeID});
@@ -330,9 +339,19 @@ class SipSocketService implements sip.SipUaHelperListener {
     // Call ended API
     await ApiService.callEnded();
 
-    if (_bridgeID.isNotEmpty) {
-      await ApiService.submitDisposition(_bridgeID, 'Auto Disposed');
+    // Ensure bridgeID is loaded before submitting disposition
+    var bridgeID = _bridgeID;
+    if (bridgeID.isEmpty) {
+      _log('bridgeID empty, fetching from userOnCall...');
+      final ctx = await ApiService.userOnCall();
+      bridgeID = ctx['data']?['currentcalldata']?['bridgeID'] ?? '';
     }
+
+    if (bridgeID.isEmpty) {
+      _log('No bridgeID found, using fallback');
+      bridgeID = 'deadCallId';
+    }
+    await ApiService.submitDisposition(bridgeID, 'Auto Disposed');
 
     _callState = CallState.idle;
     _bridgeID = '';
@@ -361,20 +380,34 @@ class SipSocketService implements sip.SipUaHelperListener {
       _,
     ) async {
       _log('Running periodic connection check...');
+
       final result = await ApiService.userConnection();
+      connectionData = result['data'] as Map<String, dynamic>?;
+      _log('userConnection response', data: connectionData);
       if (result['success'] == true) {
         final msg = result['data']['message'];
-        final status = result['data']['status'];
-        _log('Connection check: $msg | status: $status');
 
         if (msg == 'poor connection problem ,please login again') {
           _handlePoorConnection();
         } else if (result['data']['isUserLogin'] == false) {
-          _connectionCheckTimer?.cancel();
-          _isConnected = false;
-          _isRegistered = false;
-          _helper.stop();
-          _emit(SipEvent.connectionLost, data: {'reason': 'session_expired'});
+          // Session expired — try to re-establish before giving up
+          _log('Session expired, attempting to re-establish...');
+          final readyResult = await ApiService.userReady();
+          final retryResult = await ApiService.userConnection();
+          if (retryResult['success'] == true &&
+              retryResult['data']['isUserLogin'] == true) {
+            _log('Session re-established successfully');
+            if (!_isConnected) {
+              _isConnected = true;
+              _emit(SipEvent.connectionRestored);
+            }
+          } else {
+            _connectionCheckTimer?.cancel();
+            _isConnected = false;
+            _isRegistered = false;
+            _helper.stop();
+            _emit(SipEvent.connectionLost, data: {'reason': 'session_expired'});
+          }
         } else {
           if (!_isConnected) {
             _isConnected = true;
@@ -433,8 +466,7 @@ class SipSocketService implements sip.SipUaHelperListener {
         _log('Exception during reject/terminate: $e');
       }
     }
-    _callState = CallState.idle;
-    _incomingNumber = '';
+    _onCallEnded();
     _emit(SipEvent.callFailed, data: {'reason': 'rejected'});
   }
 

@@ -8,6 +8,7 @@ import '../widgets/dial_button.dart';
 import '../services/auth_service.dart';
 import '../services/api_service.dart';
 import '../services/sip_socket_service.dart';
+import '../services/ringtone_service.dart';
 
 class DialpadScreen extends StatefulWidget {
   final String userName;
@@ -60,6 +61,7 @@ class _DialpadScreenState extends State<DialpadScreen> {
             print('[DIALPAD] Suppressing incomingCall screen because already on a call');
             break;
           }
+          RingtoneService().startRinging();
           final number = event['number'] as String? ?? 'Unknown';
           Navigator.of(context).push(
             MaterialPageRoute(
@@ -68,19 +70,42 @@ class _DialpadScreenState extends State<DialpadScreen> {
           );
           break;
 
+        case 'callAnswered':
+          RingtoneService().stopRinging();
+          break;
+
+        case 'callEnded':
+        case 'callFailed':
+          RingtoneService().stopRinging();
+          break;
+
+        case 'registered':
+          if (mounted) setState(() {});
+          break;
+
         case 'registrationFailed':
+          if (mounted) setState(() {});
           _showConnectionError('registration_failed');
           break;
 
         case 'connectionLost':
+          if (mounted) setState(() {});
           final reason = event['reason'] as String? ?? 'unknown';
           _showConnectionError(reason);
           break;
+
+        case 'connectionRestored':
+          if (mounted) setState(() {});
+          break;
+
+        default:
+          if (mounted) setState(() {});
       }
     });
 
     // Connect SIP WebSocket + register
     await _sip.connect();
+    if (mounted) setState(() {});
   }
 
   void _showConnectionError(String reason) {
@@ -128,7 +153,9 @@ class _DialpadScreenState extends State<DialpadScreen> {
   }
 
   void _onDigitPressed(String digit) {
-    setState(() => _dialedNumber += digit);
+    if (_dialedNumber.length < 10) {
+      setState(() => _dialedNumber += digit);
+    }
   }
 
   void _onBackspace() {
@@ -140,6 +167,55 @@ class _DialpadScreenState extends State<DialpadScreen> {
         ),
       );
     }
+  }
+
+  String get _connectionStatus {
+    final data = _sip.connectionData;
+    if (data == null) return 'Connecting…';
+    final msg = data['status']?.toString() ?? data['message']?.toString();
+    if (msg != null && msg.isNotEmpty) return msg;
+    return 'Online';
+  }
+
+  bool get _isConnected =>
+      _sip.connectionData?['status'] != 'poor connection' &&
+      _sip.connectionData?['isUserLogin'] != false;
+
+  Widget _buildStatusBadge() {
+    final status = _connectionStatus;
+    final connected = _isConnected;
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: 12,
+        vertical: 6,
+      ),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.2),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(
+              color: connected ? Colors.greenAccent : Colors.orangeAccent,
+              shape: BoxShape.circle,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            status,
+            style: const TextStyle(
+              fontSize: 13,
+              color: Colors.white,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _onCall() async {
@@ -351,38 +427,7 @@ class _DialpadScreenState extends State<DialpadScreen> {
                   ),
                 ),
                 const SizedBox(height: 8),
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 12,
-                    vertical: 6,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.2),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        width: 8,
-                        height: 8,
-                        decoration: const BoxDecoration(
-                          color: Colors.greenAccent,
-                          shape: BoxShape.circle,
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      const Text(
-                        'Online',
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: Colors.white,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
+                _buildStatusBadge(),
               ],
             ),
           ),

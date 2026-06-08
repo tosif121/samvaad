@@ -1,11 +1,66 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'outgoing_call_screen.dart';
 import '../services/sip_socket_service.dart';
+import '../services/ringtone_service.dart';
 
-class IncomingCallScreen extends StatelessWidget {
+class IncomingCallScreen extends StatefulWidget {
   final String phoneNumber;
 
   const IncomingCallScreen({super.key, required this.phoneNumber});
+
+  @override
+  State<IncomingCallScreen> createState() => _IncomingCallScreenState();
+}
+
+class _IncomingCallScreenState extends State<IncomingCallScreen> {
+  final _sip = SipSocketService();
+  StreamSubscription? _sipSubscription;
+  bool _dismissed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _sipSubscription = _sip.events.listen((event) {
+      if (!mounted || _dismissed) return;
+      final type = event['event'] as String;
+      if (type == 'callEnded' || type == 'callFailed') {
+        _dismissed = true;
+        RingtoneService().stopRinging();
+        Navigator.of(context).pop();
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _sipSubscription?.cancel();
+    RingtoneService().stopRinging();
+    super.dispose();
+  }
+
+  void _decline() {
+    _dismissed = true;
+    _sipSubscription?.cancel();
+    RingtoneService().stopRinging();
+    SipSocketService().rejectCall();
+    if (mounted) Navigator.of(context).pop();
+  }
+
+  void _accept() {
+    _dismissed = true;
+    _sipSubscription?.cancel();
+    RingtoneService().stopRinging();
+    SipSocketService().answerCall();
+    if (mounted) {
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (context) =>
+              OutgoingCallScreen(phoneNumber: widget.phoneNumber),
+        ),
+      );
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -74,7 +129,7 @@ class IncomingCallScreen extends StatelessWidget {
             const SizedBox(height: 36),
             // Phone number
             Text(
-              phoneNumber,
+              widget.phoneNumber,
               style: const TextStyle(
                 fontSize: 28,
                 fontWeight: FontWeight.bold,
@@ -98,10 +153,7 @@ class IncomingCallScreen extends StatelessWidget {
                   Column(
                     children: [
                       GestureDetector(
-                        onTap: () {
-                          SipSocketService().rejectCall();
-                          Navigator.of(context).pop();
-                        },
+                        onTap: _decline,
                         child: Container(
                           width: 68,
                           height: 68,
@@ -138,15 +190,7 @@ class IncomingCallScreen extends StatelessWidget {
                   Column(
                     children: [
                       GestureDetector(
-                        onTap: () {
-                          SipSocketService().answerCall();
-                          Navigator.of(context).pushReplacement(
-                            MaterialPageRoute(
-                              builder: (context) =>
-                                  OutgoingCallScreen(phoneNumber: phoneNumber),
-                            ),
-                          );
-                        },
+                        onTap: _accept,
                         child: Container(
                           width: 68,
                           height: 68,

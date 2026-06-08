@@ -134,14 +134,16 @@ class AuthService {
     return null;
   }
 
-  // Logout
+  // Logout — clears all stored credentials
   static Future<void> logout() async {
     final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('token');
+    await prefs.remove('savedUsername');
+    await prefs.remove('savedPassword');
     await prefs.setBool('userLoggedOut', true);
-    // Keep savedUsername and savedPassword for potential re-login
   }
 
-  // Clear all auth data
+  // Clear all auth data (including saved credentials)
   static Future<void> clearAuthData() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('token');
@@ -160,6 +162,12 @@ class AuthService {
   static Future<String?> getToken() async {
     final token = await getStoredToken();
     return token?['token'];
+  }
+
+  // Get saved username
+  static Future<String?> getSavedUsername() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('savedUsername');
   }
 
   // Get saved password for SIP registration
