@@ -40,6 +40,9 @@ dependencies:
   web_socket_channel: ^3.0.1
   sip_ua: 1.0.1
   flutter_webrtc: 0.12.12+hotfix.1
+  firebase_core: ^3.12.1
+  firebase_messaging: ^15.2.4
+  flutter_local_notifications: ^18.0.1
 
 dev_dependencies:
   flutter_test:

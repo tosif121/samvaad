@@ -20,11 +20,6 @@ class ApiService {
   static Future<Map<String, String>> _getHeaders() async {
     final token = await AuthService.getToken();
     final username = await AuthService.getUsername();
-    _log(
-      'HEADERS',
-      'Building headers',
-      data: {'hasToken': token != null, 'username': username},
-    );
     return {
       'Content-Type': 'application/json',
       if (token != null) 'Authorization': 'Bearer $token',
@@ -134,49 +129,35 @@ class ApiService {
   // Dial Number
   static Future<Map<String, dynamic>> dialNumber(String phoneNumber) async {
     try {
-      _log('DIAL', 'POST /dialnumber', data: {'receiver': phoneNumber});
-
       final headers = await _getHeaders();
-      _log(
-        'DIAL',
-        'Headers',
-        data: headers.map(
-          (k, v) => MapEntry(k, k == 'Authorization' ? 'Bearer ***' : v),
-        ),
-      );
-
+      final url = '$baseUrl/dialnumber';
+      final body = jsonEncode({'receiver': phoneNumber});
+      _log('DIAL', 'REQUEST', data: {
+        'method': 'POST',
+        'url': url,
+        'headers': headers,
+        'body': {'receiver': phoneNumber},
+      });
       final response = await http.post(
-        Uri.parse('$baseUrl/dialnumber'),
+        Uri.parse(url),
         headers: headers,
-        body: jsonEncode({'receiver': phoneNumber}),
+        body: body,
       );
-
-      _log('DIAL', 'Response ${response.statusCode}', data: response.body);
-
+      _log('DIAL', 'RESPONSE', data: {
+        'statusCode': response.statusCode,
+        'body': response.body,
+      });
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-
         if (data.containsKey('success') && data['success'] == false) {
-          _log('DIAL', 'API returned failure', data: data);
-          return {
-            'success': false,
-            'message': data['message'] ?? 'Failed to dial',
-          };
+          _log('DIAL', 'API returned success=false', data: data);
+          return {'success': false, 'message': data['message'] ?? 'Failed to dial'};
         }
-
         _log('DIAL', 'Call initiated successfully', data: data);
         return {'success': true, 'message': 'Call initiated', 'data': data};
       }
-
-      _log(
-        'DIAL',
-        'Failed with status ${response.statusCode}',
-        data: response.body,
-      );
-      return {
-        'success': false,
-        'message': 'Failed: ${response.statusCode} - ${response.body}',
-      };
+      _log('DIAL', 'Non-200 response', data: {'status': response.statusCode, 'body': response.body});
+      return {'success': false, 'message': 'Failed: ${response.statusCode}'};
     } catch (e) {
       _log('DIAL', 'EXCEPTION: $e');
       return {'success': false, 'message': 'Error: $e'};
@@ -410,6 +391,48 @@ class ApiService {
     } catch (e) {
       _log('DISPOSITION', 'EXCEPTION: $e');
       return {'success': false, 'message': 'Error: $e'};
+    }
+  }
+
+  static Future<bool> storeFirebaseToken(String token) async {
+    try {
+      final username = await AuthService.getUsername();
+      if (username == null) return false;
+
+      _log('FCM_TOKEN', 'POST /storeFirebaseToken -> token=$token username=$username');
+      final response = await http.post(
+        Uri.parse('$baseUrl/storeFirebaseToken'),
+        headers: await _getHeaders(),
+        body: jsonEncode({
+          'token': token,
+          'username': username,
+        }),
+      );
+      _log('FCM_TOKEN', 'Response ${response.statusCode}: ${response.body}');
+      return response.statusCode == 200;
+    } catch (e) {
+      _log('FCM_TOKEN', 'EXCEPTION: $e');
+      return false;
+    }
+  }
+
+  // Agent Available — tells server this agent can accept queue calls
+  static Future<bool> agentAvailable() async {
+    try {
+      final username = await AuthService.getUsername();
+      if (username == null) return false;
+
+      _log('AGENT_AVAILABLE', 'POST /user/agentAvailable/$username');
+      final response = await http.post(
+        Uri.parse('$baseUrl/user/agentAvailable/$username'),
+        headers: await _getHeaders(),
+        body: jsonEncode({}),
+      );
+      _log('AGENT_AVAILABLE', 'Response ${response.statusCode}', data: response.body);
+      return response.statusCode == 200;
+    } catch (e) {
+      _log('AGENT_AVAILABLE', 'EXCEPTION: $e');
+      return false;
     }
   }
 }

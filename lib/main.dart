@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'screens/login_screen.dart';
+import 'screens/dialpad_screen.dart';
+import 'services/auth_service.dart';
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
   runApp(const SamvaadApp());
 }
 
@@ -62,7 +65,54 @@ class SamvaadApp extends StatelessWidget {
           ),
         ),
       ),
-      home: const LoginScreen(),
+      home: const _StartupScreen(),
+    );
+  }
+}
+
+class _StartupScreen extends StatefulWidget {
+  const _StartupScreen();
+
+  @override
+  State<_StartupScreen> createState() => _StartupScreenState();
+}
+
+class _StartupScreenState extends State<_StartupScreen> {
+  @override
+  void initState() {
+    super.initState();
+    _checkAuth();
+  }
+
+  Future<void> _checkAuth() async {
+    final isLoggedIn = await AuthService.isLoggedIn();
+    if (!mounted) return;
+
+    if (isLoggedIn) {
+      final userData = await AuthService.getUserData() ?? {};
+      final name = userData['Name'] ?? userData['username'] ?? 'User';
+      final email = userData['Email'] ?? userData['username'] ?? '';
+
+      if (mounted) {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (_) => DialpadScreen(userName: name, userEmail: email),
+          ),
+        );
+      }
+    } else {
+      if (mounted) {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => const LoginScreen()),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(
+      body: Center(child: CircularProgressIndicator()),
     );
   }
 }

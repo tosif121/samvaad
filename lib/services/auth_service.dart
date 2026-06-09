@@ -19,7 +19,6 @@ class AuthService {
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        print('HTTP LOGIN RESPONSE DATA: $data');
 
         // Check for various error messages
         if (data['message'] == 'wrong login info') {

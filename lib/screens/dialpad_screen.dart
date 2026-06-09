@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'outgoing_call_screen.dart';
 import 'incoming_call_screen.dart';
 import 'login_screen.dart';
@@ -9,6 +8,7 @@ import '../services/auth_service.dart';
 import '../services/api_service.dart';
 import '../services/sip_socket_service.dart';
 import '../services/ringtone_service.dart';
+import '../services/fcm_service.dart';
 
 class DialpadScreen extends StatefulWidget {
   final String userName;
@@ -24,16 +24,36 @@ class DialpadScreen extends StatefulWidget {
   State<DialpadScreen> createState() => _DialpadScreenState();
 }
 
-class _DialpadScreenState extends State<DialpadScreen> {
+class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserver {
   String _dialedNumber = '';
   final _sip = SipSocketService();
   StreamSubscription? _sipSubscription;
+  bool _isOutgoingCall = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _requestMicrophonePermission();
-    _initSip();
+    _initFcm().then((_) => _initSip());
+  }
+
+  AppLifecycleState _appLifecycleState = AppLifecycleState.resumed;
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    print('[LIFECYCLE] $state');
+    _appLifecycleState = state;
+  }
+
+  Future<void> _initFcm() async {
+    print('[DIALPAD] _initFcm() called');
+    await FcmService().init();
+    // Allow pending notification callback to fire before SIP connects
+    await Future.delayed(const Duration(milliseconds: 300));
+    print('[DIALPAD] _initFcm() completed');
+    if (!mounted) return;
+    setState(() {});
   }
 
   Future<void> _requestMicrophonePermission() async {
@@ -43,14 +63,14 @@ class _DialpadScreenState extends State<DialpadScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _sipSubscription?.cancel();
-    _sip.disconnect();
     super.dispose();
   }
 
   Future<void> _initSip() async {
     // Listen for SIP events before connecting
-    _sipSubscription = _sip.events.listen((event) {
+    _sipSubscription = _sip.events.listen((event) async {
       if (!mounted) return;
       final type = event['event'] as String;
       print('[DIALPAD] Received SIP Event: $type | Data: $event');
@@ -58,25 +78,44 @@ class _DialpadScreenState extends State<DialpadScreen> {
       switch (type) {
         case 'incomingCall':
           if (_sip.callState == CallState.onCall) {
-            print('[DIALPAD] Suppressing incomingCall screen because already on a call');
             break;
           }
-          RingtoneService().startRinging();
+          FcmService().cancelAllNotifications();
+          RingtoneService().stopRinging();
+          final handled = await _checkPendingNotificationAction();
+          if (handled) break;
           final number = event['number'] as String? ?? 'Unknown';
-          Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (_) => IncomingCallScreen(phoneNumber: number),
-            ),
-          );
+
+          if (_appLifecycleState != AppLifecycleState.resumed) {
+            print('[DIALPAD] App is in background. Showing local notification instead of screen.');
+            FcmService().showIncomingCallNotification(number);
+          } else {
+            RingtoneService().startRinging();
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => IncomingCallScreen(phoneNumber: number),
+              ),
+            );
+          }
           break;
 
         case 'callAnswered':
+          FcmService().cancelAllNotifications();
           RingtoneService().stopRinging();
+          if (_sip.incomingNumber.isNotEmpty && !_isOutgoingCall) {
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => OutgoingCallScreen(phoneNumber: _sip.incomingNumber),
+              ),
+            );
+          }
           break;
 
         case 'callEnded':
         case 'callFailed':
+          FcmService().cancelAllNotifications();
           RingtoneService().stopRinging();
+          _isOutgoingCall = false;
           break;
 
         case 'registered':
@@ -90,8 +129,6 @@ class _DialpadScreenState extends State<DialpadScreen> {
 
         case 'connectionLost':
           if (mounted) setState(() {});
-          final reason = event['reason'] as String? ?? 'unknown';
-          _showConnectionError(reason);
           break;
 
         case 'connectionRestored':
@@ -169,6 +206,23 @@ class _DialpadScreenState extends State<DialpadScreen> {
     }
   }
 
+  Future<bool> _checkPendingNotificationAction() async {
+    final pending = await FcmService().getPendingCallAction();
+    if (pending == null) return false;
+    await FcmService().clearPendingCallAction();
+    final action = pending['action'] as String?;
+    if (action == 'decline') {
+      print('[DIALPAD] Auto-declining call from notification action');
+      _sip.rejectCall();
+      return true;
+    } else if (action == 'answer') {
+      print('[DIALPAD] Auto-answering call from notification action');
+      _sip.answerCall();
+      return true;
+    }
+    return false;
+  }
+
   String get _connectionStatus {
     final data = _sip.connectionData;
     if (data == null) return 'Connecting…';
@@ -220,6 +274,7 @@ class _DialpadScreenState extends State<DialpadScreen> {
 
   Future<void> _onCall() async {
     if (_dialedNumber.isEmpty) return;
+    print('[DIALPAD] _onCall() initiated for number: $_dialedNumber');
 
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
@@ -230,10 +285,17 @@ class _DialpadScreenState extends State<DialpadScreen> {
     );
 
     _sip.setDialedNumber(_dialedNumber);
+    _isOutgoingCall = true;
+    print('[DIALPAD] Calling ApiService.agentAvailable()');
+    final agentResult = await ApiService.agentAvailable();
+    print('[DIALPAD] agentAvailable result: $agentResult');
+    print('[DIALPAD] Calling ApiService.dialNumber($_dialedNumber)');
     final result = await ApiService.dialNumber(_dialedNumber);
+    print('[DIALPAD] dialNumber result: $result');
     if (!mounted) return;
 
     if (result['success'] == true) {
+      print('[DIALPAD] dialNumber SUCCESS, navigating to OutgoingCallScreen');
       await Navigator.of(context).push(
         MaterialPageRoute(
           builder: (_) => OutgoingCallScreen(phoneNumber: _dialedNumber),
@@ -241,6 +303,8 @@ class _DialpadScreenState extends State<DialpadScreen> {
       );
       setState(() => _dialedNumber = '');
     } else {
+      print('[DIALPAD] dialNumber FAILED: ${result['message']}');
+      _isOutgoingCall = false;
       _sip.setDialedNumber('');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(

@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'outgoing_call_screen.dart';
 import '../services/sip_socket_service.dart';
 import '../services/ringtone_service.dart';
 
@@ -43,7 +42,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
     _dismissed = true;
     _sipSubscription?.cancel();
     RingtoneService().stopRinging();
-    SipSocketService().rejectCall();
+    _sip.rejectCall();
     if (mounted) Navigator.of(context).pop();
   }
 
@@ -51,15 +50,8 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
     _dismissed = true;
     _sipSubscription?.cancel();
     RingtoneService().stopRinging();
-    SipSocketService().answerCall();
-    if (mounted) {
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(
-          builder: (context) =>
-              OutgoingCallScreen(phoneNumber: widget.phoneNumber),
-        ),
-      );
-    }
+    _sip.answerCall();
+    if (mounted) Navigator.of(context).pop();
   }
 
   @override

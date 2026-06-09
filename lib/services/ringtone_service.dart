@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io' show Platform;
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 class RingtoneService {
   static final RingtoneService _instance = RingtoneService._internal();
@@ -9,10 +10,21 @@ class RingtoneService {
 
   static const _channel = MethodChannel('com.example.samvaad/ringtone');
   Timer? _fallbackTimer;
+  static bool _channelCreated = false;
+
+  Future<void> createRingtoneChannel() async {
+    if (_channelCreated) return;
+    _channelCreated = true;
+    if (!kIsWeb && Platform.isAndroid) {
+      try {
+        await _channel.invokeMethod('createRingtoneChannel');
+      } catch (_) {}
+    }
+  }
 
   Future<void> startRinging() async {
     await stopRinging();
-    if (Platform.isAndroid) {
+    if (!kIsWeb && Platform.isAndroid) {
       try {
         await _channel.invokeMethod('playRingtone');
         return;
@@ -27,7 +39,7 @@ class RingtoneService {
   Future<void> stopRinging() async {
     _fallbackTimer?.cancel();
     _fallbackTimer = null;
-    if (Platform.isAndroid) {
+    if (!kIsWeb && Platform.isAndroid) {
       try {
         await _channel.invokeMethod('stopRingtone');
       } catch (_) {}

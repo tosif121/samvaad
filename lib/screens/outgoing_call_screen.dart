@@ -34,17 +34,22 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
   @override
   void initState() {
     super.initState();
+    print('[OUTGOING] initState for number: ${widget.phoneNumber}');
     RingtoneService().stopRinging();
     Helper.setSpeakerphoneOn(false);
 
     if (_sip.callState == CallState.onCall) {
+      print('[OUTGOING] Already onCall, loading context');
       _isConnected = true;
       _loadCallContext();
+    } else {
+      print('[OUTGOING] Waiting for SIP callAnswered event');
     }
 
     _sipSubscription = _sip.events.listen((event) {
       if (!mounted) return;
       final type = event['event'] as String;
+      print('[OUTGOING] SIP event: $type');
       final data = event['data'] as Map<String, dynamic>?;
 
       switch (type) {
