@@ -1,0 +1,10 @@
+-keep class org.webrtc.** { *; }
+-keep class com.cloudwebrtc.** { *; }
+-keep class com.google.firebase.** { *; }
+-keep class io.flutter.** { *; }
+-dontwarn com.google.firebase.**
+-dontwarn org.webrtc.**
+-dontwarn com.cloudwebrtc.**
+-dontwarn com.google.android.play.core.splitcompat.SplitCompatApplication
+-dontwarn com.google.android.play.core.splitinstall.**
+-dontwarn com.google.android.play.core.tasks.**

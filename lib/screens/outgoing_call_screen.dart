@@ -125,17 +125,22 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
 
   Future<void> _startConferenceCall() async {
     if (_conferenceNumber.isEmpty) return;
+    await _sip.toggleHold();
+    await Future.delayed(const Duration(seconds: 1));
     final result = await ApiService.reqConf(
       _conferenceNumber,
       bridgeID: _sip.bridgeID,
     );
-    if (result['success'] == true) {
-      await _sip.toggleHold();
+    final msg = result['data']?['message'] as String? ?? '';
+    final success = result['success'] == true && !msg.contains('error');
+    if (success) {
       setState(() {
         _conferenceStatus = true;
         _showConferenceKeypad = false;
         _conferenceBridgeID = _sip.bridgeID;
       });
+    } else {
+      await _sip.toggleHold();
     }
   }
 
@@ -287,7 +292,6 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
                           isActive: true,
                           onPressed: () {
                             _disconnectConference();
-                            _endCall();
                           },
                         ),
                       ],

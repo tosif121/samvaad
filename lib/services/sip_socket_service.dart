@@ -372,6 +372,7 @@ class SipSocketService implements sip.SipUaHelperListener {
   }
 
   Future<void> _restoreUserSession() async {
+    if (_callState == CallState.onCall) return;
     final readyResult = await ApiService.userReady();
     if (readyResult['success'] == true) {
       final retryResult = await ApiService.userConnection();
@@ -392,6 +393,9 @@ class SipSocketService implements sip.SipUaHelperListener {
     _connectionCheckTimer = Timer.periodic(const Duration(seconds: 10), (
       _,
     ) async {
+      // Don't run recovery logic during an active call
+      if (_callState == CallState.onCall) return;
+
       final result = await ApiService.userConnection();
       connectionData = result['data'] as Map<String, dynamic>?;
       if (result['success'] == true) {
@@ -526,6 +530,7 @@ class SipSocketService implements sip.SipUaHelperListener {
   dynamic get remoteStream => _remoteStream;
   bool get isMuted => _isMuted;
   bool get isHeld => _isHeld;
+  sip.Call? get activeCall => _activeCall;
 
   // ─── Disconnect ───────────────────────────────────────────────────────────
 
