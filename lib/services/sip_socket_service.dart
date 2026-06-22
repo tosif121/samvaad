@@ -501,6 +501,11 @@ class SipSocketService implements sip.SipUaHelperListener {
     }
   }
 
+  void mute(bool value) {
+    if (value == _isMuted) return;
+    toggleMute();
+  }
+
   Future<void> toggleHold() async {
     final call = _activeCall;
     if (call == null) return;
@@ -516,6 +521,18 @@ class SipSocketService implements sip.SipUaHelperListener {
     } catch (e) {
       _log('Exception during hold/unhold: $e');
     }
+  }
+
+  /// HTTP-only hold — no SIP re-INVITE. Used for conference setup (matches React Native).
+  Future<void> httpHold() async {
+    await ApiService.reqHold();
+    _isHeld = true;
+  }
+
+  /// HTTP-only unhold — no SIP re-INVITE. Used for conference cleanup (matches React Native).
+  Future<void> httpUnhold() async {
+    await ApiService.reqUnHold();
+    _isHeld = false;
   }
 
   void sendDTMF(String tone) {

@@ -73,9 +73,11 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
             _conferenceStatus = true;
             _showConferenceKeypad = false;
           });
+          _sip.mute(false);
         } else if (msg.contains('customer host channel disconnected')) {
           setState(() => _conferenceStatus = false);
-          if (!_isMerged) _toggleHold();
+          _sip.httpUnhold();
+          _sip.mute(false);
         }
       }
     });
@@ -125,14 +127,16 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
 
   Future<void> _startConferenceCall() async {
     if (_conferenceNumber.isEmpty) return;
-    await _sip.toggleHold();
+
+    // HTTP-only hold (no SIP re-INVITE) — matches React Native
+    await _sip.httpHold();
+    await _sip.mute(true);
     await Future.delayed(const Duration(seconds: 1));
-    final result = await ApiService.reqConf(
-      _conferenceNumber,
-      bridgeID: _sip.bridgeID,
-    );
+
+    final result = await ApiService.reqConf(_conferenceNumber);
     final msg = result['data']?['message'] as String? ?? '';
-    final success = result['success'] == true && !msg.contains('error');
+    final success = msg == 'conferance call dialed' || msg == 'conference call dialed';
+
     if (success) {
       setState(() {
         _conferenceStatus = true;
@@ -140,12 +144,16 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
         _conferenceBridgeID = _sip.bridgeID;
       });
     } else {
-      await _sip.toggleHold();
+      // Auto-unhold on failure — matches React Native
+      await _sip.httpUnhold();
+      _sip.mute(false);
     }
   }
 
   Future<void> _mergeConference() async {
-    await _sip.toggleHold();
+    // HTTP-only unhold — matches React Native
+    await _sip.httpUnhold();
+    _sip.mute(false);
     setState(() => _isMerged = true);
   }
 
@@ -159,7 +167,9 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
       _isMerged = false;
       _showConferenceKeypad = false;
     });
-    if (!_isMerged) await _sip.toggleHold();
+    // Always unhold after conference disconnect — matches React Native
+    await _sip.httpUnhold();
+    _sip.mute(false);
   }
 
   Future<void> _endCall() async {
@@ -314,6 +324,7 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
                             icon: _sip.isHeld ? Icons.play_arrow : Icons.pause,
                             label: _sip.isHeld ? 'Resume' : 'Hold',
                             isActive: _sip.isHeld,
+                            enabled: !_conferenceStatus,
                             onPressed: _toggleHold,
                           ),
                           _buildControlButton(

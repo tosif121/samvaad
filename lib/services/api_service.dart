@@ -277,21 +277,17 @@ class ApiService {
   }
 
   // Conference / Add Call
-  static Future<Map<String, dynamic>> reqConf(
-    String confNumber, {
-    String bridgeID = '',
-  }) async {
+  static Future<Map<String, dynamic>> reqConf(String confNumber) async {
     try {
       final username = await AuthService.getUsername();
       if (username == null) return {'success': false, 'message': 'No username'};
       _log('REQ_CONF', 'POST /reqConf/$username', data: {
         'confNumber': confNumber,
-        'bridgeID': bridgeID,
       });
       final response = await http.post(
         Uri.parse('$baseUrl/reqConf/$username'),
         headers: await _getHeaders(),
-        body: jsonEncode({'confNumber': confNumber, 'bridgeID': bridgeID}),
+        body: jsonEncode({'confNumber': confNumber.replaceAll(RegExp(r'\s+'), '')}),
       );
       _log('REQ_CONF', 'Response ${response.statusCode}', data: response.body);
       if (response.statusCode == 200) {
