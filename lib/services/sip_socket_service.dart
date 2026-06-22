@@ -381,6 +381,7 @@ class SipSocketService implements sip.SipUaHelperListener {
           retryResult['data']['isUserLogin'] == true &&
           retryResult['data']['status'] != 'poor connection') {
         _isConnected = true;
+        _isRegistered = true;
         _emit(SipEvent.connectionRestored);
         return;
       }
