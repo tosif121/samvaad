@@ -82,14 +82,11 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _handleLogin() async {
-    // Validation
     if (_usernameController.text.isEmpty || _passwordController.text.isEmpty) {
-      _showError('Please enter your credentials');
       return;
     }
 
     if (_passwordController.text.length < 6) {
-      _showError('Password must be at least 6 characters');
       return;
     }
 
@@ -107,37 +104,9 @@ class _LoginScreenState extends State<LoginScreen> {
 
       if (result['success'] == true) {
         final userData = result['data']['userData'];
-        final daysRemaining = result['data']['subscriptionDaysRemaining'];
 
-        // Show subscription warnings if needed
-        if (daysRemaining != null) {
-          if (daysRemaining < 0) {
-            _showWarning(
-              'Your subscription expired ${daysRemaining.abs()} days ago',
-            );
-          } else if (daysRemaining < 3) {
-            _showWarning('Your subscription expires in $daysRemaining days');
-          }
-        }
-
-        _showSuccess('Login successful');
-
-        // Request runtime permissions before proceeding
-        final micGranted = await _requestPermissions();
-        if (!micGranted && mounted) {
-          _showWarning(
-            'Microphone permission is required for calls. '
-            'Please grant it in Settings.',
-          );
-        }
-
+        await _requestPermissions();
         _navigateToDialpad(userData);
-      } else {
-        _showError(result['message'] ?? 'Login failed');
-      }
-    } catch (e) {
-      if (mounted) {
-        _showError('An error occurred: ${e.toString()}');
       }
     } finally {
       if (mounted) {
@@ -146,51 +115,6 @@ class _LoginScreenState extends State<LoginScreen> {
         });
       }
     }
-  }
-
-  void _showError(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: Colors.redAccent,
-        behavior: SnackBarBehavior.floating,
-        margin: EdgeInsets.only(
-          bottom: MediaQuery.of(context).size.height - 100,
-          left: 20,
-          right: 20,
-        ),
-      ),
-    );
-  }
-
-  void _showSuccess(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: Colors.green,
-        behavior: SnackBarBehavior.floating,
-        margin: EdgeInsets.only(
-          bottom: MediaQuery.of(context).size.height - 100,
-          left: 20,
-          right: 20,
-        ),
-      ),
-    );
-  }
-
-  void _showWarning(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: Colors.orange,
-        behavior: SnackBarBehavior.floating,
-        margin: EdgeInsets.only(
-          bottom: MediaQuery.of(context).size.height - 100,
-          left: 20,
-          right: 20,
-        ),
-      ),
-    );
   }
 
   @override
