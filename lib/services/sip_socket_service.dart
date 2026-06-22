@@ -501,9 +501,24 @@ class SipSocketService implements sip.SipUaHelperListener {
     }
   }
 
-  void mute(bool value) {
-    if (value == _isMuted) return;
-    toggleMute();
+  /// Local-only mute — disables/enables audio tracks without SIP re-INVITE.
+  /// Matches React Native behavior (no SIP signaling for mute).
+  void mute(bool muted) {
+    if (muted == _isMuted) return;
+    final call = _activeCall;
+    if (call == null) return;
+    try {
+      final streams = call.peerConnection?.getLocalStreams();
+      if (streams == null) return;
+      for (final stream in streams) {
+        for (final track in stream.getAudioTracks()) {
+          track.enabled = !muted;
+        }
+      }
+      _isMuted = muted;
+    } catch (e) {
+      _log('Exception during local mute: $e');
+    }
   }
 
   Future<void> toggleHold() async {
