@@ -5,6 +5,7 @@ import 'auth_service.dart';
 import 'api_service.dart';
 import 'remote_audio_stub.dart'
     if (dart.library.html) 'remote_audio_web.dart';
+import 'call_lifecycle_service.dart';
 
 // Call state matching webphone lifecycle
 enum CallState { idle, dialing, ringing, onCall, disposition }
@@ -225,6 +226,7 @@ class SipSocketService implements sip.SipUaHelperListener {
         _log('Call CONFIRMED');
         _callState = CallState.onCall;
         _emit(SipEvent.callAnswered);
+        CallLifecycleService().onCallStarted();
         break;
       case sip.CallStateEnum.STREAM:
         if (state.originator == 'remote' && state.stream != null) {
@@ -328,6 +330,7 @@ class SipSocketService implements sip.SipUaHelperListener {
     _endingCall = true;
     _callState = CallState.disposition;
     _emit(SipEvent.callEnded, data: {'bridgeID': _bridgeID});
+    CallLifecycleService().onCallEnded();
 
     // Call ended API
     await ApiService.callEnded();
@@ -459,6 +462,7 @@ class SipSocketService implements sip.SipUaHelperListener {
       _log('Answering SIP call');
       call.answer({'audio': true, 'video': false});
       _loadCallContext();
+      CallLifecycleService().onCallStarted();
     } else {
       _log('No active SIP call — calling agentAvailable to trigger INVITE');
       _pendingAnswerForQueue = true;
@@ -496,15 +500,36 @@ class SipSocketService implements sip.SipUaHelperListener {
     }
   }
 
-  Future<void> toggleHold() async {
+  /// Local-only mute — disables/enables audio tracks without SIP re-INVITE.
+  /// Matches webphone behavior.
+  void mute(bool muted) {
+    if (muted == _isMuted) return;
     final call = _activeCall;
     if (call == null) return;
     try {
+      final streams = call.peerConnection?.getLocalStreams();
+      if (streams == null) return;
+      for (final stream in streams) {
+        final tracks = stream?.getAudioTracks();
+        if (tracks == null) continue;
+        for (final track in tracks) {
+          track.enabled = !muted;
+        }
+      }
+      _isMuted = muted;
+    } catch (e) {
+      _log('Exception during local mute: $e');
+    }
+  }
+
+  /// HTTP-only hold/unhold — no SIP re-INVITE. Matches webphone behavior.
+  Future<void> toggleHold() async {
+    try {
       if (_isHeld) {
-        call.unhold();
         await ApiService.reqUnHold();
+        mute(false);
       } else {
-        call.hold();
+        mute(true);
         await ApiService.reqHold();
       }
       _isHeld = !_isHeld;

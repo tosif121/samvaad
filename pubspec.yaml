@@ -43,6 +43,9 @@ dependencies:
   firebase_core: ^3.12.1
   firebase_messaging: ^15.2.4
   flutter_local_notifications: ^18.0.1
+  wakelock_plus: ^1.6.1
+  audio_session: ^0.2.3
+  flutter_background_service: ^5.1.0
 
 dev_dependencies:
   flutter_test:

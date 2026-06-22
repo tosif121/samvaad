@@ -157,6 +157,11 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
     if (!_isMerged) await _sip.toggleHold();
   }
 
+  Future<void> _handleTransfer() async {
+    if (_sip.bridgeID.isEmpty) return;
+    await ApiService.reqTransfer(_sip.bridgeID);
+  }
+
   Future<void> _endCall() async {
     _isEndingCall = true;
     if (_conferenceStatus) {
@@ -193,9 +198,16 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
               ),
             ),
             const SizedBox(height: 16),
-            // Phone number
+            // Phone number — matches webphone display:
+            // no conference: main number | conference, not merged: conf number | merged: "main Conf with conf"
             Text(
-              widget.phoneNumber,
+              _conferenceStatus && !_isMerged
+                  ? _conferenceNumber
+                  : _conferenceStatus && _isMerged
+                      ? '${widget.phoneNumber} Conference with $_conferenceNumber'
+                      : widget.phoneNumber,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: const TextStyle(
                 fontSize: 26,
                 fontWeight: FontWeight.bold,
@@ -267,11 +279,40 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
             // Controls
             if (_showConferenceKeypad)
               _buildConferenceKeypad()
-            else if (_conferenceStatus)
+            else if (_conferenceStatus && !_showKeypad)
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 32),
                 child: Column(
                   children: [
+                    // Row 1: Hold (disabled), Transfer (disabled unless merged), Keypad
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 20),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                        children: [
+                          _buildControlButton(
+                            icon: _sip.isHeld ? Icons.play_arrow : Icons.pause,
+                            label: _sip.isHeld ? 'Resume' : 'Hold',
+                            isActive: _sip.isHeld,
+                            enabled: false,
+                            onPressed: null,
+                          ),
+                          _buildControlButton(
+                            icon: Icons.phone_forwarded,
+                            label: 'Transfer',
+                            isActive: false,
+                            enabled: _isMerged,
+                            onPressed: _handleTransfer,
+                          ),
+                          _buildControlButton(
+                            icon: Icons.dialpad,
+                            label: 'Keypad',
+                            onPressed: () => setState(() => _showKeypad = true),
+                          ),
+                        ],
+                      ),
+                    ),
+                    // Row 2: Merge, Mute, Speaker
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                       children: [
@@ -282,12 +323,19 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
                           onPressed: _mergeConference,
                         ),
                         _buildControlButton(
-                          icon: Icons.call_end,
-                          label: 'Disconnect Conf',
-                          isActive: true,
-                          onPressed: () {
-                            _disconnectConference();
-                            _endCall();
+                          icon: _sip.isMuted ? Icons.mic_off : Icons.mic,
+                          label: _sip.isMuted ? 'Unmute' : 'Mute',
+                          isActive: _sip.isMuted,
+                          onPressed: _toggleMute,
+                        ),
+                        _buildControlButton(
+                          icon: _isSpeakerOn ? Icons.volume_up : Icons.volume_down,
+                          label: _isSpeakerOn ? 'Speaker' : 'Earpiece',
+                          isActive: _isSpeakerOn,
+                          onPressed: () async {
+                            final newVal = !_isSpeakerOn;
+                            await Helper.setSpeakerphoneOn(newVal);
+                            setState(() => _isSpeakerOn = newVal);
                           },
                         ),
                       ],
@@ -317,7 +365,7 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
                             label: 'Transfer',
                             isActive: false,
                             enabled: _sip.bridgeID.isNotEmpty,
-                            onPressed: () {},
+                            onPressed: _handleTransfer,
                           ),
                           _buildControlButton(
                             icon: Icons.dialpad,
@@ -367,7 +415,7 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
             if (!_showConferenceKeypad) const SizedBox(height: 16),
             if (!_showConferenceKeypad)
               GestureDetector(
-                onTap: _endCall,
+                onTap: _conferenceStatus ? _disconnectConference : _endCall,
                 child: Container(
                   width: 60,
                   height: 60,
