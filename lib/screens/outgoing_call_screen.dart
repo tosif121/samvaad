@@ -73,11 +73,9 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
             _conferenceStatus = true;
             _showConferenceKeypad = false;
           });
-          _sip.mute(false);
         } else if (msg.contains('customer host channel disconnected')) {
           setState(() => _conferenceStatus = false);
-          _sip.httpUnhold();
-          _sip.mute(false);
+          if (!_isMerged) _toggleHold();
         }
       }
     });
@@ -127,33 +125,22 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
 
   Future<void> _startConferenceCall() async {
     if (_conferenceNumber.isEmpty) return;
-
-    // HTTP-only hold (no SIP re-INVITE) — matches React Native
-    await _sip.httpHold();
-    await _sip.mute(true);
-    await Future.delayed(const Duration(seconds: 1));
-
-    final result = await ApiService.reqConf(_conferenceNumber);
-    final msg = result['data']?['message'] as String? ?? '';
-    final success = msg == 'conferance call dialed' || msg == 'conference call dialed';
-
-    if (success) {
+    final result = await ApiService.reqConf(
+      _conferenceNumber,
+      bridgeID: _sip.bridgeID,
+    );
+    if (result['success'] == true) {
+      await _sip.toggleHold();
       setState(() {
         _conferenceStatus = true;
         _showConferenceKeypad = false;
         _conferenceBridgeID = _sip.bridgeID;
       });
-    } else {
-      // Auto-unhold on failure — matches React Native
-      await _sip.httpUnhold();
-      _sip.mute(false);
     }
   }
 
   Future<void> _mergeConference() async {
-    // HTTP-only unhold — matches React Native
-    await _sip.httpUnhold();
-    _sip.mute(false);
+    await _sip.toggleHold();
     setState(() => _isMerged = true);
   }
 
@@ -167,9 +154,7 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
       _isMerged = false;
       _showConferenceKeypad = false;
     });
-    // Always unhold after conference disconnect — matches React Native
-    await _sip.httpUnhold();
-    _sip.mute(false);
+    if (!_isMerged) await _sip.toggleHold();
   }
 
   Future<void> _endCall() async {
@@ -302,6 +287,7 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
                           isActive: true,
                           onPressed: () {
                             _disconnectConference();
+                            _endCall();
                           },
                         ),
                       ],
@@ -324,7 +310,6 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
                             icon: _sip.isHeld ? Icons.play_arrow : Icons.pause,
                             label: _sip.isHeld ? 'Resume' : 'Hold',
                             isActive: _sip.isHeld,
-                            enabled: !_conferenceStatus,
                             onPressed: _toggleHold,
                           ),
                           _buildControlButton(

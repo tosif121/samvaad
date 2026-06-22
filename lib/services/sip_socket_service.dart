@@ -372,7 +372,6 @@ class SipSocketService implements sip.SipUaHelperListener {
   }
 
   Future<void> _restoreUserSession() async {
-    if (_callState == CallState.onCall) return;
     final readyResult = await ApiService.userReady();
     if (readyResult['success'] == true) {
       final retryResult = await ApiService.userConnection();
@@ -381,7 +380,6 @@ class SipSocketService implements sip.SipUaHelperListener {
           retryResult['data']['isUserLogin'] == true &&
           retryResult['data']['status'] != 'poor connection') {
         _isConnected = true;
-        _isRegistered = true;
         _emit(SipEvent.connectionRestored);
         return;
       }
@@ -394,9 +392,6 @@ class SipSocketService implements sip.SipUaHelperListener {
     _connectionCheckTimer = Timer.periodic(const Duration(seconds: 10), (
       _,
     ) async {
-      // Don't run recovery logic during an active call
-      if (_callState == CallState.onCall) return;
-
       final result = await ApiService.userConnection();
       connectionData = result['data'] as Map<String, dynamic>?;
       if (result['success'] == true) {
@@ -501,26 +496,6 @@ class SipSocketService implements sip.SipUaHelperListener {
     }
   }
 
-  /// Local-only mute — disables/enables audio tracks without SIP re-INVITE.
-  /// Matches React Native behavior (no SIP signaling for mute).
-  void mute(bool muted) {
-    if (muted == _isMuted) return;
-    final call = _activeCall;
-    if (call == null) return;
-    try {
-      final streams = call.peerConnection?.getLocalStreams();
-      if (streams == null) return;
-      for (final stream in streams) {
-        for (final track in stream.getAudioTracks()) {
-          track.enabled = !muted;
-        }
-      }
-      _isMuted = muted;
-    } catch (e) {
-      _log('Exception during local mute: $e');
-    }
-  }
-
   Future<void> toggleHold() async {
     final call = _activeCall;
     if (call == null) return;
@@ -538,18 +513,6 @@ class SipSocketService implements sip.SipUaHelperListener {
     }
   }
 
-  /// HTTP-only hold — no SIP re-INVITE. Used for conference setup (matches React Native).
-  Future<void> httpHold() async {
-    await ApiService.reqHold();
-    _isHeld = true;
-  }
-
-  /// HTTP-only unhold — no SIP re-INVITE. Used for conference cleanup (matches React Native).
-  Future<void> httpUnhold() async {
-    await ApiService.reqUnHold();
-    _isHeld = false;
-  }
-
   void sendDTMF(String tone) {
     final call = _activeCall;
     if (call == null) return;
@@ -563,7 +526,6 @@ class SipSocketService implements sip.SipUaHelperListener {
   dynamic get remoteStream => _remoteStream;
   bool get isMuted => _isMuted;
   bool get isHeld => _isHeld;
-  sip.Call? get activeCall => _activeCall;
 
   // ─── Disconnect ───────────────────────────────────────────────────────────
 

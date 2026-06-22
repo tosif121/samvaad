@@ -275,6 +275,15 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
   Future<void> _onCall() async {
     if (_dialedNumber.isEmpty) return;
     print('[DIALPAD] _onCall() initiated for number: $_dialedNumber');
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Initiating call...'),
+        duration: Duration(seconds: 2),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+
     _sip.setDialedNumber(_dialedNumber);
     _isOutgoingCall = true;
     print('[DIALPAD] Calling ApiService.agentAvailable()');
@@ -297,6 +306,13 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
       print('[DIALPAD] dialNumber FAILED: ${result['message']}');
       _isOutgoingCall = false;
       _sip.setDialedNumber('');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(result['message'] ?? 'Failed to initiate call'),
+          backgroundColor: Colors.redAccent,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
     }
   }
 
