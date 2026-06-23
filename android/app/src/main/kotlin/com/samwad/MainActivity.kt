@@ -40,8 +40,22 @@ class MainActivity : FlutterActivity() {
                     stopRingtone()
                     result.success(true)
                 }
+                "bringAppToForeground" -> {
+                    bringToForeground()
+                    result.success(true)
+                }
                 else -> result.notImplemented()
             }
+        }
+    }
+
+    private fun bringToForeground() {
+        val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
+        launchIntent?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        try {
+            startActivity(launchIntent)
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 

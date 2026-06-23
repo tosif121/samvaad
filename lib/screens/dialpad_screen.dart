@@ -171,8 +171,9 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
           RingtoneService().stopRinging();
 
           if (_appLifecycleState != AppLifecycleState.resumed) {
-            print('[DIALPAD] App is in background. Waiting for FCM notification to open app.');
-            _lastIncomingNumber = number;
+            print('[DIALPAD] App is minimized but socket is alive. Waking app via MethodChannel.');
+            RingtoneService().bringAppToForeground();
+            _showIncomingCall(number);
           } else {
             _showIncomingCall(number);
           }

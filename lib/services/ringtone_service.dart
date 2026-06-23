@@ -36,6 +36,16 @@ class RingtoneService {
     });
   }
 
+  Future<void> bringAppToForeground() async {
+    if (!kIsWeb && Platform.isAndroid) {
+      try {
+        await _channel.invokeMethod('bringAppToForeground');
+      } catch (e) {
+        print('Error bringing app to foreground: $e');
+      }
+    }
+  }
+
   Future<void> stopRinging() async {
     _fallbackTimer?.cancel();
     _fallbackTimer = null;
