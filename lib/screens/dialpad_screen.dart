@@ -311,6 +311,8 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
     _callHandled = false;
     _recentlyHandled.add(number);
     RingtoneService().startRinging();
+    // Aggressively clear any Android notification since the Flutter UI is now taking over!
+    RingtoneService().clearNotification();
     
     final result = await showGeneralDialog<bool>(
       context: context,
