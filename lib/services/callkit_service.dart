@@ -114,6 +114,9 @@ Future<void> showCallkitIncoming(String number) async {
       supportsVideo: false,
       includesCallsInRecents: false,
     ),
+    callingNotification: const NotificationParams(
+      isShowCallback: false,
+    ),
     extra: {'number': number},
   ));
 }
