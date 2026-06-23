@@ -69,6 +69,7 @@ class SamvaadFcmService : FirebaseMessagingService() {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setAutoCancel(true)
+            .setFullScreenIntent(pendingIntent, true)
             .setContentIntent(pendingIntent)
             .build()
 
