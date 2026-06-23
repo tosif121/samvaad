@@ -49,8 +49,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
     _onDismiss();
     _sipSubscription?.cancel();
     RingtoneService().stopRinging();
-    // Pop dialog BEFORE rejectCall — rejectCall may emit events that push routes
-    if (mounted) Navigator.of(context).pop();
+    if (mounted) Navigator.of(context).pop(false);
     await _sip.rejectCall();
   }
 
@@ -59,9 +58,8 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
     _onDismiss();
     _sipSubscription?.cancel();
     RingtoneService().stopRinging();
-    // Pop dialog BEFORE answerCall — answerCall emits callAnswered which pushes OutgoingCallScreen
-    if (mounted) Navigator.of(context).pop();
-    _sip.answerCall();
+    if (mounted) Navigator.of(context).pop(true);
+    // answerCall is now handled by the caller (DialpadScreen) to ensure instant navigation
   }
 
 

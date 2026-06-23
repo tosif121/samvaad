@@ -297,7 +297,7 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
     );
   }
 
-  void _showIncomingCall(String number) {
+  Future<void> _showIncomingCall(String number) async {
     if (_isShowingIncomingDialog) {
       print('[DIALPAD] _showIncomingCall skipped — already showing dialog');
       return;
@@ -311,7 +311,8 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
     _callHandled = false;
     _recentlyHandled.add(number);
     RingtoneService().startRinging();
-    showGeneralDialog(
+    
+    final result = await showGeneralDialog<bool>(
       context: context,
       barrierDismissible: false,
       barrierColor: Colors.transparent,
@@ -322,7 +323,27 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
       transitionBuilder: (ctx, anim, secondaryAnim, child) {
         return FadeTransition(opacity: anim, child: child);
       },
-    ).then((_) => _isShowingIncomingDialog = false);
+    );
+    
+    _isShowingIncomingDialog = false;
+
+    if (result == true) {
+      // INSTANT TRANSITION
+      _navigatedToCallScreen = true;
+      _sip.answerCall();
+      if (mounted) {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => OutgoingCallScreen(
+              phoneNumber: number,
+              isIncoming: true,
+            ),
+          ),
+        ).then((_) {
+          _navigatedToCallScreen = false;
+        });
+      }
+    }
   }
 
   void _onDigitPressed(String digit) {
