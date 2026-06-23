@@ -43,6 +43,7 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _requestMicrophonePermission();
+    _requestOverlayPermission();
     _initFcm().then((_) => _initSip());
   }
 
@@ -125,6 +126,15 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
   Future<void> _requestMicrophonePermission() async {
     // Permission is handled by flutter_webrtc at call time.
     // No pre-fetch needed - avoids Android audio resource conflicts.
+  }
+
+  Future<void> _requestOverlayPermission() async {
+    if (Platform.isAndroid) {
+      final status = await Permission.systemAlertWindow.status;
+      if (!status.isGranted) {
+        await Permission.systemAlertWindow.request();
+      }
+    }
   }
 
   @override
