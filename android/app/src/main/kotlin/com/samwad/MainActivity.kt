@@ -45,6 +45,11 @@ class MainActivity : FlutterActivity() {
                     bringToForeground()
                     result.success(true)
                 }
+                "clearNotification" -> {
+                    val manager = getSystemService(android.content.Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+                    manager.cancel(1001)
+                    result.success(true)
+                }
                 else -> result.notImplemented()
             }
         }

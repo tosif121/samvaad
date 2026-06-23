@@ -3,6 +3,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'api_service.dart';
+import 'ringtone_service.dart';
 
 const _fcmPendingCallKey = 'fcm_pending_call';
 const _fcmPendingCallTsKey = 'fcm_pending_call_ts';
@@ -149,6 +150,7 @@ class FcmService {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_fcmPendingCallKey);
     await prefs.remove(_fcmPendingCallTsKey);
+    await RingtoneService().clearNotification();
   }
 
   void dispose() {

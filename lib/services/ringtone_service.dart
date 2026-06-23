@@ -46,6 +46,16 @@ class RingtoneService {
     }
   }
 
+  Future<void> clearNotification() async {
+    if (!kIsWeb && Platform.isAndroid) {
+      try {
+        await _channel.invokeMethod('clearNotification');
+      } catch (e) {
+        print('Error clearing notification: $e');
+      }
+    }
+  }
+
   Future<void> stopRinging() async {
     _fallbackTimer?.cancel();
     _fallbackTimer = null;
