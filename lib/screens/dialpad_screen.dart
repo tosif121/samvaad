@@ -338,7 +338,6 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
           MaterialPageRoute(
             builder: (_) => OutgoingCallScreen(
               phoneNumber: number,
-              isIncoming: true,
             ),
           ),
         ).then((_) {
