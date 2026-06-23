@@ -274,8 +274,8 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
       print('[DIALPAD] _showIncomingCall skipped — already showing dialog');
       return;
     }
-    if (_sip.hasPendingAnswer || _sip.callState != CallState.idle) {
-      print('[DIALPAD] _showIncomingCall skipped — call already being handled');
+    if (_sip.hasPendingAnswer || _sip.callState == CallState.onCall || _sip.callState == CallState.dialing) {
+      print('[DIALPAD] _showIncomingCall skipped — call already being handled or dialing');
       return;
     }
     print('[DIALPAD] _showIncomingCall for $number');
