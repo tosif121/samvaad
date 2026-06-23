@@ -1,17 +1,11 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'screens/login_screen.dart';
 import 'screens/dialpad_screen.dart';
 import 'services/auth_service.dart';
 import 'services/call_lifecycle_service.dart';
-import 'services/callkit_service.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  FlutterCallkitIncoming.onBackgroundMessage(callkitBackgroundHandler);
-  FlutterCallkitIncoming.invokeFlutter((_) {
-    print('[MAIN] invokeFlutter called — app restored from CallKit');
-  });
   CallLifecycleService().init();
   runApp(const SamvaadApp());
 }

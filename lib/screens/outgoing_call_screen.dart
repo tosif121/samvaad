@@ -27,7 +27,6 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
   bool _showConferenceKeypad = false;
   bool _isEndingCall = false;
   String _conferenceNumber = '';
-  String? _conferenceBridgeID;
   int _seconds = 0;
   StreamSubscription? _sipSubscription;
   Timer? _timer;
@@ -51,8 +50,6 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
       if (!mounted) return;
       final type = event['event'] as String;
       print('[OUTGOING] SIP event: $type');
-      final data = event['data'] as Map<String, dynamic>?;
-
       switch (type) {
         case 'callAnswered':
           if (!_isConnected) {
@@ -145,7 +142,6 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
         _conferenceStatus = true;
         _conferenceConnected = false;
         _showConferenceKeypad = false;
-        _conferenceBridgeID = _sip.bridgeID;
       });
     }
   }
@@ -163,7 +159,6 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
       _conferenceStatus = false;
       _conferenceConnected = false;
       _conferenceNumber = '';
-      _conferenceBridgeID = null;
       _isMerged = false;
       _showConferenceKeypad = false;
     });

@@ -44,14 +44,14 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
     widget.onDismiss?.call();
   }
 
-  void _decline() {
+  Future<void> _decline() async {
     _dismissed = true;
     _onDismiss();
     _sipSubscription?.cancel();
     RingtoneService().stopRinging();
     // Pop dialog BEFORE rejectCall — rejectCall may emit events that push routes
     if (mounted) Navigator.of(context).pop();
-    _sip.rejectCall();
+    await _sip.rejectCall();
   }
 
   void _accept() {

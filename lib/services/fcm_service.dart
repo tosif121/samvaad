@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -81,10 +80,16 @@ class FcmService {
       print('[FCM] Foreground message: ${message.data}');
     });
 
+    FirebaseMessaging.onMessageOpenedApp.listen((message) async {
+      print('[FCM] App opened from notification: ${message.data}');
+      await _savePendingCallFromMessage(message);
+    });
+
     try {
       final initialMessage = await _messaging.getInitialMessage();
       if (initialMessage != null) {
         print('[FCM] App launched from notification, waiting for SIP');
+        await _savePendingCallFromMessage(initialMessage);
       }
     } catch (e) {
       print('[FCM] getInitialMessage() FAILED: $e');
@@ -115,23 +120,17 @@ class FcmService {
     if (!ok) print('[FCM_TOKEN] Send FAILED');
   }
 
-  Future<Map<String, dynamic>?> getPendingCallAction() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString('callkit_pending_action');
-    if (raw == null) return null;
-    final data = jsonDecode(raw) as Map<String, dynamic>;
-    final timestamp = data['timestamp'] as int;
-    if (DateTime.now().millisecondsSinceEpoch - timestamp > 60000) {
-      await prefs.remove('callkit_pending_action');
-      return null;
-    }
-    print('[FCM] getPendingCallAction found: ${data['action']}');
-    return data;
-  }
+  Future<void> _savePendingCallFromMessage(RemoteMessage message) async {
+    final data = message.data;
+    final number = data['body'] ?? data['number'] ?? data['caller'];
+    if (number == null || number.isEmpty) return;
 
-  Future<void> clearPendingCallAction() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('callkit_pending_action');
+    await prefs.setString(_fcmPendingCallKey, number);
+    await prefs.setInt(
+      _fcmPendingCallTsKey,
+      DateTime.now().millisecondsSinceEpoch,
+    );
   }
 
   Future<String?> getPendingFcmCall() async {

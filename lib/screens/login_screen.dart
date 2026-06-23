@@ -53,7 +53,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
     if (result['success'] == true) {
       final userData = result['data']!['userData'];
-      final micGranted = await _requestPermissions();
+      await _requestPermissions();
       if (mounted) _navigateToDialpad(userData);
     } else if (result['conflict'] == true) {
       await AuthService.clearAuthData();
@@ -77,7 +77,7 @@ class _LoginScreenState extends State<LoginScreen> {
   /// Request all runtime permissions needed for calls (Android).
   Future<bool> _requestPermissions() async {
     final mic = await Permission.microphone.request();
-    final notifications = await Permission.notification.request();
+    await Permission.notification.request();
     return mic.isGranted;
   }
 

@@ -89,7 +89,6 @@ class SipSocketService implements sip.SipUaHelperListener {
   // ─── Connect & Register ───────────────────────────────────────────────────
 
   Future<void> connect() async {
-    final userData = await AuthService.getUserData();
     final username = await AuthService.getUsername();
     final password = await AuthService.getSavedPassword();
 
@@ -417,7 +416,7 @@ class SipSocketService implements sip.SipUaHelperListener {
         if (msg == 'poor connection problem ,please login again') {
           _handlePoorConnection(tryRestore: true);
         } else if (result['data']['isUserLogin'] == false) {
-          final readyResult = await ApiService.userReady();
+          await ApiService.userReady();
           final retryResult = await ApiService.userConnection();
           if (retryResult['success'] == true &&
               retryResult['data']['isUserLogin'] == true) {
@@ -487,6 +486,11 @@ class SipSocketService implements sip.SipUaHelperListener {
       _loadCallContext();
       CallLifecycleService().onCallStarted();
     } else if (!_pendingAnswerForQueue) {
+      if (_callState != CallState.ringing && _incomingNumber.isEmpty) {
+        _log('answerCall: no active/ringing call');
+        _pendingAnswerForQueue = false;
+        return;
+      }
       _log('No active SIP call — calling agentAvailable to trigger INVITE');
       _pendingAnswerForQueue = true;
       ApiService.agentAvailable();
@@ -495,7 +499,7 @@ class SipSocketService implements sip.SipUaHelperListener {
     }
   }
 
-  void rejectCall() {
+  Future<void> rejectCall() async {
     final call = _activeCall;
     if (call != null) {
       try {
@@ -504,7 +508,7 @@ class SipSocketService implements sip.SipUaHelperListener {
         _log('Exception during reject/terminate: $e');
       }
     }
-    _onCallEnded();
+    await _onCallEnded();
     _emit(SipEvent.callFailed, data: {'reason': 'rejected'});
   }
 
