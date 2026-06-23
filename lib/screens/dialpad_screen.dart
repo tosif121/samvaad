@@ -39,6 +39,7 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
   final Set<String> _recentlyHandled = {};
   String _lastIncomingNumber = '';
   bool _callHandled = false;
+  bool _navigatedToCallScreen = false;
   int _incomingCallCount = 0;
 
   @override
@@ -236,7 +237,7 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
           _isShowingIncomingDialog = false; // dialog is stale — OutgoingCallScreen pushed above
           _recentlyHandled.clear();
           RingtoneService().stopRinging();
-          if (_sip.incomingNumber.isNotEmpty && !_isOutgoingCall) {
+          if (_sip.incomingNumber.isNotEmpty && !_isOutgoingCall && !_navigatedToCallScreen) {
             Navigator.of(context).push(
               MaterialPageRoute(
                 builder: (_) => OutgoingCallScreen(phoneNumber: _sip.incomingNumber),
@@ -255,6 +256,7 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
           _isOutgoingCall = false;
           _lastIncomingNumber = '';
           _isShowingIncomingDialog = false;
+          _navigatedToCallScreen = false;
           // Don't pop navigator here — the owning screen (IncomingCall or OutgoingCall)
           // will handle its own navigation via its own event listener.
           break;
@@ -374,6 +376,15 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
       print('[DIALPAD] Pending answer from CallKit for $number — enqueueing answer');
       _pendingAnswerFromCallKit = true;
       _sip.answerCall();  // sets _pendingAnswerForQueue if no active call yet
+      // Navigate to call screen immediately to avoid brief dialpad flash
+      if (number.isNotEmpty && mounted) {
+        _navigatedToCallScreen = true;
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => OutgoingCallScreen(phoneNumber: number),
+          ),
+        );
+      }
     } else if (action == 'decline') {
       print('[DIALPAD] Pending decline from CallKit for $number — marking handled');
       _callHandled = true;
