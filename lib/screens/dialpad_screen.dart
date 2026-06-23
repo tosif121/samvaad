@@ -44,6 +44,15 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
     WidgetsBinding.instance.addObserver(this);
     _requestMicrophonePermission();
     _requestOverlayPermission();
+    
+    // FAST PATH: Instantly pop up incoming call screen before dialpad even renders
+    FcmService().getPendingFcmCall().then((number) {
+      if (number != null && number.isNotEmpty && mounted) {
+        print('[DIALPAD] FAST PATH: Showing incoming call immediately for $number');
+        _showIncomingCall(number);
+      }
+    });
+
     _initFcm().then((_) => _initSip());
   }
 
@@ -97,20 +106,28 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
       print('[DIALPAD] Skipping pending FCM — SIP not idle');
       return;
     }
+
+    // Show IMMEDIATELY so there is no delay
+    if (_appLifecycleState == AppLifecycleState.resumed) {
+      print('[DIALPAD] App is foreground — showing Flutter IncomingCallScreen');
+      _showIncomingCall(number);
+    }
+
     // Validate FCM against server — if no active call, the FCM is stale
     try {
       final ctx = await ApiService.userOnCall();
       final bridgeID = ctx['data']?['currentcalldata']?['bridgeID'] ?? '';
       if (bridgeID.isEmpty) {
-        print('[DIALPAD] Server says no active call — FCM stale, skipping');
+        print('[DIALPAD] Server says no active call — FCM stale, closing dialog');
+        if (_isShowingIncomingDialog && mounted) {
+          Navigator.of(context).pop();
+          _isShowingIncomingDialog = false;
+          RingtoneService().stopRinging();
+        }
         return;
       }
     } catch (e) {
       print('[DIALPAD] userOnCall check failed — proceeding anyway: $e');
-    }
-    if (_appLifecycleState == AppLifecycleState.resumed) {
-      print('[DIALPAD] App is foreground — showing Flutter IncomingCallScreen');
-      _showIncomingCall(number);
     }
   }
 
