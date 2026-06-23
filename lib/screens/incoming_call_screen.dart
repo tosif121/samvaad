@@ -20,6 +20,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
 
   @override
   void initState() {
+    print('[SCREEN] IncomingCallScreen ACTIVE');
     super.initState();
     _sipSubscription = _sip.events.listen((event) {
       if (!mounted || _dismissed) return;
@@ -49,6 +50,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
     _onDismiss();
     _sipSubscription?.cancel();
     RingtoneService().stopRinging();
+    RingtoneService().clearNotification();
     if (mounted) Navigator.of(context).pop(false);
     await _sip.rejectCall();
   }
@@ -58,6 +60,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
     _onDismiss();
     _sipSubscription?.cancel();
     RingtoneService().stopRinging();
+    RingtoneService().clearNotification();
     if (mounted) Navigator.of(context).pop(true);
     // answerCall is now handled by the caller (DialpadScreen) to ensure instant navigation
   }

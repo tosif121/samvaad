@@ -40,12 +40,16 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
 
   @override
   void initState() {
+    print('[SCREEN] DialpadScreen ACTIVE');
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _requestMicrophonePermission();
     _requestOverlayPermission();
-    
-    // FAST PATH: Instantly pop up incoming call screen before dialpad even renders
+
+    // Start SIP initialization IMMEDIATELY so it's ready when call comes in
+    _initSip();
+
+    // FAST PATH: Check for pending FCM call after SIP starts
     FcmService().getPendingFcmCall().then((number) {
       if (number != null && number.isNotEmpty && mounted) {
         print('[DIALPAD] FAST PATH: Showing incoming call immediately for $number');
@@ -53,7 +57,7 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
       }
     });
 
-    _initFcm().then((_) => _initSip());
+    _initFcm();
   }
 
   AppLifecycleState _appLifecycleState = AppLifecycleState.resumed;
@@ -64,12 +68,24 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
     _appLifecycleState = state;
     if (state == AppLifecycleState.resumed) {
       print('[DIALPAD] App resumed | callState=${_sip.callState.name} | isShowingDialog=$_isShowingIncomingDialog | callHandled=$_callHandled | lastIncoming=$_lastIncomingNumber');
+      // Clear any stale notifications when app comes to foreground
+      RingtoneService().clearNotification();
       _checkPendingFcmCall();
       if (_sip.callState == CallState.ringing &&
           !_isShowingIncomingDialog &&
           !_callHandled) {
         print('[DIALPAD] Resume: showing incoming call dialog for ${_sip.incomingNumber}');
-        _showIncomingCall(_sip.incomingNumber);
+        // Wait for SIP to be ready before showing
+        if (_sip.isRegistered) {
+          _showIncomingCall(_sip.incomingNumber);
+        } else {
+          // Wait briefly for SIP registration
+          Future.delayed(const Duration(milliseconds: 500), () {
+            if (mounted && _sip.isRegistered && _sip.callState == CallState.ringing) {
+              _showIncomingCall(_sip.incomingNumber);
+            }
+          });
+        }
       } else {
         print('[DIALPAD] Resume: skipping incoming call dialog');
       }
@@ -106,6 +122,19 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
       print('[DIALPAD] Skipping pending FCM — SIP not idle');
       return;
     }
+
+    // Wait for SIP to be registered before showing incoming call dialog
+    // This ensures when user taps Accept, SIP is ready to answer
+    int waitCount = 0;
+    while (!_sip.isRegistered && mounted) {
+      await Future.delayed(const Duration(milliseconds: 100));
+      waitCount++;
+      if (waitCount > 100) { // 10 second timeout
+        print('[DIALPAD] Timeout waiting for SIP registration');
+        break;
+      }
+    }
+    if (!mounted) return;
 
     // Show IMMEDIATELY so there is no delay
     if (_appLifecycleState == AppLifecycleState.resumed) {
@@ -330,6 +359,24 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
     _isShowingIncomingDialog = false;
 
     if (result == true) {
+      // INSTANT TRANSITION - but ensure SIP is ready first
+      if (!_sip.isRegistered) {
+        print('[DIALPAD] Waiting for SIP registration before answering...');
+        int waitCount = 0;
+        while (!_sip.isRegistered && mounted) {
+          await Future.delayed(const Duration(milliseconds: 100));
+          waitCount++;
+          if (waitCount > 50) { // 5 second timeout
+            print('[DIALPAD] Timeout waiting for SIP registration');
+            break;
+          }
+        }
+      }
+      if (!mounted) return;
+
+      // Clear notification when call is answered
+      RingtoneService().clearNotification();
+
       // INSTANT TRANSITION
       _navigatedToCallScreen = true;
       _sip.answerCall();
@@ -344,6 +391,9 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
           _navigatedToCallScreen = false;
         });
       }
+    } else {
+      // Call was declined - clear notification
+      RingtoneService().clearNotification();
     }
   }
 

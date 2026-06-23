@@ -55,6 +55,13 @@ class SamvaadFcmService : FirebaseMessagingService() {
         launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         launchIntent.putExtra("number", number)
 
+        try {
+            startActivity(launchIntent)
+            Log.d(TAG, "Force started activity from background")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start activity directly", e)
+        }
+
         val pendingIntent = PendingIntent.getActivity(
             this,
             number.hashCode(),

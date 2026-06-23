@@ -33,9 +33,11 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
 
   @override
   void initState() {
+    print('[SCREEN] OutgoingCallScreen ACTIVE');
     super.initState();
     print('[OUTGOING] initState for number: ${widget.phoneNumber}');
     RingtoneService().stopRinging();
+    RingtoneService().clearNotification();
     Helper.setSpeakerphoneOn(false);
 
     if (_sip.callState == CallState.onCall) {
