@@ -58,6 +58,7 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
     if (state == AppLifecycleState.resumed) {
       print('[DIALPAD] App resumed | callState=${_sip.callState.name} | isShowingDialog=$_isShowingIncomingDialog | pendingAnswer=$_pendingAnswerFromCallKit | callHandled=$_callHandled | lastIncoming=$_lastIncomingNumber');
       _checkPendingFcmCall();
+      _checkPendingCallAction();
       if (_sip.callState == CallState.ringing &&
           !_isShowingIncomingDialog &&
           !_pendingAnswerFromCallKit &&
@@ -87,6 +88,10 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
 
   Future<void> _checkPendingFcmCall() async {
     print('[DIALPAD] _checkPendingFcmCall: checking...');
+    if (_pendingAnswerFromCallKit || _sip.hasPendingAnswer || _sip.callState != CallState.idle) {
+      print('[DIALPAD] _checkPendingFcmCall: call already being handled — skipping');
+      return;
+    }
     final nativeHandled = await _isNativeFcmHandled();
     final number = await FcmService().getPendingFcmCall();
     if (number == null || number.isEmpty) {
@@ -94,9 +99,15 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
       return;
     }
     await FcmService().clearPendingFcmCall();
-    if (nativeHandled == number) {
-      print('[DIALPAD] Native FCM already handled $number — skipping');
+    if (nativeHandled != null && (
+        nativeHandled == number ||
+        number.replaceAll(RegExp(r'\D'), '').contains(nativeHandled) ||
+        nativeHandled.contains(number.replaceAll(RegExp(r'\D'), ''))
+    )) {
+      print('[DIALPAD] Native FCM already handled $nativeHandled (pending=$number) — skipping');
       return;
+    } else if (nativeHandled != null) {
+      print('[DIALPAD] Native FCM handled = "$nativeHandled" != pending FCM = "$number" — proceeding');
     }
     print('[DIALPAD] Pending FCM call found for: $number | callState=${_sip.callState.name} | callHandled=$_callHandled');
     if (_sip.callState != CallState.idle) {
@@ -161,15 +172,16 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
             _sip.rejectCall();
             break;
           }
-          if (_recentlyHandled.contains(number)) {
-            print('[DIALPAD] Number $number recently handled in memory — rejecting');
-            _sip.rejectCall();
-            break;
-          }
 
           // Guard: don't show UI if already in a call or already handling one
           if (_sip.callState == CallState.onCall || _isShowingIncomingDialog || _pendingAnswerFromCallKit || _callHandled) {
             print('[DIALPAD] Skipping incomingCall — guard condition met');
+            break;
+          }
+
+          if (_recentlyHandled.contains(number)) {
+            print('[DIALPAD] Number $number recently handled in memory — rejecting');
+            _sip.rejectCall();
             break;
           }
           RingtoneService().stopRinging();
@@ -182,8 +194,13 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
 
             // Check if native FCM already showed CallKit for this number
             final nativeFcmHandled = await _isNativeFcmHandled();
-            if (nativeFcmHandled == number) {
-              print('[DIALPAD] Native FCM already handled $number — not showing another CallKit, just ringing');
+            print('[DIALPAD] _isNativeFcmHandled returned: "$nativeFcmHandled", comparing with SIP number: "$number"');
+            if (nativeFcmHandled != null && (
+                nativeFcmHandled == number ||
+                number.replaceAll(RegExp(r'\D'), '').contains(nativeFcmHandled) ||
+                nativeFcmHandled.contains(number.replaceAll(RegExp(r'\D'), ''))
+            )) {
+              print('[DIALPAD] Native FCM already handled $nativeFcmHandled — not showing another CallKit, just ringing');
               _pendingAnswerFromCallKit = true;
               break;
             }
@@ -230,6 +247,11 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
           RingtoneService().stopRinging();
           _isOutgoingCall = false;
           _lastIncomingNumber = '';
+          if (_isShowingIncomingDialog) {
+            _isShowingIncomingDialog = false;
+            // Pop any lingering incoming call dialog
+            try { Navigator.of(context).pop(); } catch (_) {}
+          }
           break;
 
         case 'registered':
@@ -309,6 +331,10 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
       print('[DIALPAD] _showIncomingCall skipped — already showing dialog');
       return;
     }
+    if (_pendingAnswerFromCallKit || _sip.hasPendingAnswer || _sip.callState != CallState.idle) {
+      print('[DIALPAD] _showIncomingCall skipped — call already being handled');
+      return;
+    }
     print('[DIALPAD] _showIncomingCall for $number');
     _isShowingIncomingDialog = true;
     _callHandled = false;
@@ -334,6 +360,12 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
     final action = pending['action'] as String?;
     final number = pending['number'] as String? ?? '';
     if (action == 'answer') {
+      if (_pendingAnswerFromCallKit || _sip.hasPendingAnswer || _sip.callState != CallState.idle) {
+        print('[DIALPAD] Pending answer from CallKit for $number — already handled by _onEvent, setting flag and clearing');
+        _pendingAnswerFromCallKit = true;
+        await FcmService().clearPendingCallAction();
+        return;
+      }
       print('[DIALPAD] Pending answer from CallKit for $number — enqueueing answer');
       _pendingAnswerFromCallKit = true;
       _sip.answerCall();  // sets _pendingAnswerForQueue if no active call yet

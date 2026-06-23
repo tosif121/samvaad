@@ -41,6 +41,15 @@ class MainActivity : FlutterActivity() {
     private fun createCallKitChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val manager = getSystemService(NotificationManager::class.java)
+            // Ringtone foreground service: MIN importance, no sound, no popup
+            manager.createNotificationChannel(
+                NotificationChannel("callkit_ringtone_channel", "Call Ringtone", NotificationManager.IMPORTANCE_MIN).apply {
+                    setSound(null, null)
+                    enableVibration(false)
+                    setShowBadge(false)
+                    description = "Foreground service for incoming call ringtone"
+                }
+            )
             // Incoming/missed: LOW importance to suppress heads-up popup
             for (channelId in listOf("callkit_incoming_channel_id_v2", "callkit_missed_channel_id", "incoming_calls_ringtone")) {
                 val channel = NotificationChannel(channelId, "CallKit", NotificationManager.IMPORTANCE_LOW).apply {
@@ -64,6 +73,8 @@ class MainActivity : FlutterActivity() {
 
     private fun playDefaultRingtone() {
         stopRingtone()
+        // Stop native ringtone + its foreground service (killed/locked state)
+        CallkitFcmService.stopForegroundAndRingtone()
         try {
             val uri = RingtoneManager.getActualDefaultRingtoneUri(this, RingtoneManager.TYPE_RINGTONE)
             mediaPlayer = MediaPlayer().apply {
@@ -84,6 +95,7 @@ class MainActivity : FlutterActivity() {
             release()
         }
         mediaPlayer = null
+        CallkitFcmService.stopForegroundAndRingtone()
     }
 
     override fun onDestroy() {

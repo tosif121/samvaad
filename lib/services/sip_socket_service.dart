@@ -66,6 +66,7 @@ class SipSocketService implements sip.SipUaHelperListener {
   bool get isConnected => _isConnected;
   String get bridgeID => _bridgeID;
   Map<String, dynamic>? connectionData;
+  bool get hasPendingAnswer => _pendingAnswerForQueue;
 
   SipSocketService._internal() {
     _helper.addSipUaHelperListener(this);
@@ -206,7 +207,13 @@ class SipSocketService implements sip.SipUaHelperListener {
               _log('Auto-answering after pendingAnswerForQueue');
               _pendingAnswerForQueue = false;
               _callState = CallState.onCall;
-              call.answer({'audio': true, 'video': false});
+              try {
+                call.answer({'audio': true, 'video': false});
+              } catch (e) {
+                _log('Auto-answer failed: $e');
+                _callState = CallState.idle;
+                break;
+              }
               _emit(SipEvent.callAnswered);
               _loadCallContext();
             }
@@ -466,14 +473,25 @@ class SipSocketService implements sip.SipUaHelperListener {
   void answerCall() {
     final call = _activeCall;
     if (call != null) {
+      if (_callState == CallState.onCall) {
+        _log('Already on call — skipping duplicate answer');
+        return;
+      }
       _log('Answering SIP call');
-      call.answer({'audio': true, 'video': false});
+      try {
+        call.answer({'audio': true, 'video': false});
+      } catch (e) {
+        _log('answerCall failed: $e');
+        return;
+      }
       _loadCallContext();
       CallLifecycleService().onCallStarted();
-    } else {
+    } else if (!_pendingAnswerForQueue) {
       _log('No active SIP call — calling agentAvailable to trigger INVITE');
       _pendingAnswerForQueue = true;
       ApiService.agentAvailable();
+    } else {
+      _log('answerCall: already pending answer for queue — skipping');
     }
   }
 

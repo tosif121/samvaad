@@ -188,11 +188,12 @@ class CallKitService {
     switch (event) {
       case CallEventActionCallAccept():
         print('[CALLKIT] _onEvent: ACCEPT extra=${event.callKitParams.extra}');
+        RingtoneService().stopRinging();
+        // Answer SIP call first — before dismissing CallKit (which can trigger lifecycle events)
+        SipSocketService().answerCall();
         _dismissCallKit();
         _clearCallKitActive();
         FcmService().clearPendingFcmCall();
-        RingtoneService().stopRinging();
-        SipSocketService().answerCall();
       case CallEventActionCallDecline():
         final number = event.callKitParams.extra?['number'] ?? '';
         print('[CALLKIT] _onEvent: DECLINE number=$number extra=${event.callKitParams.extra}');
@@ -200,6 +201,7 @@ class CallKitService {
         _dismissCallKit();
         _markCallKitDeclined(number);
         FcmService().clearPendingFcmCall();
+        FcmService().clearPendingCallAction();
         SipSocketService().rejectCall();
       case CallEventActionCallEnded():
         print('[CALLKIT] _onEvent: ENDED');
