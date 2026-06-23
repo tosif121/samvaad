@@ -35,10 +35,10 @@ class DialButton extends StatelessWidget {
       color: Colors.transparent,
       child: InkWell(
         onTap: onPressed,
-        borderRadius: BorderRadius.circular(40),
+        borderRadius: BorderRadius.circular(32),
         child: Container(
-          width: 80,
-          height: 80,
+          width: 64,
+          height: 64,
           decoration: BoxDecoration(
             color: Colors.white,
             shape: BoxShape.circle,
@@ -57,7 +57,7 @@ class DialButton extends StatelessWidget {
               Text(
                 digit,
                 style: const TextStyle(
-                  fontSize: 28,
+                  fontSize: 22,
                   fontWeight: FontWeight.w500,
                   color: Color(0xFF1a1a1a),
                 ),
@@ -66,7 +66,7 @@ class DialButton extends StatelessWidget {
                 Text(
                   _letters,
                   style: TextStyle(
-                    fontSize: 10,
+                    fontSize: 9,
                     color: Colors.grey[600],
                     letterSpacing: 1,
                   ),

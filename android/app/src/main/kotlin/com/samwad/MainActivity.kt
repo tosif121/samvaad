@@ -17,6 +17,12 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+
+        // Pre-create notification channel with LOW importance
+        // so flutter_callkit_incoming doesn't create it with higher importance.
+        // Heads-up notification is suppressed; ringtone is handled by RingtoneService.
+        createCallKitChannel()
+
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
                 "playRingtone" -> {
@@ -27,32 +33,32 @@ class MainActivity : FlutterActivity() {
                     stopRingtone()
                     result.success(true)
                 }
-                "createRingtoneChannel" -> {
-                    createRingtoneChannel()
-                    result.success(true)
-                }
                 else -> result.notImplemented()
             }
         }
     }
 
-    private fun createRingtoneChannel() {
+    private fun createCallKitChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channelId = "incoming_calls_ringtone"
-            val channelName = "Incoming Calls"
-            val importance = NotificationManager.IMPORTANCE_MAX
-            val channel = NotificationChannel(channelId, channelName, importance)
-
-            val ringtoneUri = RingtoneManager.getActualDefaultRingtoneUri(this, RingtoneManager.TYPE_RINGTONE)
-            channel.setSound(ringtoneUri, AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                .build())
-            channel.enableVibration(true)
-            channel.description = "Incoming call notifications"
-
             val manager = getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(channel)
+            // Incoming/missed: LOW importance to suppress heads-up popup
+            for (channelId in listOf("callkit_incoming_channel_id_v2", "callkit_missed_channel_id", "incoming_calls_ringtone")) {
+                val channel = NotificationChannel(channelId, "CallKit", NotificationManager.IMPORTANCE_LOW).apply {
+                    setSound(null, null)
+                    enableVibration(false)
+                    setShowBadge(false)
+                    description = "Call notifications"
+                }
+                manager.createNotificationChannel(channel)
+            }
+            // Ongoing: HIGH importance required for Android 14+ foreground service
+            val ongoing = NotificationChannel("callkit_ongoing_channel_id", "CallKit", NotificationManager.IMPORTANCE_HIGH).apply {
+                setSound(null, null)
+                enableVibration(false)
+                setShowBadge(false)
+                description = "Ongoing call"
+            }
+            manager.createNotificationChannel(ongoing)
         }
     }
 

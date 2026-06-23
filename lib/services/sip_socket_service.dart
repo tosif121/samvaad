@@ -285,6 +285,13 @@ class SipSocketService implements sip.SipUaHelperListener {
         body.contains('Force Login Request')) {
       _log('Force login request received');
       _emit(SipEvent.connectionLost, data: {'reason': 'force_login'});
+    } else if (body.contains('customer host channel connected')) {
+      _log('Conference participant CONNECTED');
+      _emit(SipEvent.messageReceived, data: {'message': body});
+    } else if (body.contains('customer host channel diconnected') ||
+        body.contains('customer host channel disconnected')) {
+      _log('Conference participant DISCONNECTED');
+      _emit(SipEvent.messageReceived, data: {'message': body});
     }
   }
 
@@ -335,7 +342,7 @@ class SipSocketService implements sip.SipUaHelperListener {
     // Call ended API
     await ApiService.callEnded();
 
-    // Ensure bridgeID is loaded before submitting disposition
+    // Submit disposition only if we have a real bridgeID (answered call)
     var bridgeID = _bridgeID;
     if (bridgeID.isEmpty) {
       _log('bridgeID empty, fetching from userOnCall...');
@@ -343,11 +350,11 @@ class SipSocketService implements sip.SipUaHelperListener {
       bridgeID = ctx['data']?['currentcalldata']?['bridgeID'] ?? '';
     }
 
-    if (bridgeID.isEmpty) {
-      _log('No bridgeID found, using fallback');
-      bridgeID = 'deadCallId';
+    if (bridgeID.isNotEmpty && bridgeID != 'deadCallId') {
+      await ApiService.submitDisposition(bridgeID, 'Auto Disposed');
+    } else {
+      _log('No bridgeID — skipping disposition (unanswered/rejected call)');
     }
-    await ApiService.submitDisposition(bridgeID, 'Auto Disposed');
 
     _callState = CallState.idle;
     _bridgeID = '';
@@ -484,21 +491,6 @@ class SipSocketService implements sip.SipUaHelperListener {
   }
 
   // ─── Call Control ─────────────────────────────────────────────────────────
-
-  void toggleMute() {
-    final call = _activeCall;
-    if (call == null) return;
-    try {
-      if (_isMuted) {
-        call.unmute();
-      } else {
-        call.mute();
-      }
-      _isMuted = !_isMuted;
-    } catch (e) {
-      _log('Exception during mute/unmute: $e');
-    }
-  }
 
   /// Local-only mute — disables/enables audio tracks without SIP re-INVITE.
   /// Matches webphone behavior.

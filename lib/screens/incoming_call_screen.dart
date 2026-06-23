@@ -5,8 +5,9 @@ import '../services/ringtone_service.dart';
 
 class IncomingCallScreen extends StatefulWidget {
   final String phoneNumber;
+  final VoidCallback? onDismiss;
 
-  const IncomingCallScreen({super.key, required this.phoneNumber});
+  const IncomingCallScreen({super.key, required this.phoneNumber, this.onDismiss});
 
   @override
   State<IncomingCallScreen> createState() => _IncomingCallScreenState();
@@ -25,6 +26,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
       final type = event['event'] as String;
       if (type == 'callEnded' || type == 'callFailed') {
         _dismissed = true;
+        _onDismiss();
         RingtoneService().stopRinging();
         Navigator.of(context).pop();
       }
@@ -38,8 +40,13 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
     super.dispose();
   }
 
+  void _onDismiss() {
+    widget.onDismiss?.call();
+  }
+
   void _decline() {
     _dismissed = true;
+    _onDismiss();
     _sipSubscription?.cancel();
     RingtoneService().stopRinging();
     _sip.rejectCall();
@@ -48,11 +55,13 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
 
   void _accept() {
     _dismissed = true;
+    _onDismiss();
     _sipSubscription?.cancel();
     RingtoneService().stopRinging();
     _sip.answerCall();
     if (mounted) Navigator.of(context).pop();
   }
+
 
   @override
   Widget build(BuildContext context) {

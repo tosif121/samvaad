@@ -3,18 +3,6 @@ import 'dart:developer' as developer;
 import 'package:flutter/material.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:audio_session/audio_session.dart';
-import 'package:flutter_background_service/flutter_background_service.dart';
-
-// Top-level entry points for background service (required for AOT)
-@pragma('vm:entry-point')
-void _onBackgroundStart(ServiceInstance service) {
-  service.on('stop').listen((_) => service.stopSelf());
-}
-
-@pragma('vm:entry-point')
-Future<bool> _onIosBackground(ServiceInstance service) async {
-  return true;
-}
 
 class CallLifecycleService with WidgetsBindingObserver {
   static final CallLifecycleService _instance = CallLifecycleService._internal();
@@ -30,9 +18,7 @@ class CallLifecycleService with WidgetsBindingObserver {
     _isInitialized = true;
 
     WidgetsBinding.instance.addObserver(this);
-
     await _configureAudioSession();
-    await _configureBackgroundService();
 
     _log('Initialized');
   }
@@ -57,48 +43,17 @@ class CallLifecycleService with WidgetsBindingObserver {
     _log('Audio session configured');
   }
 
-  Future<void> _configureBackgroundService() async {
-    final service = FlutterBackgroundService();
-    await service.configure(
-      androidConfiguration: AndroidConfiguration(
-        onStart: _onBackgroundStart,
-        autoStart: false,
-        isForegroundMode: true,
-        initialNotificationTitle: 'Samvaad',
-        initialNotificationContent: 'Call in progress',
-        foregroundServiceNotificationId: 888,
-        foregroundServiceTypes: [AndroidForegroundType.microphone],
-      ),
-      iosConfiguration: IosConfiguration(
-        autoStart: false,
-        onForeground: _onBackgroundStart,
-        onBackground: _onIosBackground,
-      ),
-    );
-  }
-
   Future<void> onCallStarted() async {
     if (_isCallActive) return;
     _isCallActive = true;
-
     await WakelockPlus.enable();
-
-    final running = await FlutterBackgroundService().isRunning();
-    if (!running) {
-      await FlutterBackgroundService().startService();
-    }
-
-    _log('Call started - wakelock acquired, foreground service active');
+    _log('Call started - wakelock acquired');
   }
 
   void onCallEnded() {
     if (!_isCallActive) return;
     _isCallActive = false;
-
     WakelockPlus.disable();
-
-    FlutterBackgroundService().invoke('stop');
-
     _log('Call ended - resources released');
   }
 

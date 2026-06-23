@@ -22,6 +22,7 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
   bool _showKeypad = false;
   bool _isSpeakerOn = false;
   bool _conferenceStatus = false;
+  bool _conferenceConnected = false;
   bool _isMerged = false;
   bool _showConferenceKeypad = false;
   bool _isEndingCall = false;
@@ -46,7 +47,7 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
       print('[OUTGOING] Waiting for SIP callAnswered event');
     }
 
-    _sipSubscription = _sip.events.listen((event) {
+    _sipSubscription = _sip.events.listen((event) async {
       if (!mounted) return;
       final type = event['event'] as String;
       print('[OUTGOING] SIP event: $type');
@@ -66,16 +67,25 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
       }
 
       // Handle conference socket messages from ARI
-      if (data != null && data['message'] is String) {
-        final msg = data['message'] as String;
-        if (msg.contains('customer host channel connected')) {
+      final message = event['message'] as String?;
+      if (message != null) {
+        if (message.contains('customer host channel connected')) {
+          print('[OUTGOING] Conference participant CONNECTED — enabling merge');
           setState(() {
             _conferenceStatus = true;
+            _conferenceConnected = true;
             _showConferenceKeypad = false;
           });
-        } else if (msg.contains('customer host channel disconnected')) {
-          setState(() => _conferenceStatus = false);
-          if (!_isMerged) _toggleHold();
+        } else if (message.contains('customer host channel disconnected')) {
+          print('[OUTGOING] Conference participant DISCONNECTED');
+          setState(() {
+            _conferenceStatus = false;
+            _conferenceConnected = false;
+          });
+          if (!_isMerged) {
+            await ApiService.reqUnHold();
+            if (_sip.isMuted) _sip.mute(false);
+          }
         }
       }
     });
@@ -114,7 +124,7 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
   }
 
   void _toggleMute() {
-    _sip.toggleMute();
+    _sip.mute(!_sip.isMuted);
     setState(() {});
   }
 
@@ -130,9 +140,10 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
       bridgeID: _sip.bridgeID,
     );
     if (result['success'] == true) {
-      await _sip.toggleHold();
+      if (_sip.isMuted) _sip.mute(false);
       setState(() {
         _conferenceStatus = true;
+        _conferenceConnected = false;
         _showConferenceKeypad = false;
         _conferenceBridgeID = _sip.bridgeID;
       });
@@ -140,7 +151,8 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
   }
 
   Future<void> _mergeConference() async {
-    await _sip.toggleHold();
+    await ApiService.reqUnHold();
+    if (_sip.isMuted) _sip.mute(false);
     setState(() => _isMerged = true);
   }
 
@@ -149,12 +161,16 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
     await ApiService.hangupConference(_conferenceNumber);
     setState(() {
       _conferenceStatus = false;
+      _conferenceConnected = false;
       _conferenceNumber = '';
       _conferenceBridgeID = null;
       _isMerged = false;
       _showConferenceKeypad = false;
     });
-    if (!_isMerged) await _sip.toggleHold();
+    if (!_isMerged) {
+      if (_sip.isMuted) _sip.mute(false);
+      await ApiService.reqUnHold();
+    }
   }
 
   Future<void> _handleTransfer() async {
@@ -173,7 +189,9 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
+    return PopScope(
+      canPop: false,
+      child: Scaffold(
       backgroundColor: Colors.white,
       body: SafeArea(
         child: Column(
@@ -199,22 +217,66 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
             ),
             const SizedBox(height: 16),
             // Phone number — matches webphone display:
-            // no conference: main number | conference, not merged: conf number | merged: "main Conf with conf"
-            Text(
-              _conferenceStatus && !_isMerged
-                  ? _conferenceNumber
-                  : _conferenceStatus && _isMerged
-                      ? '${widget.phoneNumber} Conference with $_conferenceNumber'
-                      : widget.phoneNumber,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                fontSize: 26,
-                fontWeight: FontWeight.bold,
-                color: Color(0xFF1a1a1a),
-                letterSpacing: 1,
+            // before merge: show conference number only
+            // after merge: show both numbers
+            if (_conferenceStatus && _isMerged)
+              Column(
+                children: [
+                  Text(
+                    widget.phoneNumber,
+                    style: const TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF1a1a1a),
+                      letterSpacing: 1,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Conference with $_conferenceNumber',
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w500,
+                      color: Color(0xFF666666),
+                    ),
+                  ),
+                ],
+              )
+            else if (_conferenceStatus && !_isMerged)
+              Column(
+                children: [
+                  Text(
+                    _conferenceNumber,
+                    style: const TextStyle(
+                      fontSize: 26,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF1a1a1a),
+                      letterSpacing: 1,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Conferencing...',
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w500,
+                      color: Colors.grey,
+                    ),
+                  ),
+                ],
+              )
+            else
+              Text(
+                widget.phoneNumber,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                  fontSize: 26,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF1a1a1a),
+                  letterSpacing: 1,
+                ),
               ),
-            ),
             const SizedBox(height: 6),
             // Status / timer
             if (_conferenceStatus)
@@ -312,16 +374,18 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
                         ],
                       ),
                     ),
-                    // Row 2: Merge, Mute, Speaker
+                    // Row 2: Merge (hidden after merge), Mute, Speaker
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                       children: [
-                        _buildControlButton(
-                          icon: Icons.call_merge,
-                          label: 'Merge',
-                          enabled: !_isMerged,
-                          onPressed: _mergeConference,
-                        ),
+                        if (!_isMerged)
+                          _buildControlButton(
+                            icon: Icons.call_merge,
+                            label: 'Merge',
+                            enabled: _conferenceConnected,
+                            onPressed: _mergeConference,
+                          ),
+                        if (_isMerged) const SizedBox(width: 56), // keep layout balanced
                         _buildControlButton(
                           icon: _sip.isMuted ? Icons.mic_off : Icons.mic,
                           label: _sip.isMuted ? 'Unmute' : 'Mute',
@@ -437,8 +501,9 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
           ],
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 
   Widget _buildControlButton({
     required IconData icon,
@@ -564,21 +629,21 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
               ],
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 12),
           _buildConfDialRow(['1', '2', '3']),
-          const SizedBox(height: 4),
-          _buildConfDialRow(['4', '5', '6']),
-          const SizedBox(height: 4),
-          _buildConfDialRow(['7', '8', '9']),
-          const SizedBox(height: 4),
-          _buildConfDialRow(['*', '0', '#']),
           const SizedBox(height: 8),
+          _buildConfDialRow(['4', '5', '6']),
+          const SizedBox(height: 8),
+          _buildConfDialRow(['7', '8', '9']),
+          const SizedBox(height: 8),
+          _buildConfDialRow(['*', '0', '#']),
+          const SizedBox(height: 12),
           // Green call button centered
           GestureDetector(
             onTap: _conferenceNumber.isNotEmpty ? _startConferenceCall : null,
             child: Container(
-              width: 64,
-              height: 64,
+              width: 52,
+              height: 52,
               decoration: BoxDecoration(
                 color: _conferenceNumber.isNotEmpty ? Colors.green : Colors.grey[300],
                 shape: BoxShape.circle,
@@ -590,7 +655,7 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
                   ),
                 ],
               ),
-              child: const Icon(Icons.call, color: Colors.white, size: 28),
+              child: const Icon(Icons.call, color: Colors.white, size: 22),
             ),
           ),
         ],
