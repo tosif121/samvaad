@@ -88,6 +88,12 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
 
   Future<void> _checkPendingFcmCall() async {
     print('[DIALPAD] _checkPendingFcmCall: checking...');
+    // Also check if there's a pending 'answer' action (user answered from native CallKit)
+    final pendingAction = await FcmService().getPendingCallAction();
+    if (pendingAction != null && pendingAction['action'] == 'answer') {
+      print('[DIALPAD] _checkPendingFcmCall: pending answer action exists — skipping');
+      return;
+    }
     if (_pendingAnswerFromCallKit || _sip.hasPendingAnswer || _sip.callState != CallState.idle) {
       print('[DIALPAD] _checkPendingFcmCall: call already being handled — skipping');
       return;
@@ -174,7 +180,7 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
           }
 
           // Guard: don't show UI if already in a call or already handling one
-          if (_sip.callState == CallState.onCall || _isShowingIncomingDialog || _pendingAnswerFromCallKit || _callHandled) {
+          if (_sip.callState == CallState.onCall || _isShowingIncomingDialog || _pendingAnswerFromCallKit || _callHandled || _sip.hasPendingAnswer) {
             print('[DIALPAD] Skipping incomingCall — guard condition met');
             break;
           }
@@ -227,6 +233,7 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
           print('[DIALPAD] callAnswered — clearing pendingAnswer, stop ringing');
           _pendingAnswerFromCallKit = false;
           _callHandled = false;
+          _isShowingIncomingDialog = false; // dialog is stale — OutgoingCallScreen pushed above
           _recentlyHandled.clear();
           RingtoneService().stopRinging();
           if (_sip.incomingNumber.isNotEmpty && !_isOutgoingCall) {
@@ -247,11 +254,9 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
           RingtoneService().stopRinging();
           _isOutgoingCall = false;
           _lastIncomingNumber = '';
-          if (_isShowingIncomingDialog) {
-            _isShowingIncomingDialog = false;
-            // Pop any lingering incoming call dialog
-            try { Navigator.of(context).pop(); } catch (_) {}
-          }
+          _isShowingIncomingDialog = false;
+          // Don't pop navigator here — the owning screen (IncomingCall or OutgoingCall)
+          // will handle its own navigation via its own event listener.
           break;
 
         case 'registered':
