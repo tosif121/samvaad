@@ -486,12 +486,7 @@ class SipSocketService implements sip.SipUaHelperListener {
       _loadCallContext();
       CallLifecycleService().onCallStarted();
     } else if (!_pendingAnswerForQueue) {
-      if (_callState != CallState.ringing && _incomingNumber.isEmpty) {
-        _log('answerCall: no active/ringing call');
-        _pendingAnswerForQueue = false;
-        return;
-      }
-      _log('No active SIP call — calling agentAvailable to trigger INVITE');
+      _log('answerCall: queuing answer — no active call yet');
       _pendingAnswerForQueue = true;
       ApiService.agentAvailable();
     } else {

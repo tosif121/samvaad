@@ -65,4 +65,14 @@ class RingtoneService {
       } catch (_) {}
     }
   }
+
+  Future<void> cleanupForegroundService() async {
+    if (!kIsWeb && Platform.isAndroid) {
+      try {
+        await _channel.invokeMethod('cleanupForeground');
+      } catch (e) {
+        print('Error cleaning up foreground service: $e');
+      }
+    }
+  }
 }

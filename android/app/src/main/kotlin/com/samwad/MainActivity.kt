@@ -13,8 +13,13 @@ class MainActivity : FlutterActivity() {
     private val CHANNEL = "com.example.samvaad/ringtone"
     private var mediaPlayer: MediaPlayer? = null
 
+    companion object {
+        var isAlive = false
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        isAlive = true
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
             setTurnScreenOn(true)
@@ -50,6 +55,11 @@ class MainActivity : FlutterActivity() {
                 "clearNotification" -> {
                     val manager = getSystemService(android.content.Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
                     manager.cancel(1001)
+                    manager.cancel(1002)
+                    result.success(true)
+                }
+                "cleanupForeground" -> {
+                    SamvaadFcmService.cleanupForeground()
                     result.success(true)
                 }
                 else -> result.notImplemented()
@@ -109,6 +119,7 @@ class MainActivity : FlutterActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        isAlive = false
         stopRingtone()
     }
 }

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'outgoing_call_screen.dart';
 import 'incoming_call_screen.dart';
 import 'login_screen.dart';
@@ -11,6 +12,7 @@ import '../services/api_service.dart';
 import '../services/sip_socket_service.dart';
 import '../services/ringtone_service.dart';
 import '../services/fcm_service.dart';
+import '../services/callkit_service.dart';
 
 class DialpadScreen extends StatefulWidget {
   final String userName;
@@ -44,17 +46,17 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _requestMicrophonePermission();
-    _requestOverlayPermission();
 
     // Start SIP initialization IMMEDIATELY so it's ready when call comes in
     _initSip();
 
-    // FAST PATH: Check for pending FCM call after SIP starts
-    FcmService().getPendingFcmCall().then((number) {
-      if (number != null && number.isNotEmpty && mounted) {
-        print('[DIALPAD] FAST PATH: Showing incoming call immediately for $number');
-        _showIncomingCall(number);
-      }
+    // Check for pending CallKit action FIRST (auto-answer from native CallKit accept)
+    // We await this so that if CallKit answers the call, it clears the FCM pending call
+    // BEFORE the FCM check runs.
+    _checkPendingCallkitAction().then((_) {
+      if (!mounted) return;
+      // Then check FCM as fallback
+      _checkPendingFcmCall();
     });
 
     _initFcm();
@@ -123,40 +125,80 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
       return;
     }
 
-    // Wait for SIP to be registered before showing incoming call dialog
-    // This ensures when user taps Accept, SIP is ready to answer
-    int waitCount = 0;
-    while (!_sip.isRegistered && mounted) {
-      await Future.delayed(const Duration(milliseconds: 100));
-      waitCount++;
-      if (waitCount > 100) { // 10 second timeout
-        print('[DIALPAD] Timeout waiting for SIP registration');
-        break;
-      }
-    }
-    if (!mounted) return;
-
-    // Show IMMEDIATELY so there is no delay
-    if (_appLifecycleState == AppLifecycleState.resumed) {
-      print('[DIALPAD] App is foreground — showing Flutter IncomingCallScreen');
-      _showIncomingCall(number);
-    }
-
     // Validate FCM against server — if no active call, the FCM is stale
     try {
       final ctx = await ApiService.userOnCall();
       final bridgeID = ctx['data']?['currentcalldata']?['bridgeID'] ?? '';
       if (bridgeID.isEmpty) {
-        print('[DIALPAD] Server says no active call — FCM stale, closing dialog');
-        if (_isShowingIncomingDialog && mounted) {
-          Navigator.of(context).pop();
-          _isShowingIncomingDialog = false;
-          RingtoneService().stopRinging();
-        }
+        print('[DIALPAD] Server says no active call — FCM stale, ignoring');
+        await FlutterCallkitIncoming.endAllCalls();
         return;
       }
     } catch (e) {
       print('[DIALPAD] userOnCall check failed — proceeding anyway: $e');
+    }
+
+    // Auto-answer and go directly to call screen
+    RingtoneService().stopRinging();
+    _sip.answerCall();
+    await FlutterCallkitIncoming.endAllCalls(); // Clear the notification
+    
+    if (mounted) {
+      _navigatedToCallScreen = true;
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => OutgoingCallScreen(phoneNumber: number),
+        ),
+      );
+    }
+  }
+
+  Future<void> _checkPendingCallkitAction() async {
+    final action = await CallKitService().getPendingAction();
+    if (action == null) return;
+    await CallKitService().clearPendingAction();
+
+    if (action['action'] == 'decline') {
+      print('[DIALPAD] CallKit pending action: DECLINE — cleanup');
+      await RingtoneService().cleanupForegroundService();
+      await RingtoneService().clearNotification();
+      await FcmService().clearPendingFcmCall();
+      return;
+    }
+    if (action['action'] != 'answer') return;
+
+    print('[DIALPAD] CallKit pending action: ANSWER for ${action['number']}');
+    // Clear notification + foreground service
+    await RingtoneService().clearNotification();
+    await RingtoneService().cleanupForegroundService();
+
+    // Clear any FCM pending call to avoid double-dialog
+    await FcmService().clearPendingFcmCall();
+
+    // Wait for SIP to be registered, then answer the call
+    int waitCount = 0;
+    while (!_sip.isRegistered && mounted) {
+      await Future.delayed(const Duration(milliseconds: 100));
+      waitCount++;
+      if (waitCount > 100) {
+        print('[DIALPAD] Timeout waiting for SIP registration for CallKit answer');
+        return;
+      }
+    }
+    if (!mounted) return;
+
+    // Answer the SIP call (queues answer if INVITE hasn't arrived yet)
+    _sip.answerCall();
+
+    if (mounted) {
+      _navigatedToCallScreen = true;
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => OutgoingCallScreen(
+            phoneNumber: action['number'] as String? ?? 'Unknown',
+          ),
+        ),
+      );
     }
   }
 
@@ -166,21 +208,16 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
       if (status.isDenied || status.isPermanentlyDenied) {
         await Permission.notification.request();
       }
+      final alertStatus = await Permission.systemAlertWindow.status;
+      if (!alertStatus.isGranted) {
+        await Permission.systemAlertWindow.request();
+      }
     }
   }
 
   Future<void> _requestMicrophonePermission() async {
     // Permission is handled by flutter_webrtc at call time.
     // No pre-fetch needed - avoids Android audio resource conflicts.
-  }
-
-  Future<void> _requestOverlayPermission() async {
-    if (Platform.isAndroid) {
-      final status = await Permission.systemAlertWindow.status;
-      if (!status.isGranted) {
-        await Permission.systemAlertWindow.request();
-      }
-    }
   }
 
   @override
@@ -217,9 +254,13 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
           RingtoneService().stopRinging();
 
           if (_appLifecycleState != AppLifecycleState.resumed) {
-            print('[DIALPAD] App is minimized but socket is alive. Waking app via MethodChannel.');
-            RingtoneService().bringAppToForeground();
-            _showIncomingCall(number);
+            print('[DIALPAD] App is backgrounded — showing native CallKit');
+            // Dismiss any stale Flutter dialog
+            if (_isShowingIncomingDialog && mounted) {
+              Navigator.of(context).pop();
+              _isShowingIncomingDialog = false;
+            }
+            CallKitService().showIncomingCall(number);
           } else {
             _showIncomingCall(number);
           }

@@ -3,10 +3,12 @@ import 'screens/login_screen.dart';
 import 'screens/dialpad_screen.dart';
 import 'services/auth_service.dart';
 import 'services/call_lifecycle_service.dart';
+import 'services/callkit_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   CallLifecycleService().init();
+  CallKitService().init();
   runApp(const SamvaadApp());
 }
 
