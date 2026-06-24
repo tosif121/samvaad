@@ -77,11 +77,13 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
           });
         } else if (message.contains('customer host channel disconnected')) {
           print('[OUTGOING] Conference participant DISCONNECTED');
+          final wasMerged = _isMerged;
           setState(() {
             _conferenceStatus = false;
             _conferenceConnected = false;
+            _isMerged = false;
           });
-          if (!_isMerged) {
+          if (!wasMerged) {
             await ApiService.reqUnHold();
             if (_sip.isMuted) _sip.mute(false);
           }
@@ -149,13 +151,22 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
   }
 
   Future<void> _mergeConference() async {
-    await ApiService.reqUnHold();
+    final res = await ApiService.reqUnHold();
+    if (res['success'] != true) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Merge failed: could not unhold the call')),
+        );
+      }
+      return;
+    }
     if (_sip.isMuted) _sip.mute(false);
     setState(() => _isMerged = true);
   }
 
   Future<void> _disconnectConference() async {
     if (_conferenceNumber.isEmpty) return;
+    final wasMerged = _isMerged;
     await ApiService.hangupConference(_conferenceNumber);
     setState(() {
       _conferenceStatus = false;
@@ -164,7 +175,7 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
       _isMerged = false;
       _showConferenceKeypad = false;
     });
-    if (!_isMerged) {
+    if (!wasMerged) {
       if (_sip.isMuted) _sip.mute(false);
       await ApiService.reqUnHold();
     }
