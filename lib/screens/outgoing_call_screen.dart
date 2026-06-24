@@ -75,7 +75,7 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
             _conferenceConnected = true;
             _showConferenceKeypad = false;
           });
-        } else if (message.contains('customer host channel disconnected')) {
+        } else if (message.contains('customer host channel disconnected') || message.contains('customer host channel diconnected')) {
           print('[OUTGOING] Conference participant DISCONNECTED');
           final wasMerged = _isMerged;
           setState(() {
