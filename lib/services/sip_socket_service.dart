@@ -521,14 +521,10 @@ class SipSocketService implements sip.SipUaHelperListener {
     final call = _activeCall;
     if (call == null) return;
     try {
-      final streams = call.peerConnection?.getLocalStreams();
-      if (streams == null) return;
-      for (final stream in streams) {
-        final tracks = stream?.getAudioTracks();
-        if (tracks == null) continue;
-        for (final track in tracks) {
-          track.enabled = !muted;
-        }
+      if (muted) {
+        call.mute(true, false);
+      } else {
+        call.unmute(true, false);
       }
       _isMuted = muted;
     } catch (e) {
@@ -536,13 +532,18 @@ class SipSocketService implements sip.SipUaHelperListener {
     }
   }
 
+  bool _wasMutedBeforeHold = false;
+
   /// HTTP-only hold/unhold — no SIP re-INVITE. Matches webphone behavior.
   Future<void> toggleHold() async {
     try {
       if (_isHeld) {
         await ApiService.reqUnHold();
-        mute(false);
+        if (!_wasMutedBeforeHold) {
+          mute(false);
+        }
       } else {
+        _wasMutedBeforeHold = _isMuted;
         mute(true);
         await ApiService.reqHold();
       }
