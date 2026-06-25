@@ -21,6 +21,7 @@ import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import com.hiennv.flutter_callkit_incoming.CallkitIncomingBroadcastReceiver
 import com.hiennv.flutter_callkit_incoming.Data
+import io.flutter.plugin.common.MethodChannel
 
 class SamvaadFcmService : FirebaseMessagingService() {
 
@@ -56,17 +57,8 @@ class SamvaadFcmService : FirebaseMessagingService() {
             return
         }
 
-        val km = getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
-        val pm = getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
-        val isLockedOrOff = (km?.isKeyguardLocked == true) || (pm?.isInteractive == false)
-
-        if (isLockedOrOff) {
-            Log.d(TAG, "Device is locked or screen off, showing CallKit")
-            showCallkitIncoming(number)
-        } else {
-            Log.d(TAG, "Device is unlocked, showing Heads-Up Notification to open app directly")
-            showOpenAppNotification(number)
-        }
+        // Use CallKit for ALL background states — notification path is unreliable across OEMs
+        showCallkitIncoming(number)
     }
 
     private fun showCallkitIncoming(number: String) {
@@ -83,6 +75,21 @@ class SamvaadFcmService : FirebaseMessagingService() {
                 backgroundFlutterEngine!!.dartExecutor.executeDartEntrypoint(
                     io.flutter.embedding.engine.dart.DartExecutor.DartEntrypoint.createDefault()
                 )
+                MethodChannel(backgroundFlutterEngine!!.dartExecutor.binaryMessenger, "com.samwad/callkit").setMethodCallHandler { call, result ->
+                    if (call.method == "launchApp") {
+                        val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
+                        launchIntent?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                        if (launchIntent != null) {
+                            startActivity(launchIntent)
+                            Log.d(TAG, "Launched main activity from background")
+                            result.success(true)
+                        } else {
+                            result.error("UNAVAILABLE", "Cannot find launch intent", null)
+                        }
+                    } else {
+                        result.notImplemented()
+                    }
+                }
                 Log.d(TAG, "Background FlutterEngine started successfully")
             }
 

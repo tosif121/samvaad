@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:flutter/services.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:flutter_callkit_incoming/entities/call_event.dart';
 import 'package:flutter_callkit_incoming/entities/entities.dart';
@@ -155,14 +156,11 @@ Future<void> callkitBackgroundHandler(CallEvent event) async {
         
         await ApiService.callEnded();
         final finalBridgeID = (bridgeID != null && bridgeID.isNotEmpty) ? bridgeID : 'deadCallId';
-        
-        // Delay auto-disposition by 5 seconds to prevent PBX from immediately re-routing the queue call back to us
-        Future.delayed(const Duration(seconds: 5), () async {
-          await ApiService.submitDisposition(finalBridgeID, 'Auto Disposed');
-        });
+        await ApiService.submitDisposition(finalBridgeID, 'Auto Disposed');
       } catch (_) {}
       await FlutterCallkitIncoming.endAllCalls();
     } else if (event is CallEventActionCallAccept) {
+      print('[CALLKIT_BG] User tapped ACCEPT for call');
       final number = event.callKitParams.extra?['number'] as String? ?? '';
       final prefs = await SharedPreferences.getInstance();
       // Clear FCM pending call to prevent Flutter dialog conflict
@@ -173,7 +171,16 @@ Future<void> callkitBackgroundHandler(CallEvent event) async {
         'number': number,
         'timestamp': DateTime.now().millisecondsSinceEpoch,
       }));
+      print('[CALLKIT_BG] Saved pending action to answer call $number');
+      try {
+        const platform = MethodChannel('com.samwad/callkit');
+        await platform.invokeMethod('launchApp');
+        print('[CALLKIT_BG] Invoked launchApp natively');
+      } catch (e) {
+        print('[CALLKIT_BG] Failed to invoke launchApp: $e');
+      }
       await FlutterCallkitIncoming.endAllCalls();
+      print('[CALLKIT_BG] Ended CallKit UI after accept');
     }
   } catch (e) {
     print('[CALLKIT_BG] Error: $e');

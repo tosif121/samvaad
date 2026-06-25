@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'dart:developer' as developer;
+import 'package:flutter/foundation.dart';
+import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:sip_ua/sip_ua.dart' as sip;
 import 'auth_service.dart';
 import 'api_service.dart';
@@ -34,6 +36,8 @@ class SipSocketService implements sip.SipUaHelperListener {
   Timer? _connectionCheckTimer;
 
   CallState _callState = CallState.idle;
+  DateTime? _lastCallEndedAt;
+  String? _autoRejectedCallId;
   String _incomingNumber = '';
   String _bridgeID = '';
   String _dialedNumber = '';
@@ -173,6 +177,13 @@ class SipSocketService implements sip.SipUaHelperListener {
           'dialedNumber': _dialedNumber,
         });
         if (call.direction == 'INCOMING') {
+          if (_lastCallEndedAt != null && DateTime.now().difference(_lastCallEndedAt!).inSeconds < 15) {
+            _log('Auto-rejecting new INVITE — in call-ended cooldown');
+            _autoRejectedCallId = call.id;
+            call.hangup();
+            FlutterCallkitIncoming.endAllCalls();
+            break;
+          }
           final remoteNumber = call.remote_identity ?? 'Unknown';
 
           final cleanRemote = remoteNumber.replaceAll(RegExp(r'\D'), '');
@@ -246,11 +257,21 @@ class SipSocketService implements sip.SipUaHelperListener {
           'cause': state.cause?.toString(),
           'originator': state.originator?.toString(),
         });
+        if (_autoRejectedCallId != null && call.id == _autoRejectedCallId) {
+          _log('Skipping _onCallEnded for auto-rejected call in FAILED state');
+          _autoRejectedCallId = null; // Reset for next time
+          break;
+        }
         _onCallEnded();
         _emit(SipEvent.callFailed, data: {'reason': state.cause?.toString() ?? 'unknown'});
         break;
       case sip.CallStateEnum.ENDED:
         _log('Call ENDED');
+        if (_autoRejectedCallId != null && call.id == _autoRejectedCallId) {
+          _log('Skipping _onCallEnded for auto-rejected call in ENDED state');
+          _autoRejectedCallId = null; // Reset for next time
+          break;
+        }
         _onCallEnded();
         break;
       default:
@@ -342,6 +363,7 @@ class SipSocketService implements sip.SipUaHelperListener {
   Future<void> _onCallEnded() async {
     if (_endingCall) return;
     _endingCall = true;
+    _lastCallEndedAt = DateTime.now();
     _callState = CallState.disposition;
     _emit(SipEvent.callEnded, data: {'bridgeID': _bridgeID});
     CallLifecycleService().onCallEnded();
@@ -373,15 +395,13 @@ class SipSocketService implements sip.SipUaHelperListener {
     // Call ended API
     await ApiService.callEnded();
 
-    // Delay auto-disposition by 5 seconds to prevent PBX from immediately re-routing the queue call back to us
-    Future.delayed(const Duration(seconds: 5), () async {
-      final finalBridgeID = bridgeID.isNotEmpty ? bridgeID : 'deadCallId';
-      await ApiService.submitDisposition(finalBridgeID, 'Auto Disposed');
-    });
+    final finalBridgeID = bridgeID.isNotEmpty ? bridgeID : 'deadCallId';
+    await ApiService.submitDisposition(finalBridgeID, 'Auto Disposed');
 
     _callState = CallState.idle;
     _bridgeID = '';
     _incomingNumber = '';
+    _dialedNumber = '';
     _isMuted = false;
     _isHeld = false;
     _remoteStream = null;
