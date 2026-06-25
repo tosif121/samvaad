@@ -102,7 +102,7 @@ Future<void> showCallkitIncoming(String number) async {
       textColor: '#FFFFFF',
       incomingCallNotificationChannelName: 'incoming_calls_ringtone_v2',
       isShowFullLockedScreen: true,
-      isFullScreen: false,
+      isFullScreen: true,
       textAccept: 'Answer',
       textDecline: 'Decline',
       ringtonePath: 'system_ringtone_default',

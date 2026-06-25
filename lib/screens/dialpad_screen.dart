@@ -212,6 +212,11 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
       if (!alertStatus.isGranted) {
         await Permission.systemAlertWindow.request();
       }
+      try {
+        await FlutterCallkitIncoming.requestFullIntentPermission();
+      } catch (e) {
+        print('Failed to request full intent permission: $e');
+      }
     }
   }
 
