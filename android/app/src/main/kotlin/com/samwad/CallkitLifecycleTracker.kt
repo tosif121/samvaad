@@ -7,6 +7,8 @@ import android.content.SharedPreferences
 import android.os.Bundle
 import android.util.Log
 
+import android.os.Handler
+
 class CallkitLifecycleTracker : Application.ActivityLifecycleCallbacks {
 
     override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {
@@ -30,6 +32,8 @@ class CallkitLifecycleTracker : Application.ActivityLifecycleCallbacks {
             .putString("flutter.callkit_pending_action",
                 """{"action":"$action","number":"$number"}""")
             .apply()
+            
+        Handler(activity.mainLooper).removeCallbacksAndMessages(null)
 
         if (action == "decline") {
             prefs.edit()

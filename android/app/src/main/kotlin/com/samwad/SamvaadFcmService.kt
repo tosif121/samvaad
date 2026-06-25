@@ -145,6 +145,10 @@ class SamvaadFcmService : FirebaseMessagingService() {
             )
             applicationContext.sendBroadcast(intent)
             Log.d(TAG, "CallKit broadcast sent for: $number")
+            
+            android.os.Handler(mainLooper).postDelayed({
+                cleanupForeground()
+            }, 45000)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to launch callkit natively", e)
             cleanupForeground()
