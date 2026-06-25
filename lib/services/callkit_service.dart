@@ -179,8 +179,7 @@ Future<void> callkitBackgroundHandler(CallEvent event) async {
       } catch (e) {
         print('[CALLKIT_BG] Failed to invoke launchApp: $e');
       }
-      await FlutterCallkitIncoming.endAllCalls();
-      print('[CALLKIT_BG] Ended CallKit UI after accept');
+      print('[CALLKIT_BG] Handled CallKit Accept (app should open natively)');
     }
   } catch (e) {
     print('[CALLKIT_BG] Error: $e');
