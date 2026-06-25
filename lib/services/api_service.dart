@@ -240,6 +240,25 @@ class ApiService {
     }
   }
 
+  // Clear Rejected Call
+  static Future<Map<String, dynamic>> clearRejectedCallFromAgent(String callerNumber) async {
+    try {
+      final username = await AuthService.getUsername();
+      if (username == null) return {'success': false, 'message': 'No username'};
+      _log('CLEAR_REJECTED', 'POST /clearRejectedCallFromAgent for caller: $callerNumber');
+      final response = await http.post(
+        Uri.parse('$baseUrl/clearRejectedCallFromAgent'),
+        headers: await _getHeaders(),
+        body: jsonEncode({'caller': callerNumber}),
+      );
+      _log('CLEAR_REJECTED', 'Response ${response.statusCode}', data: response.body);
+      return {'success': response.statusCode == 200};
+    } catch (e) {
+      _log('CLEAR_REJECTED', 'EXCEPTION: $e');
+      return {'success': false, 'message': 'Error: $e'};
+    }
+  }
+
   // Hold
   static Future<Map<String, dynamic>> reqHold() async {
     try {

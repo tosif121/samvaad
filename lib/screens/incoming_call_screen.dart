@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../services/sip_socket_service.dart';
 import '../services/ringtone_service.dart';
+import '../services/api_service.dart';
 
 class IncomingCallScreen extends StatefulWidget {
   final String phoneNumber;
@@ -50,6 +51,9 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
     _onDismiss();
     _sipSubscription?.cancel();
     RingtoneService().stopRinging();
+    // Tell PBX to stop routing this call to us
+    await ApiService.clearRejectedCallFromAgent(widget.phoneNumber);
+    
     RingtoneService().clearNotification();
     if (mounted) Navigator.of(context).pop(false);
     await _sip.rejectCall();

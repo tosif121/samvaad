@@ -106,8 +106,6 @@ class SamvaadFcmService : FirebaseMessagingService() {
             }
             Log.d(TAG, "Foreground service started")
 
-            // We do NOT play native ringtone manually because CallKit handles it
-            // playNativeRingtone()
 
             // Use the plugin's Data class to create the call data bundle properly
             val callData = Data(
@@ -149,6 +147,20 @@ class SamvaadFcmService : FirebaseMessagingService() {
 
     private fun showOpenAppNotification(number: String) {
         try {
+            instance = this
+            val fgNotif = NotificationCompat.Builder(this, ringtoneChannelId)
+                .setContentTitle("Incoming Call")
+                .setContentText(number)
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setPriority(NotificationCompat.PRIORITY_MIN)
+                .setOngoing(true)
+                .build()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(1003, fgNotif, ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL)
+            } else {
+                startForeground(1003, fgNotif)
+            }
+
             val powerManager = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
             val wakeLock = powerManager.newWakeLock(
                 android.os.PowerManager.FULL_WAKE_LOCK or
@@ -159,21 +171,6 @@ class SamvaadFcmService : FirebaseMessagingService() {
             wakeLock.acquire(3 * 60 * 1000L) // 3 minutes max
         } catch (e: Exception) {
             Log.e(TAG, "Failed to acquire wake lock", e)
-        }
-
-        // Start foreground service to allow background activity start
-        instance = this
-        val fgNotif = NotificationCompat.Builder(this, ringtoneChannelId)
-            .setContentTitle("Incoming Call")
-            .setContentText(number)
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setPriority(NotificationCompat.PRIORITY_MIN)
-            .setOngoing(true)
-            .build()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(fgServiceNotifId, fgNotif, ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL)
-        } else {
-            startForeground(fgServiceNotifId, fgNotif)
         }
 
         val launchIntent = packageManager.getLaunchIntentForPackage(packageName)

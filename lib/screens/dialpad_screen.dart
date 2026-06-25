@@ -286,7 +286,12 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
         case 'callFailed':
           print('[DIALPAD] $type — clearing state');
           _callHandled = false;
-          _recentlyHandled.clear();
+          // Keep recently handled number for 15 seconds to prevent immediate re-ringing from PBX
+          Future.delayed(const Duration(seconds: 15), () {
+            if (mounted) {
+              _recentlyHandled.clear();
+            }
+          });
           RingtoneService().stopRinging();
           _isOutgoingCall = false;
           _lastIncomingNumber = '';

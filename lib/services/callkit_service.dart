@@ -131,7 +131,35 @@ Future<void> callkitBackgroundHandler(CallEvent event) async {
         'timestamp': DateTime.now().millisecondsSinceEpoch,
       }));
       try {
+        final onCallRes = await ApiService.userOnCall();
+        String? bridgeID;
+        if (onCallRes['success'] == true) {
+          bridgeID = onCallRes['data']?['currentcalldata']?['bridgeID']?.toString();
+        }
+        if (bridgeID == null || bridgeID.isEmpty) {
+          final uctx = await ApiService.userConnection();
+          final queues = uctx['data']?['currentCallqueue'] as List<dynamic>? ?? [];
+          if (queues.isNotEmpty) {
+            bridgeID = queues.first['channelID']?.toString();
+          } else {
+            final followUps = uctx['data']?['followUpDispoes'] as List<dynamic>? ?? [];
+            if (followUps.isNotEmpty) {
+              bridgeID = followUps.first['bridgeID']?.toString();
+            }
+          }
+        }
+        
+        
+        // Tell PBX to stop routing this call to us BEFORE we auto-dispose
+        await ApiService.clearRejectedCallFromAgent(number);
+        
         await ApiService.callEnded();
+        final finalBridgeID = (bridgeID != null && bridgeID.isNotEmpty) ? bridgeID : 'deadCallId';
+        
+        // Delay auto-disposition by 5 seconds to prevent PBX from immediately re-routing the queue call back to us
+        Future.delayed(const Duration(seconds: 5), () async {
+          await ApiService.submitDisposition(finalBridgeID, 'Auto Disposed');
+        });
       } catch (_) {}
       await FlutterCallkitIncoming.endAllCalls();
     } else if (event is CallEventActionCallAccept) {
@@ -216,7 +244,11 @@ class CallKitService {
         _markCallKitDeclined(number);
         FcmService().clearPendingFcmCall();
         clearPendingAction();
-        SipSocketService().rejectCall();
+        
+        // Tell PBX to stop routing this call to us BEFORE we reject and auto-dispose
+        ApiService.clearRejectedCallFromAgent(number).then((_) {
+          SipSocketService().rejectCall();
+        });
       case CallEventActionCallEnded():
         print('[CALLKIT] _onEvent: ENDED');
         _dismissCallKit();

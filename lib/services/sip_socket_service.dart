@@ -200,6 +200,7 @@ class SipSocketService implements sip.SipUaHelperListener {
             _incomingNumber = remoteNumber;
             _callState = CallState.ringing;
             _emit(SipEvent.incomingCall, data: {'number': _incomingNumber});
+            _loadCallContext(); // Pre-fetch bridgeID for potential auto disposition
             // If user already tapped Accept (pendingAnswerForQueue),
             // answer immediately when the INVITE arrives.
             if (_pendingAnswerForQueue) {
@@ -345,22 +346,38 @@ class SipSocketService implements sip.SipUaHelperListener {
     _emit(SipEvent.callEnded, data: {'bridgeID': _bridgeID});
     CallLifecycleService().onCallEnded();
 
-    // Call ended API
-    await ApiService.callEnded();
-
     // Submit disposition only if we have a real bridgeID (answered call)
     var bridgeID = _bridgeID;
     if (bridgeID.isEmpty) {
       _log('bridgeID empty, fetching from userOnCall...');
       final ctx = await ApiService.userOnCall();
-      bridgeID = ctx['data']?['currentcalldata']?['bridgeID'] ?? '';
+      bridgeID = ctx['data']?['currentcalldata']?['bridgeID']?.toString() ?? '';
+      
+      if (bridgeID.isEmpty) {
+        _log('userOnCall bridgeID also empty, fetching from userConnection...');
+        final uctx = await ApiService.userConnection();
+        final queues = uctx['data']?['currentCallqueue'] as List<dynamic>? ?? [];
+        if (queues.isNotEmpty) {
+          bridgeID = queues.first['channelID']?.toString() ?? '';
+          _log('Found bridgeID (channelID) in currentCallqueue: $bridgeID');
+        } else {
+          final followUps = uctx['data']?['followUpDispoes'] as List<dynamic>? ?? [];
+          if (followUps.isNotEmpty) {
+            bridgeID = followUps.first['bridgeID']?.toString() ?? '';
+            _log('Found bridgeID in followUpDispoes: $bridgeID');
+          }
+        }
+      }
     }
 
-    if (bridgeID.isNotEmpty && bridgeID != 'deadCallId') {
-      await ApiService.submitDisposition(bridgeID, 'Auto Disposed');
-    } else {
-      _log('No bridgeID — skipping disposition (unanswered/rejected call)');
-    }
+    // Call ended API
+    await ApiService.callEnded();
+
+    // Delay auto-disposition by 5 seconds to prevent PBX from immediately re-routing the queue call back to us
+    Future.delayed(const Duration(seconds: 5), () async {
+      final finalBridgeID = bridgeID.isNotEmpty ? bridgeID : 'deadCallId';
+      await ApiService.submitDisposition(finalBridgeID, 'Auto Disposed');
+    });
 
     _callState = CallState.idle;
     _bridgeID = '';
