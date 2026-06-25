@@ -4,7 +4,7 @@ import 'package:http/http.dart' as http;
 import 'auth_service.dart';
 
 class ApiService {
-  static const String baseUrl = 'https://devapp.iotcom.io';
+  static const String baseUrl = 'https://app.samvaad.io';
 
   // Central logger
   static void _log(String tag, String message, {Object? data}) {

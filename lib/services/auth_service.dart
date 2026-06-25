@@ -3,7 +3,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 class AuthService {
-  static const String baseUrl = 'https://devapp.iotcom.io';
+  static const String baseUrl = 'https://app.samvaad.io';
 
   // Login method matching the webphone implementation
   static Future<Map<String, dynamic>> login(

@@ -29,7 +29,7 @@ class SipSocketService implements sip.SipUaHelperListener {
 
   final sip.SIPUAHelper _helper = sip.SIPUAHelper();
 
-  static const String _origin = 'devapp.iotcom.io';
+  static const String _origin = 'app.samvaad.io';
 
   Timer? _connectionCheckTimer;
 
