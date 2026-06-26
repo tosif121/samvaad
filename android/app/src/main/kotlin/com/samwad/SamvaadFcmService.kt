@@ -22,7 +22,7 @@ import com.hiennv.flutter_callkit_incoming.CallkitEventCallback
 import com.hiennv.flutter_callkit_incoming.FlutterCallkitIncomingPlugin
 import android.os.Bundle
 
-class SamvaadFcmService : FirebaseMessagingService(), CallkitEventCallback {
+class SamvaadFcmService : FirebaseMessagingService() {
 
     private var wakeLock: android.os.PowerManager.WakeLock? = null
     private var actionReceiver: android.content.BroadcastReceiver? = null
@@ -63,29 +63,17 @@ class SamvaadFcmService : FirebaseMessagingService(), CallkitEventCallback {
             registerReceiver(actionReceiver, filter)
         }
         
-        // Register direct callback from the plugin to catch Decline natively
-        FlutterCallkitIncomingPlugin.registerEventCallback(this)
+        // Register direct callback from the plugin to catch Decline natively (statically)
+        registerStaticCallkitCallback()
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        FlutterCallkitIncomingPlugin.unregisterEventCallback(this)
         actionReceiver?.let {
             unregisterReceiver(it)
             actionReceiver = null
         }
         releaseWakeLock()
-        stopRingtone()
-    }
-
-    override fun onCallEvent(event: CallkitEventCallback.CallEvent, callData: Bundle) {
-        Log.d(TAG, "===== CallkitEventCallback received: $event =====")
-        if (event == CallkitEventCallback.CallEvent.DECLINE || event == CallkitEventCallback.CallEvent.END) {
-            Log.d(TAG, "Stopping ringtone natively from CallkitEventCallback!")
-            stopRingtone()
-            releaseWakeLock()
-            cleanupForeground()
-        }
     }
 
     override fun onNewToken(token: String) {
@@ -395,6 +383,23 @@ class SamvaadFcmService : FirebaseMessagingService(), CallkitEventCallback {
 
         @Volatile
         var backgroundFlutterEngine: io.flutter.embedding.engine.FlutterEngine? = null
+
+        private var staticEventCallback: CallkitEventCallback? = null
+
+        fun registerStaticCallkitCallback() {
+            if (staticEventCallback == null) {
+                staticEventCallback = object : CallkitEventCallback {
+                    override fun onCallEvent(event: CallkitEventCallback.CallEvent, callData: Bundle) {
+                        Log.d(TAG, "===== CallkitEventCallback received natively: $event =====")
+                        if (event == CallkitEventCallback.CallEvent.DECLINE || event == CallkitEventCallback.CallEvent.END) {
+                            Log.d(TAG, "Stopping ringtone natively from static CallkitEventCallback!")
+                            cleanupForeground()
+                        }
+                    }
+                }
+                FlutterCallkitIncomingPlugin.registerEventCallback(staticEventCallback!!)
+            }
+        }
 
         fun cleanupForeground() {
             Log.d(TAG, "===== cleanupForeground called =====")
