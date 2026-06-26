@@ -36,8 +36,9 @@ class SipSocketService implements sip.SipUaHelperListener {
   Timer? _connectionCheckTimer;
 
   CallState _callState = CallState.idle;
-  DateTime? _lastCallEndedAt;
+  sip.Call? _activeCall;
   String? _autoRejectedCallId;
+  String? _lastCallId;
   String _incomingNumber = '';
   String _bridgeID = '';
   String _dialedNumber = '';
@@ -177,13 +178,14 @@ class SipSocketService implements sip.SipUaHelperListener {
           'dialedNumber': _dialedNumber,
         });
         if (call.direction == 'INCOMING') {
-          if (_lastCallEndedAt != null && DateTime.now().difference(_lastCallEndedAt!).inSeconds < 15) {
-            _log('Auto-rejecting new INVITE — in call-ended cooldown');
+          if (_lastCallId == call.id) {
+            _log('Auto-rejecting duplicate INVITE (same Call-ID)');
             _autoRejectedCallId = call.id;
             call.hangup();
             FlutterCallkitIncoming.endAllCalls();
             break;
           }
+          _lastCallId = call.id;
           final remoteNumber = call.remote_identity ?? 'Unknown';
 
           final cleanRemote = remoteNumber.replaceAll(RegExp(r'\D'), '');
@@ -363,7 +365,6 @@ class SipSocketService implements sip.SipUaHelperListener {
   Future<void> _onCallEnded() async {
     if (_endingCall) return;
     _endingCall = true;
-    _lastCallEndedAt = DateTime.now();
     _callState = CallState.disposition;
     _emit(SipEvent.callEnded, data: {'bridgeID': _bridgeID});
     CallLifecycleService().onCallEnded();
