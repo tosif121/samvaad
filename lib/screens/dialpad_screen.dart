@@ -47,19 +47,20 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
     WidgetsBinding.instance.addObserver(this);
     _requestMicrophonePermission();
 
-    // Start SIP initialization IMMEDIATELY so it's ready when call comes in
-    _initSip();
-
-    // Check for pending CallKit action FIRST (auto-answer from native CallKit accept)
-    // We await this so that if CallKit answers the call, it clears the FCM pending call
-    // BEFORE the FCM check runs.
+    // Check pending CallKit action FIRST — before SIP init
     _checkPendingCallkitAction().then((_) {
       if (!mounted) return;
+      // If we navigated away (CallKit answer), skip everything else
+      if (_navigatedToCallScreen) {
+        print('[DIALPAD] CallKit answer navigated — skipping SIP + FCM init');
+        return;
+      }
+      // Start SIP initialization
+      _initSip();
       // Then check FCM as fallback
       _checkPendingFcmCall();
+      _initFcm();
     });
-
-    _initFcm();
   }
 
   AppLifecycleState _appLifecycleState = AppLifecycleState.resumed;
@@ -69,28 +70,30 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
     print('[LIFECYCLE] $state');
     _appLifecycleState = state;
     if (state == AppLifecycleState.resumed) {
-      print('[DIALPAD] App resumed | callState=${_sip.callState.name} | isShowingDialog=$_isShowingIncomingDialog | callHandled=$_callHandled | lastIncoming=$_lastIncomingNumber');
-      // Clear any stale notifications when app comes to foreground
+      print('[DIALPAD] App resumed | callState=${_sip.callState.name} | isShowingDialog=$_isShowingIncomingDialog | callHandled=$_callHandled | navi=$_navigatedToCallScreen');
+      if (_navigatedToCallScreen) return;
       RingtoneService().clearNotification();
-      _checkPendingFcmCall();
-      if (_sip.callState == CallState.ringing &&
-          !_isShowingIncomingDialog &&
-          !_callHandled) {
-        print('[DIALPAD] Resume: showing incoming call dialog for ${_sip.incomingNumber}');
-        // Wait for SIP to be ready before showing
-        if (_sip.isRegistered) {
-          _showIncomingCall(_sip.incomingNumber);
+      // Check for pending CallKit action (accept/decline from native notification)
+      _checkPendingCallkitAction().then((_) {
+        if (!mounted || _navigatedToCallScreen) return;
+        _checkPendingFcmCall();
+        if (_sip.callState == CallState.ringing &&
+            !_isShowingIncomingDialog &&
+            !_callHandled) {
+          print('[DIALPAD] Resume: showing incoming call dialog for ${_sip.incomingNumber}');
+          if (_sip.isRegistered) {
+            _showIncomingCall(_sip.incomingNumber);
+          } else {
+            Future.delayed(const Duration(milliseconds: 500), () {
+              if (mounted && !_navigatedToCallScreen && _sip.isRegistered && _sip.callState == CallState.ringing) {
+                _showIncomingCall(_sip.incomingNumber);
+              }
+            });
+          }
         } else {
-          // Wait briefly for SIP registration
-          Future.delayed(const Duration(milliseconds: 500), () {
-            if (mounted && _sip.isRegistered && _sip.callState == CallState.ringing) {
-              _showIncomingCall(_sip.incomingNumber);
-            }
-          });
+          print('[DIALPAD] Resume: skipping incoming call dialog');
         }
-      } else {
-        print('[DIALPAD] Resume: skipping incoming call dialog');
-      }
+      });
     }
   }
 
@@ -138,19 +141,29 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
       print('[DIALPAD] userOnCall check failed — proceeding anyway: $e');
     }
 
-    // Auto-answer and go directly to call screen
+    // Answer SIP call first, wait for connect, then navigate
+    _callHandled = true; // Prevent incoming call dialog from showing while we wait
     RingtoneService().stopRinging();
+    await RingtoneService().clearNotification();
+    await RingtoneService().cleanupForegroundService();
+    await FlutterCallkitIncoming.endAllCalls();
+
     _sip.answerCall();
-    await FlutterCallkitIncoming.endAllCalls(); // Clear the notification
-    
-    if (mounted) {
-      _navigatedToCallScreen = true;
-      Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => OutgoingCallScreen(phoneNumber: number),
-        ),
-      );
+    print('[DIALPAD] FCM answer: SIP answerCall sent — waiting for callAnswered...');
+
+    final connected = await _waitForCallAnswered();
+    if (!connected || !mounted) {
+      print('[DIALPAD] FCM answer: call not connected — aborting');
+      return;
     }
+
+    print('[DIALPAD] FCM answer: call connected — navigating to call screen');
+    _navigatedToCallScreen = true;
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => OutgoingCallScreen(phoneNumber: number),
+      ),
+    );
   }
 
   Future<void> _checkPendingCallkitAction() async {
@@ -167,39 +180,49 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
     }
     if (action['action'] != 'answer') return;
 
-    print('[DIALPAD] CallKit pending action: ANSWER for ${action['number']}');
-    // Clear notification + foreground service
+    final number = action['number'] as String? ?? 'Unknown';
+    print('[DIALPAD] CallKit pending action: ANSWER for $number — connecting SIP first');
+    _callHandled = true; // Prevent incoming call dialog from showing while we wait
+    RingtoneService().stopRinging();
     await RingtoneService().clearNotification();
     await RingtoneService().cleanupForegroundService();
-
-    // Clear any FCM pending call to avoid double-dialog
     await FcmService().clearPendingFcmCall();
+    await FlutterCallkitIncoming.endAllCalls();
 
-    // Wait for SIP to be registered, then answer the call
+    _sip.answerCall();
+    print('[DIALPAD] CallKit answer: SIP answerCall sent — waiting for callAnswered...');
+
+    final connected = await _waitForCallAnswered();
+    if (!connected || !mounted) {
+      print('[DIALPAD] CallKit answer: call not connected — aborting');
+      return;
+    }
+
+    print('[DIALPAD] CallKit answer: call connected — navigating to call screen');
+    _navigatedToCallScreen = true;
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => OutgoingCallScreen(phoneNumber: number),
+      ),
+    );
+  }
+
+  /// Wait for SIP callAnswered event (up to 15 seconds)
+  Future<bool> _waitForCallAnswered() async {
     int waitCount = 0;
-    while (!_sip.isRegistered && mounted) {
-      await Future.delayed(const Duration(milliseconds: 100));
+    while (mounted) {
+      if (_sip.callState == CallState.onCall) {
+        print('[DIALPAD] _waitForCallAnswered: callState already onCall');
+        return true;
+      }
+      await Future.delayed(const Duration(milliseconds: 200));
       waitCount++;
-      if (waitCount > 100) {
-        print('[DIALPAD] Timeout waiting for SIP registration for CallKit answer');
-        return;
+      if (waitCount > 75) {
+        print('[DIALPAD] _waitForCallAnswered: timeout after 15s');
+        return false;
       }
     }
-    if (!mounted) return;
-
-    // Answer the SIP call (queues answer if INVITE hasn't arrived yet)
-    _sip.answerCall();
-
-    if (mounted) {
-      _navigatedToCallScreen = true;
-      Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => OutgoingCallScreen(
-            phoneNumber: action['number'] as String? ?? 'Unknown',
-          ),
-        ),
-      );
-    }
+    return false;
   }
 
   Future<void> _requestNotificationPermission() async {
@@ -243,7 +266,13 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
         case 'incomingCall':
           _incomingCallCount++;
           final number = event['number'] as String? ?? 'Unknown';
-          print('[DIALPAD] incomingCall#$_incomingCallCount number=$number | callState=${_sip.callState.name} | isShowingDialog=$_isShowingIncomingDialog | callHandled=$_callHandled');
+          print('[DIALPAD] incomingCall#$_incomingCallCount number=$number | callState=${_sip.callState.name} | isShowingDialog=$_isShowingIncomingDialog | callHandled=$_callHandled | navi=$_navigatedToCallScreen');
+
+          // Guard: don't show UI if already navigating to call screen
+          if (_navigatedToCallScreen) {
+            print('[DIALPAD] Skipping incomingCall — already navigating to call screen');
+            break;
+          }
 
           // Guard: don't show UI if already in a call or already handling one
           if (_sip.callState == CallState.onCall || _isShowingIncomingDialog || _callHandled || _sip.hasPendingAnswer) {
@@ -259,14 +288,20 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
           RingtoneService().stopRinging();
 
           if (_appLifecycleState != AppLifecycleState.resumed) {
-            print('[DIALPAD] App is backgrounded — showing native CallKit');
-            // Dismiss any stale Flutter dialog
+            print('[DIALPAD] App is backgrounded — CallKit handles from FCM');
             if (_isShowingIncomingDialog && mounted) {
               Navigator.of(context).pop();
               _isShowingIncomingDialog = false;
             }
-            CallKitService().showIncomingCall(number);
           } else {
+            print('[DIALPAD] Foreground — checking if CallKit is already showing');
+            try {
+              final active = await FlutterCallkitIncoming.activeCalls();
+              if (active.isNotEmpty) {
+                print('[DIALPAD] CallKit already active — skipping Flutter dialog');
+                break;
+              }
+            } catch (_) {}
             _showIncomingCall(number);
           }
           break;
@@ -390,8 +425,10 @@ class _DialpadScreenState extends State<DialpadScreen> with WidgetsBindingObserv
     _isShowingIncomingDialog = true;
     _callHandled = false;
     _recentlyHandled.add(number);
+    // Stop native Kotlin ringtone first to avoid double ringing
+    RingtoneService().cleanupForegroundService();
+    await Future.delayed(const Duration(milliseconds: 200));
     RingtoneService().startRinging();
-    // Aggressively clear any Android notification since the Flutter UI is now taking over!
     RingtoneService().clearNotification();
     
     final result = await showGeneralDialog<bool>(

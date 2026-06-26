@@ -2,7 +2,6 @@ package com.samwad
 
 import android.app.ActivityManager
 import android.app.Application
-import android.app.KeyguardManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -10,9 +9,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.ServiceInfo
-import android.media.MediaPlayer
-import android.media.RingtoneManager
-import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.util.Log
@@ -21,15 +17,48 @@ import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import com.hiennv.flutter_callkit_incoming.CallkitIncomingBroadcastReceiver
 import com.hiennv.flutter_callkit_incoming.Data
-import io.flutter.plugin.common.MethodChannel
 
 class SamvaadFcmService : FirebaseMessagingService() {
+
+    private var wakeLock: android.os.PowerManager.WakeLock? = null
+    private var actionReceiver: android.content.BroadcastReceiver? = null
 
     override fun onCreate() {
         super.onCreate()
         ensureNotificationChannel()
         ensureCallkitChannels()
         ensureTracker(this)
+        
+        actionReceiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(context: android.content.Context?, intent: android.content.Intent?) {
+                val action = intent?.action
+                if (action == "com.hiennv.flutter_callkit_incoming.ACTION_CALL_ACCEPT" ||
+                    action == "com.hiennv.flutter_callkit_incoming.ACTION_CALL_DECLINE" ||
+                    action == "com.hiennv.flutter_callkit_incoming.ACTION_CALL_ENDED") {
+                    Log.d(TAG, "CallKit Action received in FcmService: $action")
+                    cleanupForeground()
+                }
+            }
+        }
+        val filter = android.content.IntentFilter().apply {
+            addAction("com.hiennv.flutter_callkit_incoming.ACTION_CALL_ACCEPT")
+            addAction("com.hiennv.flutter_callkit_incoming.ACTION_CALL_DECLINE")
+            addAction("com.hiennv.flutter_callkit_incoming.ACTION_CALL_ENDED")
+        }
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(actionReceiver, filter, android.content.Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(actionReceiver, filter)
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        releaseWakeLock()
+        actionReceiver?.let {
+            unregisterReceiver(it)
+            actionReceiver = null
+        }
     }
 
     override fun onNewToken(token: String) {
@@ -52,53 +81,52 @@ class SamvaadFcmService : FirebaseMessagingService() {
 
         savePendingCall(number)
 
-        if (isAppInForeground()) {
-            Log.d(TAG, "Foreground=true — Flutter handles active UI")
-            return
-        }
-
-        // Use CallKit for ALL background states — notification path is unreliable across OEMs
+        // Always show CallKit incoming UI on FCM — regardless of app state
         showCallkitIncoming(number)
+    }
+
+    private fun acquireWakeLock() {
+        try {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+            wakeLock = powerManager.newWakeLock(
+                android.os.PowerManager.FULL_WAKE_LOCK or
+                android.os.PowerManager.ACQUIRE_CAUSES_WAKEUP or
+                android.os.PowerManager.ON_AFTER_RELEASE,
+                "Samvaad::CallKitWakeLock"
+            ).apply {
+                acquire(90 * 1000L) // 90 seconds max
+                Log.d(TAG, "WakeLock acquired for CallKit UI")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to acquire WakeLock", e)
+        }
+    }
+
+    private fun releaseWakeLock() {
+        try {
+            wakeLock?.let {
+                if (it.isHeld) {
+                    it.release()
+                    Log.d(TAG, "WakeLock released")
+                }
+            }
+            wakeLock = null
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to release WakeLock", e)
+        }
     }
 
     private fun showCallkitIncoming(number: String) {
         try {
-            Log.d(TAG, "showCallkitIncoming for $number — starting foreground service")
+            Log.d(TAG, "showCallkitIncoming for $number")
 
-            if (backgroundFlutterEngine == null) {
-                val appCtx = applicationContext
-                val loader = io.flutter.FlutterInjector.instance().flutterLoader()
-                loader.startInitialization(appCtx)
-                loader.ensureInitializationComplete(appCtx, null)
-
-                backgroundFlutterEngine = io.flutter.embedding.engine.FlutterEngine(appCtx)
-                backgroundFlutterEngine!!.dartExecutor.executeDartEntrypoint(
-                    io.flutter.embedding.engine.dart.DartExecutor.DartEntrypoint.createDefault()
-                )
-                MethodChannel(backgroundFlutterEngine!!.dartExecutor.binaryMessenger, "com.samwad/callkit").setMethodCallHandler { call, result ->
-                    if (call.method == "launchApp") {
-                        val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
-                        launchIntent?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                        if (launchIntent != null) {
-                            startActivity(launchIntent)
-                            Log.d(TAG, "Launched main activity from background")
-                            result.success(true)
-                        } else {
-                            result.error("UNAVAILABLE", "Cannot find launch intent", null)
-                        }
-                    } else {
-                        result.notImplemented()
-                    }
-                }
-                Log.d(TAG, "Background FlutterEngine started successfully")
-            }
-
+            acquireWakeLock()
             ensureCallkitChannels()
+            playRingtone()
 
-            val callkitNotifId = "call_${number.hashCode()}".hashCode()
-            
-            // Start foreground service so we can launch CallkitIncomingActivity from background
+            // Start foreground service
             instance = this
+            val callkitNotifId = "call_${number.hashCode()}".hashCode()
             val fgNotif = NotificationCompat.Builder(this, ringtoneChannelId)
                 .setContentTitle("Incoming Call")
                 .setContentText(number)
@@ -111,117 +139,104 @@ class SamvaadFcmService : FirebaseMessagingService() {
             } else {
                 startForeground(callkitNotifId, fgNotif)
             }
-            Log.d(TAG, "Foreground service started")
 
-
-            // Use the plugin's Data class to create the call data bundle properly
-            val callData = Data(
-                hashMapOf(
-                    // Deterministic ID prevents duplicate CallKit screens for same call
-                    "id" to "call_${number.hashCode()}",
-                    "nameCaller" to number,
-                    "handle" to number,
-                    "type" to 0,
-                    "appName" to "Samvaad",
-                    "ringtonePath" to "system_ringtone_default",
-                    "isCustomNotification" to true,
-                    "isShowLogo" to false,
-                    "isShowCallID" to false,
-                    "backgroundColor" to "#4299EB",
-                    "actionColor" to "#FFFFFF",
-                    "textColor" to "#FFFFFF",
-                    "incomingCallNotificationChannelName" to "incoming_calls_ringtone_v2",
-                    "isShowFullLockedScreen" to true,
-                    "isFullScreen" to true,
-                    "textAccept" to "Answer",
-                    "textDecline" to "Decline",
-                    "extra" to hashMapOf("number" to number)
+            // Also send CallKit broadcast — on some devices it shows the native CallKit UI
+            try {
+                val callData = Data(
+                    hashMapOf(
+                        "id" to "call_${number.hashCode()}",
+                        "nameCaller" to number,
+                        "handle" to number,
+                        "type" to 0,
+                        "appName" to "Samvaad",
+                        "ringtonePath" to "system_ringtone_default",
+                        "isCustomNotification" to true,
+                        "isShowLogo" to false,
+                        "isShowCallID" to false,
+                        "backgroundColor" to "#4299EB",
+                        "actionColor" to "#FFFFFF",
+                        "textColor" to "#FFFFFF",
+                        "incomingCallNotificationChannelName" to "incoming_calls_ringtone_v2",
+                        "isShowFullLockedScreen" to true,
+                        "isFullScreen" to true,
+                        "textAccept" to "Answer",
+                        "textDecline" to "Decline",
+                        "extra" to hashMapOf("number" to number)
+                    )
                 )
-            )
-            val bundle = callData.toBundle()
-            val intent = CallkitIncomingBroadcastReceiver.getIntentIncoming(
-                applicationContext,
-                bundle
-            )
-            applicationContext.sendBroadcast(intent)
-            Log.d(TAG, "CallKit broadcast sent for: $number")
-            
-            android.os.Handler(mainLooper).postDelayed({
-                cleanupForeground()
-            }, 45000)
+                val bundle = callData.toBundle()
+                val intent = CallkitIncomingBroadcastReceiver.getIntentIncoming(applicationContext, bundle)
+                applicationContext.sendBroadcast(intent)
+                Log.d(TAG, "CallKit broadcast sent for: $number")
+            } catch (e: Exception) {
+                Log.e(TAG, "CallKit broadcast failed", e)
+            }
+
+            // Poll for decline/accept flag every second, auto-cleanup after 90 seconds
+            Log.d(TAG, "Starting poll handler for stop ringtone flag")
+            val stopHandler = Handler(mainLooper)
+            val stopRunnable = object : Runnable {
+                override fun run() {
+                    val prefs = getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+                    val shouldStop = prefs.getBoolean("flutter.callkit_stop_ringtone", false)
+                    if (shouldStop) {
+                        Log.d(TAG, "===== callkit_stop_ringtone flag detected — stopping ringtone + cleanup =====")
+                        prefs.edit().remove("flutter.callkit_stop_ringtone").apply()
+                        stopRingtone()
+                        releaseWakeLock()
+                        cleanupForeground()
+                        Log.d(TAG, "===== Poll cleanup done =====")
+                        return
+                    }
+                    val elapsed = System.currentTimeMillis() - startTime
+                    if (elapsed > 90000) {
+                        Log.d(TAG, "===== 90s timeout — force cleanup =====")
+                        stopRingtone()
+                        releaseWakeLock()
+                        cleanupForeground()
+                        return
+                    }
+                    stopHandler.postDelayed(this, 1000)
+                }
+            }
+            startTime = System.currentTimeMillis()
+            stopHandler.postDelayed(stopRunnable, 1000)
+            Log.d(TAG, "Poll handler started at $startTime")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to launch callkit natively", e)
+            Log.e(TAG, "Failed to show incoming call UI", e)
             cleanupForeground()
-            showOpenAppNotification(number)
         }
     }
 
-    private fun showOpenAppNotification(number: String) {
+    private fun playRingtone() {
         try {
-            instance = this
-            val fgNotif = NotificationCompat.Builder(this, ringtoneChannelId)
-                .setContentTitle("Incoming Call")
-                .setContentText(number)
-                .setSmallIcon(android.R.drawable.ic_dialog_info)
-                .setPriority(NotificationCompat.PRIORITY_MIN)
-                .setOngoing(true)
-                .build()
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                startForeground(1003, fgNotif, ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL)
-            } else {
-                startForeground(1003, fgNotif)
-            }
-
-            val powerManager = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
-            val wakeLock = powerManager.newWakeLock(
-                android.os.PowerManager.FULL_WAKE_LOCK or
-                android.os.PowerManager.ACQUIRE_CAUSES_WAKEUP or
-                android.os.PowerManager.ON_AFTER_RELEASE,
-                "Samvaad::IncomingCallWakeLock"
+            stopRingtone()
+            val uri = android.media.RingtoneManager.getActualDefaultRingtoneUri(
+                this, android.media.RingtoneManager.TYPE_RINGTONE
             )
-            wakeLock.acquire(3 * 60 * 1000L) // 3 minutes max
+            ringtonePlayer = android.media.MediaPlayer().apply {
+                setDataSource(this@SamvaadFcmService, uri)
+                isLooping = true
+                setVolume(1.0f, 1.0f)
+                prepare()
+                start()
+            }
+            Log.d(TAG, "Ringtone started")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to acquire wake lock", e)
+            Log.e(TAG, "Failed to play ringtone", e)
         }
+    }
 
-        val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
-            ?: Intent(this, MainActivity::class.java)
-        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-        launchIntent.putExtra("fcm_number", number)
-        launchIntent.action = "INCOMING_CALL_ACTION"
-
+    private fun stopRingtone() {
         try {
-            startActivity(launchIntent)
-            Log.d(TAG, "Force started activity from background")
+            ringtonePlayer?.apply {
+                if (isPlaying) stop()
+                release()
+            }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to start activity directly", e)
+            Log.e(TAG, "Error stopping ringtone", e)
         }
-
-        val pendingIntent = PendingIntent.getActivity(
-            this,
-            number.hashCode(),
-            launchIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        val notification = NotificationCompat.Builder(this, incomingChannelId)
-            .setContentTitle("Incoming Call")
-            .setContentText(number)
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setCategory(NotificationCompat.CATEGORY_CALL)
-            .setAutoCancel(true)
-            .setFullScreenIntent(pendingIntent, true)
-            .setContentIntent(pendingIntent)
-            .build()
-
-        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        manager.notify(incomingNotificationId, notification)
-        Log.d(TAG, "Open-app notification shown for $number")
-
-        Handler(mainLooper).postDelayed({
-            cleanupForeground()
-        }, 10000)
+        ringtonePlayer = null
     }
 
     private fun isCallEndedPayload(data: Map<String, String>): Boolean {
@@ -274,25 +289,6 @@ class SamvaadFcmService : FirebaseMessagingService() {
         }
     }
 
-    private fun playNativeRingtone() {
-        try {
-            stopNativeRingtone()
-            val uri: Uri = RingtoneManager.getActualDefaultRingtoneUri(
-                this, RingtoneManager.TYPE_RINGTONE
-            )
-            ringtonePlayer = MediaPlayer().apply {
-                setDataSource(this@SamvaadFcmService, uri)
-                isLooping = true
-                setVolume(1.0f, 1.0f)
-                prepare()
-                start()
-            }
-            Log.d(TAG, "Native ringtone started")
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to play native ringtone", e)
-        }
-    }
-
     private fun isAppInForeground(): Boolean {
         val am = getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager ?: return false
         val processes = am.runningAppProcesses ?: return false
@@ -319,10 +315,8 @@ class SamvaadFcmService : FirebaseMessagingService() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val mgr = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         
-        // DELETE OLD MUTED CHANNELS SO CALLKIT CAN RECREATE THEM AS HIGH IMPORTANCE!
-        mgr.deleteNotificationChannel("callkit_incoming_channel_id_v2")
-        mgr.deleteNotificationChannel("incoming_calls_ringtone")
-
+        // Do NOT delete CallKit plugin channels — it needs them for notifications
+        
         val ringtoneCh = NotificationChannel(
             ringtoneChannelId, "Call Ringtone", NotificationManager.IMPORTANCE_MIN
         ).apply {
@@ -363,47 +357,70 @@ class SamvaadFcmService : FirebaseMessagingService() {
         private const val incomingChannelId = "samvaad_incoming_calls"
         private const val incomingNotificationId = 1001
         private const val ringtoneChannelId = "callkit_ringtone_channel"
-        private const val ringtoneNotifId = 1002
-        private const val fgServiceNotifId = 1003
         private var trackerRegistered = false
+        private var startTime = 0L
 
         @Volatile
         var instance: SamvaadFcmService? = null
 
         @Volatile
-        var ringtonePlayer: MediaPlayer? = null
-        
+        var ringtonePlayer: android.media.MediaPlayer? = null
+
         @Volatile
         var backgroundFlutterEngine: io.flutter.embedding.engine.FlutterEngine? = null
 
-        fun stopNativeRingtone() {
-            Log.d(TAG, "stopNativeRingtone called")
+        fun cleanupForeground() {
+            Log.d(TAG, "===== cleanupForeground called =====")
+            val savedInstance = instance
+            Log.d(TAG, "instance is null: ${savedInstance == null}")
+            // Clear stop ringtone flag
+            try {
+                instance?.getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+                    ?.edit()?.remove("flutter.callkit_stop_ringtone")?.apply()
+                Log.d(TAG, "Cleared callkit_stop_ringtone flag")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to clear flag: $e")
+            }
+            // Stop ringtone
             try {
                 ringtonePlayer?.apply {
-                    if (isPlaying) stop()
+                    if (isPlaying) {
+                        stop()
+                        Log.d(TAG, "Ringtone stopped")
+                    }
                     release()
+                    Log.d(TAG, "Ringtone released")
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error stopping ringtone", e)
+                Log.e(TAG, "Failed to stop ringtone: $e")
             }
             ringtonePlayer = null
-        }
-
-        fun cleanupForeground() {
-            Log.d(TAG, "cleanupForeground called")
-            stopNativeRingtone()
+            // Cancel notification BEFORE nulling instance
             try {
-                instance?.stopForeground(STOP_FOREGROUND_REMOVE)
+                val mgr = savedInstance?.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+                mgr?.cancel(incomingNotificationId)
+                Log.d(TAG, "Notification cancelled")
             } catch (e: Exception) {
-                Log.e(TAG, "Error stopping foreground", e)
+                Log.e(TAG, "Failed to cancel notification: $e")
+            }
+            // Release WakeLock
+            savedInstance?.releaseWakeLock()
+            Log.d(TAG, "WakeLock released")
+            try {
+                savedInstance?.stopForeground(STOP_FOREGROUND_REMOVE)
+                Log.d(TAG, "Foreground service stopped")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error stopping foreground: $e")
             }
             instance = null
             try {
                 backgroundFlutterEngine?.destroy()
                 backgroundFlutterEngine = null
+                Log.d(TAG, "Background engine destroyed")
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to destroy background engine", e)
+                Log.e(TAG, "Failed to destroy background engine: $e")
             }
+            Log.d(TAG, "===== cleanupForeground DONE =====")
         }
 
         fun ensureTracker(context: Context) {
