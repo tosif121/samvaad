@@ -136,6 +136,7 @@ class FcmService {
 
   Future<String?> getPendingFcmCall() async {
     final prefs = await SharedPreferences.getInstance();
+    await prefs.reload();
     final ts = prefs.getInt(_fcmPendingCallTsKey);
     if (ts == null) return null;
     if (DateTime.now().millisecondsSinceEpoch - ts > _fcmPendingTtlMs) {
