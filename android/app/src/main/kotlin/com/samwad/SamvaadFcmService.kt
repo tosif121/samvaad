@@ -86,18 +86,41 @@ class SamvaadFcmService : FirebaseMessagingService() {
         val data = message.data
         Log.d(TAG, "FCM received: $data")
 
-        if (isCallEndedPayload(data)) {
-            clearPendingCall()
+        val isCallPayload = data["notification_type"] == "call" || data["type"] == "incoming_call"
+        if (!isCallPayload) {
+            if (isCallEndedPayload(data)) {
+                Log.d(TAG, "Received call_ended or timeout payload via FCM, cleaning up")
+                clearPendingCall()
+                cleanupForeground()
+            }
             return
         }
 
-        val number = data["body"] ?: data["number"] ?: data["caller"] ?: return
-        if (number.isEmpty()) return
+        if (isAppInForeground()) {
+            Log.d(TAG, "App is in foreground. Skipping CallKit. Flutter will handle the call internally.")
+            return
+        }
 
+        val number = data["body"] ?: data["number"] ?: data["caller"] ?: "Unknown"
         savePendingCall(number)
-
-        // Always show CallKit incoming UI on FCM — regardless of app state
         showCallkitIncoming(number)
+    }
+
+    private fun isAppInForeground(): Boolean {
+        try {
+            val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+            val appProcesses = activityManager.runningAppProcesses ?: return false
+            val packageName = packageName
+            for (appProcess in appProcesses) {
+                if (appProcess.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND &&
+                    appProcess.processName == packageName) {
+                    return true
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to check foreground status", e)
+        }
+        return false
     }
 
     private fun acquireWakeLock() {
