@@ -18,7 +18,11 @@ import com.google.firebase.messaging.RemoteMessage
 import com.hiennv.flutter_callkit_incoming.CallkitIncomingBroadcastReceiver
 import com.hiennv.flutter_callkit_incoming.Data
 
-class SamvaadFcmService : FirebaseMessagingService() {
+import com.hiennv.flutter_callkit_incoming.CallkitEventCallback
+import com.hiennv.flutter_callkit_incoming.FlutterCallkitIncomingPlugin
+import android.os.Bundle
+
+class SamvaadFcmService : FirebaseMessagingService(), CallkitEventCallback {
 
     private var wakeLock: android.os.PowerManager.WakeLock? = null
     private var actionReceiver: android.content.BroadcastReceiver? = null
@@ -32,10 +36,14 @@ class SamvaadFcmService : FirebaseMessagingService() {
         actionReceiver = object : android.content.BroadcastReceiver() {
             override fun onReceive(context: android.content.Context?, intent: android.content.Intent?) {
                 val action = intent?.action
-                if (action == "com.hiennv.flutter_callkit_incoming.ACTION_CALL_ACCEPT" ||
-                    action == "com.hiennv.flutter_callkit_incoming.ACTION_CALL_DECLINE" ||
-                    action == "com.hiennv.flutter_callkit_incoming.ACTION_CALL_ENDED") {
-                    Log.d(TAG, "CallKit Action received in FcmService: $action")
+                Log.d(TAG, "actionReceiver onReceive: $action")
+                if (action?.contains("ACTION_CALL_ACCEPT") == true ||
+                    action?.contains("ACTION_CALL_DECLINE") == true ||
+                    action?.contains("ACTION_CALL_ENDED") == true ||
+                    action == "com.samvaad.STOP_RINGTONE") {
+                    Log.d(TAG, "CallKit Action received in FcmService: $action — stopping ringtone")
+                    stopRingtone()
+                    releaseWakeLock()
                     cleanupForeground()
                 }
             }
@@ -44,20 +52,39 @@ class SamvaadFcmService : FirebaseMessagingService() {
             addAction("com.hiennv.flutter_callkit_incoming.ACTION_CALL_ACCEPT")
             addAction("com.hiennv.flutter_callkit_incoming.ACTION_CALL_DECLINE")
             addAction("com.hiennv.flutter_callkit_incoming.ACTION_CALL_ENDED")
+            addAction("com.samwad.com.hiennv.flutter_callkit_incoming.ACTION_CALL_ACCEPT")
+            addAction("com.samwad.com.hiennv.flutter_callkit_incoming.ACTION_CALL_DECLINE")
+            addAction("com.samwad.com.hiennv.flutter_callkit_incoming.ACTION_CALL_ENDED")
+            addAction("com.samvaad.STOP_RINGTONE")
         }
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(actionReceiver, filter, android.content.Context.RECEIVER_NOT_EXPORTED)
         } else {
             registerReceiver(actionReceiver, filter)
         }
+        
+        // Register direct callback from the plugin to catch Decline natively
+        FlutterCallkitIncomingPlugin.registerEventCallback(this)
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        releaseWakeLock()
+        FlutterCallkitIncomingPlugin.unregisterEventCallback(this)
         actionReceiver?.let {
             unregisterReceiver(it)
             actionReceiver = null
+        }
+        releaseWakeLock()
+        stopRingtone()
+    }
+
+    override fun onCallEvent(event: CallkitEventCallback.CallEvent, callData: Bundle) {
+        Log.d(TAG, "===== CallkitEventCallback received: $event =====")
+        if (event == CallkitEventCallback.CallEvent.DECLINE || event == CallkitEventCallback.CallEvent.END) {
+            Log.d(TAG, "Stopping ringtone natively from CallkitEventCallback!")
+            stopRingtone()
+            releaseWakeLock()
+            cleanupForeground()
         }
     }
 
