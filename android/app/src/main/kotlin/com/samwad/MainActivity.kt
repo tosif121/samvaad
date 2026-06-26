@@ -3,7 +3,9 @@ package com.samwad
 import android.content.Intent
 import android.media.MediaPlayer
 import android.media.RingtoneManager
+import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.view.WindowManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -14,13 +16,14 @@ class MainActivity : FlutterActivity() {
     private var mediaPlayer: MediaPlayer? = null
 
     companion object {
+        private const val TAG = "MainActivity"
         var isAlive = false
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         isAlive = true
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O_MR1) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
             setTurnScreenOn(true)
         }
@@ -33,6 +36,33 @@ class MainActivity : FlutterActivity() {
             WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
             WindowManager.LayoutParams.FLAG_ALLOW_LOCK_WHILE_SCREEN_ON
         )
+
+        // Request USE_FULL_SCREEN_INTENT permission on Android 14+
+        requestFullScreenIntentPermission()
+    }
+
+    private fun requestFullScreenIntentPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            val notificationManager = getSystemService(android.content.Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+            if (!notificationManager.canUseFullScreenIntent()) {
+                val intent = Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+                    putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, packageName)
+                    putExtra(android.provider.Settings.EXTRA_CHANNEL_ID, "samvaad_incoming_calls")
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                try {
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    val settingsIntent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                        data = android.net.Uri.parse("package:$packageName")
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    try {
+                        startActivity(settingsIntent)
+                    } catch (_: Exception) {}
+                }
+            }
+        }
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -103,7 +133,7 @@ class MainActivity : FlutterActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O_MR1) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
             setTurnScreenOn(true)
         }
@@ -115,6 +145,16 @@ class MainActivity : FlutterActivity() {
             WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
             WindowManager.LayoutParams.FLAG_ALLOW_LOCK_WHILE_SCREEN_ON
         )
+        // Handle incoming call intent from notification
+        handleIncomingCallIntent(intent)
+    }
+
+    private fun handleIncomingCallIntent(intent: Intent) {
+        val number = intent.getStringExtra("fcm_number")
+        if (number != null && number.isNotEmpty()) {
+            Log.d(TAG, "Incoming call from notification for: $number")
+            intent.putExtra("fcm_number", null as String?) // consume the extra
+        }
     }
 
     override fun onDestroy() {

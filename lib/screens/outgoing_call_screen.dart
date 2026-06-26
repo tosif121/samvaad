@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../services/api_service.dart';
 import '../services/sip_socket_service.dart';
@@ -38,6 +39,8 @@ class _OutgoingCallScreenState extends State<OutgoingCallScreen> {
     print('[OUTGOING] initState for number: ${widget.phoneNumber}');
     RingtoneService().stopRinging();
     RingtoneService().clearNotification();
+    RingtoneService().cleanupForegroundService();
+    FlutterCallkitIncoming.endAllCalls();
     Helper.setSpeakerphoneOn(false);
 
     if (_sip.callState == CallState.onCall) {

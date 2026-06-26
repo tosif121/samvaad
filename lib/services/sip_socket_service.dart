@@ -58,7 +58,6 @@ class SipSocketService implements sip.SipUaHelperListener {
   bool _isHeld = false;
   dynamic _remoteStream;
 
-  sip.Call? _activeCall;
   bool _endingCall = false;
 
   // Stream controller for UI events

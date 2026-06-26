@@ -32,7 +32,6 @@ class _LoginScreenState extends State<LoginScreen> {
 
   // Auto-login with saved credentials if available
   Future<void> _checkAutoLogin() async {
-    // Pre-fill username from saved credentials
     final prefsUsername = await AuthService.getSavedUsername();
     if (prefsUsername != null) {
       _usernameController.text = prefsUsername;
@@ -57,9 +56,20 @@ class _LoginScreenState extends State<LoginScreen> {
       if (mounted) _navigateToDialpad(userData);
     } else if (result['conflict'] == true) {
       await AuthService.clearAuthData();
-      if (mounted) setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Session conflict. Please login again.')),
+        );
+      }
     } else {
-      if (mounted) setState(() => _isLoading = false);
+      final message = result['message'] ?? 'Auto-login failed. Please login manually.';
+      if (mounted) {
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message)),
+        );
+      }
     }
   }
 
@@ -83,10 +93,16 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Future<void> _handleLogin() async {
     if (_usernameController.text.isEmpty || _passwordController.text.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter username and password')),
+      );
       return;
     }
 
     if (_passwordController.text.length < 6) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Password must be at least 6 characters')),
+      );
       return;
     }
 
@@ -104,9 +120,13 @@ class _LoginScreenState extends State<LoginScreen> {
 
       if (result['success'] == true) {
         final userData = result['data']['userData'];
-
         await _requestPermissions();
         _navigateToDialpad(userData);
+      } else {
+        final message = result['message'] ?? 'Login failed. Please try again.';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message)),
+        );
       }
     } finally {
       if (mounted) {
