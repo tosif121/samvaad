@@ -106,23 +106,6 @@ class SamvaadFcmService : FirebaseMessagingService() {
         showCallkitIncoming(number)
     }
 
-    private fun isAppInForeground(): Boolean {
-        try {
-            val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-            val appProcesses = activityManager.runningAppProcesses ?: return false
-            val packageName = packageName
-            for (appProcess in appProcesses) {
-                if (appProcess.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND &&
-                    appProcess.processName == packageName) {
-                    return true
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to check foreground status", e)
-        }
-        return false
-    }
-
     private fun acquireWakeLock() {
         try {
             val powerManager = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
