@@ -89,7 +89,6 @@ class MainActivity : FlutterActivity() {
                     result.success(true)
                 }
                 "cleanupForeground" -> {
-                    SamvaadFcmService.cleanupForeground()
                     result.success(true)
                 }
                 else -> result.notImplemented()

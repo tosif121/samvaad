@@ -2,7 +2,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../services/sip_socket_service.dart';
 import '../services/ringtone_service.dart';
-import '../services/api_service.dart';
 
 class IncomingCallScreen extends StatefulWidget {
   final String phoneNumber;
@@ -21,7 +20,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
 
   @override
   void initState() {
-    print('[SCREEN] IncomingCallScreen ACTIVE');
+    debugPrint('[SCREEN] IncomingCallScreen ACTIVE');
     super.initState();
     _sipSubscription = _sip.events.listen((event) {
       if (!mounted || _dismissed) return;
@@ -51,9 +50,6 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
     _onDismiss();
     _sipSubscription?.cancel();
     RingtoneService().stopRinging();
-    // Tell PBX to stop routing this call to us
-    await ApiService.clearRejectedCallFromAgent(widget.phoneNumber);
-    
     RingtoneService().clearNotification();
     if (mounted) Navigator.of(context).pop(false);
     await _sip.rejectCall();
@@ -66,9 +62,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
     RingtoneService().stopRinging();
     RingtoneService().clearNotification();
     if (mounted) Navigator.of(context).pop(true);
-    // answerCall is now handled by the caller (DialpadScreen) to ensure instant navigation
   }
-
 
   @override
   Widget build(BuildContext context) {
@@ -78,7 +72,6 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
         child: Column(
           children: [
             const SizedBox(height: 60),
-            // Incoming call label
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
               decoration: BoxDecoration(
@@ -95,7 +88,6 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
               ),
             ),
             const SizedBox(height: 40),
-            // Pulsing avatar
             Stack(
               alignment: Alignment.center,
               children: [
@@ -135,7 +127,6 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
               ],
             ),
             const SizedBox(height: 36),
-            // Phone number
             Text(
               widget.phoneNumber,
               style: const TextStyle(
@@ -151,13 +142,11 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
               style: TextStyle(fontSize: 15, color: Colors.grey[500]),
             ),
             const Spacer(),
-            // Accept / Decline buttons
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 64),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  // Decline
                   Column(
                     children: [
                       GestureDetector(
@@ -194,7 +183,6 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
                       ),
                     ],
                   ),
-                  // Accept
                   Column(
                     children: [
                       GestureDetector(

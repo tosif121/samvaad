@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:io' show Platform;
 import 'package:flutter/services.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart';
 
 class RingtoneService {
   static final RingtoneService _instance = RingtoneService._internal();
@@ -41,7 +41,7 @@ class RingtoneService {
       try {
         await _channel.invokeMethod('bringAppToForeground');
       } catch (e) {
-        print('Error bringing app to foreground: $e');
+        debugPrint('Error bringing app to foreground: $e');
       }
     }
   }
@@ -51,7 +51,7 @@ class RingtoneService {
       try {
         await _channel.invokeMethod('clearNotification');
       } catch (e) {
-        print('Error clearing notification: $e');
+        debugPrint('Error clearing notification: $e');
       }
     }
   }
@@ -71,7 +71,7 @@ class RingtoneService {
       try {
         await _channel.invokeMethod('cleanupForeground');
       } catch (e) {
-        print('Error cleaning up foreground service: $e');
+        debugPrint('Error cleaning up foreground service: $e');
       }
     }
   }
