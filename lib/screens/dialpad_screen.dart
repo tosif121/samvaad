@@ -2,18 +2,12 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'incoming_call_screen.dart';
+import 'login_screen.dart';
 import '../services/sip_socket_service.dart';
 import '../services/ringtone_service.dart';
 
 class DialpadScreen extends StatefulWidget {
-  final String userName;
-  final String userEmail;
-
-  const DialpadScreen({
-    super.key,
-    required this.userName,
-    required this.userEmail,
-  });
+  const DialpadScreen({super.key});
 
   @override
   State<DialpadScreen> createState() => _DialpadScreenState();
@@ -258,6 +252,20 @@ class _DialpadScreenState extends State<DialpadScreen>
               onPressed: () => _sip.connect(),
               tooltip: 'Reconnect SIP',
             ),
+          if (!_isOnCall)
+            IconButton(
+              icon: const Icon(Icons.logout),
+              onPressed: () async {
+                _sip.disconnect();
+                await _sip.clearCredentials();
+                if (mounted) {
+                  Navigator.of(context).pushReplacement(
+                    MaterialPageRoute(builder: (_) => const LoginScreen()),
+                  );
+                }
+              },
+              tooltip: 'Logout',
+            ),
         ],
       ),
       body: SafeArea(
@@ -364,7 +372,7 @@ class _DialpadScreenState extends State<DialpadScreen>
                 ),
               ),
               const SizedBox(height: 4),
-              Text(widget.userName, style: TextStyle(fontSize: 12, color: Colors.grey[400])),
+              Text(_sip.credentials?.username ?? '', style: TextStyle(fontSize: 12, color: Colors.grey[400])),
             ],
           ),
         ),

@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'screens/dialpad_screen.dart';
+import 'screens/login_screen.dart';
 import 'services/call_lifecycle_service.dart';
 
 Future<void> main() async {
@@ -65,10 +65,7 @@ class SamvaadApp extends StatelessWidget {
           ),
         ),
       ),
-      home: DialpadScreen(
-        userName: 'demo@surya',
-        userEmail: 'demo@surya',
-      ),
+      home: const LoginScreen(),
     );
   }
 }

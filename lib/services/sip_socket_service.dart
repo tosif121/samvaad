@@ -1,7 +1,10 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:developer' as developer;
 import 'package:flutter/foundation.dart';
 import 'package:sip_ua/sip_ua.dart' as sip;
+import 'package:shared_preferences/shared_preferences.dart';
+import '../models/sip_credentials.dart';
 import 'remote_audio_stub.dart'
     if (dart.library.html) 'remote_audio_web.dart';
 import 'call_lifecycle_service.dart';
@@ -41,8 +44,13 @@ class SipSocketService implements sip.SipUaHelperListener {
   // an explicit endCall()/rejectCall() racing with it).
   bool _callEndedHandled = false;
 
+  SipCredentials? _credentials;
+
   final _eventController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get events => _eventController.stream;
+
+  SipCredentials? get credentials => _credentials;
+  bool get hasCredentials => _credentials != null;
 
   CallState get callState => _callState;
   String get incomingNumber => _incomingNumber;
@@ -71,7 +79,7 @@ class SipSocketService implements sip.SipUaHelperListener {
     _eventController.add({'event': event.name, ...?data});
   }
 
-  Future<void> connect() async {
+  Future<void> connect([SipCredentials? creds]) async {
     if (_isRegistered) {
       _log('Already registered');
       return;
@@ -80,13 +88,16 @@ class SipSocketService implements sip.SipUaHelperListener {
       _log('Already connecting — skipping duplicate');
       return;
     }
+
+    creds ??= _credentials;
+    if (creds == null) {
+      _log('No credentials provided');
+      return;
+    }
+    _credentials = creds;
+
     _connecting = true;
 
-    // If we've started before, fully stop the old UA and wait for its
-    // internal 2-second cleanup timer to fire before creating a new one.
-    // This prevents the old UA's delayed WebSocket disconnect from killing
-    // the new UA (sip_ua's UA.stop() sets a 2s timer when there are pending
-    // SIP transactions).
     if (_wasStarted) {
       _log('Stopping previous UA before reconnect');
       _helper.stop();
@@ -102,11 +113,11 @@ class SipSocketService implements sip.SipUaHelperListener {
     try {
       sip.UaSettings settings = sip.UaSettings();
 
-      settings.webSocketUrl = "wss://devapp.iotcom.io:8089/ws";
-      settings.uri = "sip:demo-surya@devapp.iotcom.io:8089";
-      settings.authorizationUser = "demo-surya";
-      settings.password = "Demo@123";
-      settings.displayName = "Samvaad User";
+      settings.webSocketUrl = creds.serverUrl;
+      settings.uri = creds.sipUri;
+      settings.authorizationUser = creds.username;
+      settings.password = creds.password;
+      settings.displayName = creds.displayName;
       settings.transportType = sip.TransportType.WS;
       settings.register = true;
       settings.sessionTimers = false;
@@ -120,6 +131,39 @@ class SipSocketService implements sip.SipUaHelperListener {
     } finally {
       _connecting = false;
     }
+  }
+
+  void setCredentials(SipCredentials creds) {
+    _credentials = creds;
+  }
+
+  Future<void> loadCredentials() async {
+    final prefs = await SharedPreferences.getInstance();
+    final json = prefs.getString('sip_credentials');
+    if (json != null) {
+      try {
+        _credentials = SipCredentials.fromJson(
+          Map<String, dynamic>.from(
+            const JsonDecoder().convert(json) as Map,
+          ),
+        );
+      } catch (_) {}
+    }
+  }
+
+  Future<void> saveCredentials(SipCredentials creds) async {
+    _credentials = creds;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      'sip_credentials',
+      const JsonEncoder().convert(creds.toJson()),
+    );
+  }
+
+  Future<void> clearCredentials() async {
+    _credentials = null;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('sip_credentials');
   }
 
   @override
