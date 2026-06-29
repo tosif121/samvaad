@@ -4,6 +4,9 @@ import '../models/sip_credentials.dart';
 import '../services/sip_socket_service.dart';
 import 'dialpad_screen.dart';
 
+const _defaultServer = 'wss://devapp.iotcom.io:8089/ws';
+const _defaultHost = 'devapp.iotcom.io:8089';
+
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
@@ -13,15 +16,13 @@ class LoginScreen extends StatefulWidget {
 
 class _LoginScreenState extends State<LoginScreen> {
   final _formKey = GlobalKey<FormState>();
-  final _serverController = TextEditingController();
-  final _uriController = TextEditingController();
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
-  final _displayNameController = TextEditingController();
 
   final _sip = SipSocketService();
   StreamSubscription? _sub;
   bool _connecting = false;
+  bool _obscurePassword = true;
   String? _error;
 
   @override
@@ -58,24 +59,28 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   void dispose() {
     _sub?.cancel();
-    _serverController.dispose();
-    _uriController.dispose();
     _usernameController.dispose();
     _passwordController.dispose();
-    _displayNameController.dispose();
     super.dispose();
+  }
+
+  SipCredentials _buildCreds() {
+    String user = _usernameController.text.trim();
+    // Replace @ with - for SIP URI compatibility (common with Asterisk).
+    final sipUser = user.replaceAll('@', '-');
+    return SipCredentials(
+      serverUrl: _defaultServer,
+      sipUri: 'sip:$sipUser@$_defaultHost',
+      username: sipUser,
+      password: _passwordController.text,
+      displayName: sipUser,
+    );
   }
 
   Future<void> _login() async {
     if (!_formKey.currentState!.validate()) return;
 
-    final creds = SipCredentials(
-      serverUrl: _serverController.text.trim(),
-      sipUri: _uriController.text.trim(),
-      username: _usernameController.text.trim(),
-      password: _passwordController.text,
-      displayName: _displayNameController.text.trim(),
-    );
+    final creds = _buildCreds();
 
     setState(() {
       _connecting = true;
@@ -118,53 +123,32 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                   const SizedBox(height: 40),
                   TextFormField(
-                    controller: _serverController,
-                    decoration: const InputDecoration(
-                      labelText: 'WebSocket URL',
-                      hintText: 'wss://example.com:8089/ws',
-                    ),
-                    keyboardType: TextInputType.url,
-                    validator: (v) =>
-                        v == null || v.trim().isEmpty ? 'Required' : null,
-                  ),
-                  const SizedBox(height: 16),
-                  TextFormField(
-                    controller: _uriController,
-                    decoration: const InputDecoration(
-                      labelText: 'SIP URI',
-                      hintText: 'sip:user@domain:port',
-                    ),
-                    keyboardType: TextInputType.text,
-                    validator: (v) =>
-                        v == null || v.trim().isEmpty ? 'Required' : null,
-                  ),
-                  const SizedBox(height: 16),
-                  TextFormField(
                     controller: _usernameController,
                     decoration: const InputDecoration(
-                      labelText: 'Authorization User',
-                      hintText: 'username',
+                      labelText: 'Username',
                     ),
+                    textInputAction: TextInputAction.next,
                     validator: (v) =>
                         v == null || v.trim().isEmpty ? 'Required' : null,
                   ),
                   const SizedBox(height: 16),
                   TextFormField(
                     controller: _passwordController,
-                    decoration: const InputDecoration(
+                    decoration: InputDecoration(
                       labelText: 'Password',
+                      suffixIcon: IconButton(
+                        icon: Icon(_obscurePassword
+                            ? Icons.visibility_off
+                            : Icons.visibility),
+                        onPressed: () =>
+                            setState(() => _obscurePassword = !_obscurePassword),
+                      ),
                     ),
-                    obscureText: true,
+                    obscureText: _obscurePassword,
+                    textInputAction: TextInputAction.done,
+                    onFieldSubmitted: (_) => _login(),
                     validator: (v) =>
                         v == null || v.isEmpty ? 'Required' : null,
-                  ),
-                  const SizedBox(height: 16),
-                  TextFormField(
-                    controller: _displayNameController,
-                    decoration: const InputDecoration(
-                      labelText: 'Display Name',
-                      hintText: 'Your Name',
-                    ),
                   ),
                   const SizedBox(height: 32),
                   if (_error != null)

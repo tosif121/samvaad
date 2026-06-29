@@ -18,6 +18,7 @@ class _DialpadScreenState extends State<DialpadScreen>
   final _sip = SipSocketService();
   StreamSubscription? _sipSubscription;
   final _phoneController = TextEditingController();
+  final _phoneFocusNode = FocusNode();
   bool _isShowingIncomingDialog = false;
   bool _isOnCall = false;
   AppLifecycleState _appLifecycleState = AppLifecycleState.resumed;
@@ -31,6 +32,11 @@ class _DialpadScreenState extends State<DialpadScreen>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _initSip();
+    _phoneFocusNode.addListener(() {
+      if (_phoneFocusNode.hasFocus) {
+        _phoneFocusNode.unfocus();
+      }
+    });
 
   }
 
@@ -62,6 +68,7 @@ class _DialpadScreenState extends State<DialpadScreen>
     _sipSubscription?.cancel();
     _callTimer?.cancel();
     _phoneController.dispose();
+    _phoneFocusNode.dispose();
     super.dispose();
   }
 
@@ -248,12 +255,6 @@ class _DialpadScreenState extends State<DialpadScreen>
         actions: [
           if (!_isOnCall)
             IconButton(
-              icon: const Icon(Icons.refresh),
-              onPressed: () => _sip.connect(),
-              tooltip: 'Reconnect SIP',
-            ),
-          if (!_isOnCall)
-            IconButton(
               icon: const Icon(Icons.logout),
               onPressed: () async {
                 _sip.disconnect();
@@ -311,6 +312,9 @@ class _DialpadScreenState extends State<DialpadScreen>
           ),
           child: TextField(
             controller: _phoneController,
+            focusNode: _phoneFocusNode,
+            readOnly: true,
+            showCursor: false,
             textAlign: TextAlign.center,
             style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w500, letterSpacing: 2),
             decoration: InputDecoration(
@@ -326,7 +330,6 @@ class _DialpadScreenState extends State<DialpadScreen>
                 ),
               ),
             ),
-            keyboardType: TextInputType.phone,
             onChanged: (_) => setState(() {}),
           ),
         ),
@@ -372,7 +375,6 @@ class _DialpadScreenState extends State<DialpadScreen>
                 ),
               ),
               const SizedBox(height: 4),
-              Text(_sip.credentials?.username ?? '', style: TextStyle(fontSize: 12, color: Colors.grey[400])),
             ],
           ),
         ),
