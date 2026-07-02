@@ -69,6 +69,56 @@ class SamvaadApp extends StatelessWidget {
           ),
         ),
       ),
+      darkTheme: ThemeData(
+        useMaterial3: true,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF4299EB),
+          brightness: Brightness.dark,
+        ),
+        scaffoldBackgroundColor: const Color(0xFF0F1115),
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Color(0xFF0F1115),
+          elevation: 0,
+          iconTheme: IconThemeData(color: Color(0xFF4299EB)),
+          titleTextStyle: TextStyle(
+            color: Colors.white,
+            fontSize: 20,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+        elevatedButtonTheme: ElevatedButtonThemeData(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFF4299EB),
+            foregroundColor: Colors.white,
+            elevation: 2,
+            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+        ),
+        inputDecorationTheme: InputDecorationTheme(
+          filled: true,
+          fillColor: const Color(0xFF181A20),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide.none,
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide.none,
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: const BorderSide(color: Color(0xFF4299EB), width: 2),
+          ),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 20,
+            vertical: 18,
+          ),
+        ),
+      ),
+      themeMode: ThemeMode.system,
       home: const _StartupScreen(),
     );
   }
@@ -89,18 +139,16 @@ class _StartupScreenState extends State<_StartupScreen> {
   }
 
   Future<void> _checkAuth() async {
-    final isLoggedIn = await AuthService.isLoggedIn();
+    final hasCreds = await AuthService.hasCredentials();
     if (!mounted) return;
 
-    if (isLoggedIn) {
-      final userData = await AuthService.getUserData() ?? {};
-      final name = userData['Name'] ?? userData['username'] ?? 'User';
-      final email = userData['Email'] ?? userData['username'] ?? '';
+    if (hasCreds) {
+      final username = await AuthService.getSavedUsername() ?? 'User';
 
       if (mounted) {
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(
-            builder: (_) => DialpadScreen(userName: name, userEmail: email),
+            builder: (_) => DialpadScreen(userName: username, userEmail: username),
           ),
         );
       }

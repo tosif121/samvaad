@@ -4,7 +4,7 @@ import 'package:http/http.dart' as http;
 import 'auth_service.dart';
 
 class ApiService {
-  static const String baseUrl = 'https://app.samvaad.io';
+  static const String baseUrl = 'https://devapp.iotcom.io';
 
   // Central logger
   static void _log(String tag, String message, {Object? data}) {
@@ -16,21 +16,19 @@ class ApiService {
     print(log);
   }
 
-  // Get auth headers
+  // Get auth headers (no token, only username for API calls)
   static Future<Map<String, String>> _getHeaders() async {
-    final token = await AuthService.getToken();
-    final username = await AuthService.getUsername();
+    final username = await AuthService.getSavedUsername();
     return {
       'Content-Type': 'application/json',
-      if (token != null) 'Authorization': 'Bearer $token',
-      'X-User-ID': ?username,
+      if (username != null) 'X-User-ID': username,
     };
   }
 
   // User Ready
   static Future<Map<String, dynamic>> userReady() async {
     try {
-      final username = await AuthService.getUsername();
+      final username = await AuthService.getSavedUsername();
       if (username == null) {
         _log('USER_READY', 'ERROR: No username found');
         return {'success': false, 'message': 'No username found'};
@@ -76,7 +74,7 @@ class ApiService {
   // User Connection
   static Future<Map<String, dynamic>> userConnection() async {
     try {
-      final username = await AuthService.getUsername();
+      final username = await AuthService.getSavedUsername();
       if (username == null) {
         _log('USER_CONNECTION', 'ERROR: No username found');
         return {'success': false, 'message': 'No username found'};
@@ -167,7 +165,7 @@ class ApiService {
   // User On Call
   static Future<Map<String, dynamic>> userOnCall() async {
     try {
-      final username = await AuthService.getUsername();
+      final username = await AuthService.getSavedUsername();
       if (username == null) {
         _log('USER_ON_CALL', 'ERROR: No username found');
         return {'success': false, 'message': 'No username found'};
@@ -207,7 +205,7 @@ class ApiService {
   // Call Ended
   static Future<Map<String, dynamic>> callEnded() async {
     try {
-      final username = await AuthService.getUsername();
+      final username = await AuthService.getSavedUsername();
       if (username == null) {
         _log('CALL_ENDED', 'ERROR: No username found');
         return {'success': false, 'message': 'No username found'};
@@ -243,7 +241,7 @@ class ApiService {
   // Clear Rejected Call
   static Future<Map<String, dynamic>> clearRejectedCallFromAgent(String callerNumber) async {
     try {
-      final username = await AuthService.getUsername();
+      final username = await AuthService.getSavedUsername();
       if (username == null) return {'success': false, 'message': 'No username'};
       _log('CLEAR_REJECTED', 'POST /clearRejectedCallFromAgent for caller: $callerNumber');
       final response = await http.post(
@@ -262,7 +260,7 @@ class ApiService {
   // Hold
   static Future<Map<String, dynamic>> reqHold() async {
     try {
-      final username = await AuthService.getUsername();
+      final username = await AuthService.getSavedUsername();
       if (username == null) return {'success': false, 'message': 'No username'};
       _log('REQ_HOLD', 'POST /reqHold/$username');
       final response = await http.post(
@@ -280,7 +278,7 @@ class ApiService {
   // Unhold
   static Future<Map<String, dynamic>> reqUnHold() async {
     try {
-      final username = await AuthService.getUsername();
+      final username = await AuthService.getSavedUsername();
       if (username == null) return {'success': false, 'message': 'No username'};
       _log('REQ_UNHOLD', 'POST /reqUnHold/$username');
       final response = await http.post(
@@ -301,7 +299,7 @@ class ApiService {
     String bridgeID = '',
   }) async {
     try {
-      final username = await AuthService.getUsername();
+      final username = await AuthService.getSavedUsername();
       if (username == null) return {'success': false, 'message': 'No username'};
       _log('REQ_CONF', 'POST /reqConf/$username', data: {
         'confNumber': confNumber,
@@ -329,7 +327,7 @@ class ApiService {
     String hostNumber,
   ) async {
     try {
-      final username = await AuthService.getUsername();
+      final username = await AuthService.getSavedUsername();
       if (username == null) return {'success': false, 'message': 'No username'};
       _log('HANGUP_CONF', 'POST /hangup/hostChannel/Conf', data: {
         'hostNumber': hostNumber,
@@ -350,7 +348,7 @@ class ApiService {
   // Transfer
   static Future<Map<String, dynamic>> reqTransfer(String bridgeID) async {
     try {
-      final username = await AuthService.getUsername();
+      final username = await AuthService.getSavedUsername();
       if (username == null) return {'success': false, 'message': 'No username'};
       _log('REQ_TRANSFER', 'POST /reqTransfer/$username', data: {'bridgeID': bridgeID});
       final response = await http.post(
@@ -372,7 +370,7 @@ class ApiService {
     String disposition,
   ) async {
     try {
-      final username = await AuthService.getUsername();
+      final username = await AuthService.getSavedUsername();
       if (username == null) {
         _log('DISPOSITION', 'ERROR: No username found');
         return {'success': false, 'message': 'No username found'};
@@ -415,7 +413,7 @@ class ApiService {
 
   static Future<bool> storeFirebaseToken(String token) async {
     try {
-      final username = await AuthService.getUsername();
+      final username = await AuthService.getSavedUsername();
       if (username == null) return false;
 
       _log('FCM_TOKEN', 'POST /storeFirebaseToken -> token=$token username=$username');
@@ -438,7 +436,7 @@ class ApiService {
   // Agent Available — tells server this agent can accept queue calls
   static Future<bool> agentAvailable() async {
     try {
-      final username = await AuthService.getUsername();
+      final username = await AuthService.getSavedUsername();
       if (username == null) return false;
 
       _log('AGENT_AVAILABLE', 'POST /user/agentAvailable/$username');

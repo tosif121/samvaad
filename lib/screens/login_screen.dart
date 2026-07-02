@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'dart:async';
 import 'dialpad_screen.dart';
 import '../services/auth_service.dart';
+import '../services/sip_socket_service.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -16,6 +18,8 @@ class _LoginScreenState extends State<LoginScreen> {
   final _passwordController = TextEditingController();
   bool _obscurePassword = true;
   bool _isLoading = false;
+  final SipSocketService _sip = SipSocketService();
+  StreamSubscription? _sipSubscription;
 
   @override
   void initState() {
@@ -27,6 +31,7 @@ class _LoginScreenState extends State<LoginScreen> {
   void dispose() {
     _usernameController.dispose();
     _passwordController.dispose();
+    _sipSubscription?.cancel();
     super.dispose();
   }
 
@@ -37,48 +42,49 @@ class _LoginScreenState extends State<LoginScreen> {
       _usernameController.text = prefsUsername;
     }
 
-    final isLoggedIn = await AuthService.isLoggedIn();
-    if (!isLoggedIn) return;
+    final hasCreds = await AuthService.hasCredentials();
+    if (!hasCreds) return;
 
     setState(() => _isLoading = true);
 
-    final result = await AuthService.autoLogin();
-    if (!mounted) return;
+    await _requestPermissions();
 
-    if (result == null) {
-      if (mounted) setState(() => _isLoading = false);
-      return;
-    }
+    // Attempt SIP registration to validate saved credentials
+    _sipSubscription?.cancel();
+    _sipSubscription = _sip.events.listen((event) {
+      if (!mounted) return;
+      final type = event['event'] as String;
+      switch (type) {
+        case 'registered':
+          // Registration successful - navigate to dialpad
+          _sipSubscription?.cancel();
+          _navigateToDialpad();
+          break;
+        case 'registrationFailed':
+          // Registration failed - clear credentials and show login screen
+          _sipSubscription?.cancel();
+          AuthService.clearAuthData();
+          if (mounted) setState(() => _isLoading = false);
+          break;
+        case 'connectionLost':
+          // Connection lost - show login screen
+          _sipSubscription?.cancel();
+          if (mounted) setState(() => _isLoading = false);
+          break;
+      }
+    });
 
-    if (result['success'] == true) {
-      final userData = result['data']!['userData'];
-      await _requestPermissions();
-      if (mounted) _navigateToDialpad(userData);
-    } else if (result['conflict'] == true) {
-      await AuthService.clearAuthData();
-      if (mounted) {
-        setState(() => _isLoading = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Session conflict. Please login again.')),
-        );
-      }
-    } else {
-      final message = result['message'] ?? 'Auto-login failed. Please login manually.';
-      if (mounted) {
-        setState(() => _isLoading = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(message)),
-        );
-      }
-    }
+    // Start SIP registration
+    await _sip.connect();
   }
 
-  void _navigateToDialpad(Map<String, dynamic> userData) {
+  void _navigateToDialpad() {
+    final username = _usernameController.text.trim();
     Navigator.of(context).pushReplacement(
       MaterialPageRoute(
         builder: (context) => DialpadScreen(
-          userName: userData['Name'] ?? userData['username'] ?? 'User',
-          userEmail: userData['Email'] ?? userData['username'] ?? '',
+          userName: username.isNotEmpty ? username : 'User',
+          userEmail: username,
         ),
       ),
     );
@@ -99,47 +105,71 @@ class _LoginScreenState extends State<LoginScreen> {
       return;
     }
 
-    if (_passwordController.text.length < 6) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Password must be at least 6 characters')),
-      );
-      return;
-    }
-
     setState(() {
       _isLoading = true;
     });
 
     try {
-      final result = await AuthService.login(
-        _usernameController.text.trim(),
-        _passwordController.text.trim(),
-      );
+      // Save credentials for SIP registration
+      final username = _usernameController.text.trim();
+      final password = _passwordController.text.trim();
+      await AuthService.saveCredentials(username, password);
 
       if (!mounted) return;
 
-      if (result['success'] == true) {
-        final userData = result['data']['userData'];
-        await _requestPermissions();
-        _navigateToDialpad(userData);
-      } else {
-        final message = result['message'] ?? 'Login failed. Please try again.';
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(message)),
-        );
-      }
-    } finally {
+      // Request permissions before SIP registration
+      await _requestPermissions();
+
+      // Attempt SIP registration to validate credentials
+      _sipSubscription?.cancel();
+      _sipSubscription = _sip.events.listen((event) {
+        if (!mounted) return;
+        final type = event['event'] as String;
+        switch (type) {
+          case 'registered':
+            // Registration successful - navigate to dialpad
+            _sipSubscription?.cancel();
+            _navigateToDialpad();
+            break;
+          case 'registrationFailed':
+            // Registration failed - show error
+            _sipSubscription?.cancel();
+            setState(() => _isLoading = false);
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Incorrect username or password')),
+            );
+            break;
+          case 'connectionLost':
+            // Connection lost - show error
+            _sipSubscription?.cancel();
+            setState(() => _isLoading = false);
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Connection failed. Please check your network.')),
+            );
+            break;
+        }
+      });
+
+      // Start SIP registration
+      await _sip.connect();
+    } catch (e) {
       if (mounted) {
-        setState(() {
-          _isLoading = false;
-        });
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Login failed: $e')),
+        );
       }
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final textColor = isDark ? Colors.white : const Color(0xFF1a1a1a);
+    final hintColor = isDark ? const Color(0xFF8B92A8) : Colors.grey[600]!;
+
     return Scaffold(
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       body: Stack(
         children: [
           // Decorative background elements
@@ -210,18 +240,18 @@ class _LoginScreenState extends State<LoginScreen> {
                     ),
                     const SizedBox(height: 48),
                     // Welcome text
-                    const Text(
+                    Text(
                       'Welcome Back',
                       style: TextStyle(
                         fontSize: 32,
                         fontWeight: FontWeight.bold,
-                        color: Color(0xFF1a1a1a),
+                        color: textColor,
                       ),
                     ),
                     const SizedBox(height: 12),
                     Text(
                       'Sign in to continue to Samvaad',
-                      style: TextStyle(fontSize: 16, color: Colors.grey[600]),
+                      style: TextStyle(fontSize: 16, color: hintColor),
                     ),
                     const SizedBox(height: 48),
                     // Username field
@@ -259,7 +289,7 @@ class _LoginScreenState extends State<LoginScreen> {
                             _obscurePassword
                                 ? Icons.visibility_outlined
                                 : Icons.visibility_off_outlined,
-                            color: Colors.grey[600],
+                            color: hintColor,
                           ),
                           onPressed: _isLoading
                               ? null

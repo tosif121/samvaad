@@ -2,11 +2,12 @@ import 'dart:async';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'api_service.dart';
+import 'callkit_service.dart';
 import 'ringtone_service.dart';
 
 const _fcmPendingCallKey = 'fcm_pending_call';
 const _fcmPendingCallTsKey = 'fcm_pending_call_ts';
+const _fcmAutoAnswerKey = 'fcm_auto_answer';
 const _fcmPendingTtlMs = 30000;
 
 @pragma('vm:entry-point')
@@ -29,6 +30,15 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     print('[FCM_BG] Saved pending FCM call for: $number');
   } catch (e) {
     print('[FCM_BG] SharedPreferences save failed: $e');
+  }
+
+  // Trigger CallKit immediately in the background so the lock screen wakes up
+  final isVideo = data['isVideo'] == 'true' || data['isVideo'] == true || data['type'] == 'video';
+  try {
+    await showCallkitIncoming(number, isVideo: isVideo);
+    print('[FCM_BG] Triggered CallKit for $number (video=$isVideo)');
+  } catch (e) {
+    print('[FCM_BG] CallKit trigger FAILED: $e');
   }
 }
 
@@ -77,8 +87,14 @@ class FcmService {
 
     FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
 
-    _foregroundSub = FirebaseMessaging.onMessage.listen((message) {
+    _foregroundSub = FirebaseMessaging.onMessage.listen((message) async {
       print('[FCM] Foreground message: ${message.data}');
+      final data = message.data;
+      final isCall = data['notification_type'] == 'call' || data['type'] == 'incoming_call';
+      if (!isCall) return;
+      final number = data['body'] ?? data['number'] ?? data['caller'] ?? 'Unknown';
+      await _savePendingCallFromMessage(message);
+      await showCallkitIncoming(number);
     });
 
     FirebaseMessaging.onMessageOpenedApp.listen((message) async {
@@ -116,9 +132,7 @@ class FcmService {
   }
 
   Future<void> _sendToken(String token) async {
-    print('[FCM_TOKEN] Sending token...');
-    final ok = await ApiService.storeFirebaseToken(token);
-    if (!ok) print('[FCM_TOKEN] Send FAILED');
+    print('[FCM_TOKEN] token=$token (send to server separately if needed)');
   }
 
   Future<void> _savePendingCallFromMessage(RemoteMessage message) async {
@@ -142,15 +156,23 @@ class FcmService {
     if (DateTime.now().millisecondsSinceEpoch - ts > _fcmPendingTtlMs) {
       await prefs.remove(_fcmPendingCallKey);
       await prefs.remove(_fcmPendingCallTsKey);
+      await prefs.remove(_fcmAutoAnswerKey);
       return null;
     }
     return prefs.getString(_fcmPendingCallKey);
+  }
+
+  Future<bool> getAutoAnswerFlag() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.reload();
+    return prefs.getBool(_fcmAutoAnswerKey) ?? false;
   }
 
   Future<void> clearPendingFcmCall() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_fcmPendingCallKey);
     await prefs.remove(_fcmPendingCallTsKey);
+    await prefs.remove(_fcmAutoAnswerKey);
     await RingtoneService().clearNotification();
   }
 

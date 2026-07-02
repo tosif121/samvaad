@@ -8,7 +8,7 @@ class RingtoneService {
   factory RingtoneService() => _instance;
   RingtoneService._internal();
 
-  static const _channel = MethodChannel('com.example.samvaad/ringtone');
+  static const _channel = MethodChannel('com.samwad/ringtone');
   Timer? _fallbackTimer;
   static bool _channelCreated = false;
 

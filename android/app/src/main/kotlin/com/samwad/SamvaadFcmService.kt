@@ -165,12 +165,27 @@ class SamvaadFcmService : FirebaseMessagingService() {
             // Start foreground service
             instance = this
             val callkitNotifId = "call_${number.hashCode()}".hashCode()
+            
+            // Intent to launch app and auto-answer when user taps notification
+            val openIntent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                putExtra("fcm_number", number)
+                putExtra("auto_answer", true)
+            }
+            val pendingIntent = PendingIntent.getActivity(
+                this, 0, openIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
             val fgNotif = NotificationCompat.Builder(this, ringtoneChannelId)
-                .setContentTitle("Incoming Call")
+                .setContentTitle("Incoming Call — Samvaad")
                 .setContentText(number)
-                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setSmallIcon(android.R.drawable.ic_menu_call)
+                .setColor(0xFF2563EB.toInt())
+                .setColorized(true)
                 .setPriority(NotificationCompat.PRIORITY_MIN)
                 .setOngoing(true)
+                .setContentIntent(pendingIntent)
+                .setAutoCancel(true)
                 .build()
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 startForeground(callkitNotifId, fgNotif, ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL)
@@ -324,15 +339,6 @@ class SamvaadFcmService : FirebaseMessagingService() {
             Log.e(TAG, "Failed to clear pending FCM call", e)
         } finally {
             cleanupForeground()
-        }
-    }
-
-    private fun isAppInForeground(): Boolean {
-        val am = getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager ?: return false
-        val processes = am.runningAppProcesses ?: return false
-        return processes.any { process ->
-            process.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND &&
-                process.processName == packageName
         }
     }
 

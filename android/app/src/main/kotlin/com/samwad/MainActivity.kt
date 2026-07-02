@@ -1,19 +1,24 @@
 package com.samwad
 
+import android.app.PictureInPictureParams
+import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.media.MediaPlayer
 import android.media.RingtoneManager
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import android.util.Rational
 import android.view.WindowManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
-    private val CHANNEL = "com.example.samvaad/ringtone"
+    private val CHANNEL = "com.samwad/ringtone"
     private var mediaPlayer: MediaPlayer? = null
+    private var isCallActive = false
 
     companion object {
         private const val TAG = "MainActivity"
@@ -92,6 +97,31 @@ class MainActivity : FlutterActivity() {
                     SamvaadFcmService.cleanupForeground()
                     result.success(true)
                 }
+                "startSipForeground" -> {
+                    SipForegroundService.start(this)
+                    result.success(true)
+                }
+                "stopSipForeground" -> {
+                    SipForegroundService.stop(this)
+                    result.success(true)
+                }
+                "startSipKeepAlive" -> {
+                    SipKeepAliveService.start(this)
+                    result.success(true)
+                }
+                "stopSipKeepAlive" -> {
+                    SipKeepAliveService.stop(this)
+                    result.success(true)
+                }
+                "setCallActive" -> {
+                    isCallActive = call.argument<Boolean>("active") ?: false
+                    Log.d(TAG, "setCallActive: $isCallActive")
+                    result.success(true)
+                }
+                "enterPip" -> {
+                    val entered = enterPipModeNow()
+                    result.success(entered)
+                }
                 else -> result.notImplemented()
             }
         }
@@ -151,10 +181,49 @@ class MainActivity : FlutterActivity() {
 
     private fun handleIncomingCallIntent(intent: Intent) {
         val number = intent.getStringExtra("fcm_number")
+        val autoAnswer = intent.getBooleanExtra("auto_answer", false)
         if (number != null && number.isNotEmpty()) {
-            Log.d(TAG, "Incoming call from notification for: $number")
+            Log.d(TAG, "Incoming call from notification for: $number, autoAnswer: $autoAnswer")
+            // Save to SharedPreferences for Flutter to read
+            val prefs = getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+            prefs.edit()
+                .putString("flutter.fcm_pending_call", number)
+                .putBoolean("flutter.fcm_auto_answer", autoAnswer)
+                .putLong("flutter.fcm_pending_call_ts", System.currentTimeMillis())
+                .apply()
             intent.putExtra("fcm_number", null as String?) // consume the extra
+            intent.putExtra("auto_answer", false)
         }
+    }
+
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        // Auto-enter PiP when user presses Home during an active call
+        if (isCallActive) {
+            enterPipModeNow()
+        }
+    }
+
+    private fun enterPipModeNow(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return false
+        val hasPip = packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)
+        if (!hasPip) return false
+        return try {
+            val params = PictureInPictureParams.Builder()
+                .setAspectRatio(Rational(9, 16))
+                .build()
+            enterPictureInPictureMode(params)
+            Log.d(TAG, "Entered PiP mode")
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "PiP failed: $e")
+            false
+        }
+    }
+
+    override fun onPictureInPictureModeChanged(isInPipMode: Boolean) {
+        super.onPictureInPictureModeChanged(isInPipMode)
+        Log.d(TAG, "PiP mode changed: $isInPipMode")
     }
 
     override fun onDestroy() {

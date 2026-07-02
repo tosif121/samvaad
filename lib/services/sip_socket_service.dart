@@ -1,18 +1,17 @@
 import 'dart:async';
 import 'dart:developer' as developer;
-import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:sip_ua/sip_ua.dart' as sip;
 import 'auth_service.dart';
-import 'api_service.dart';
 import 'remote_audio_stub.dart'
     if (dart.library.html) 'remote_audio_web.dart';
 import 'call_lifecycle_service.dart';
 
-// Call state matching webphone lifecycle
-enum CallState { idle, dialing, ringing, onCall, disposition }
+enum CallState { idle, dialing, ringing, onCall }
 
-// Events emitted to the UI
 enum SipEvent {
   registered,
   registrationFailed,
@@ -22,7 +21,6 @@ enum SipEvent {
   callFailed,
   connectionLost,
   connectionRestored,
-  messageReceived,
 }
 
 class SipSocketService implements sip.SipUaHelperListener {
@@ -31,36 +29,27 @@ class SipSocketService implements sip.SipUaHelperListener {
 
   final sip.SIPUAHelper _helper = sip.SIPUAHelper();
 
-  static const String _origin = 'app.samvaad.io';
-
-  Timer? _connectionCheckTimer;
+  static const String _origin = 'devapp.iotcom.io';
 
   CallState _callState = CallState.idle;
   sip.Call? _activeCall;
   String? _autoRejectedCallId;
   String? _lastCallId;
   String _incomingNumber = '';
-  String _bridgeID = '';
   String _dialedNumber = '';
-  bool _pendingAnswerForQueue = false;
+  bool _pendingAnswer = false;
+  bool _isVideo = false;
 
-  void setDialedNumber(String number) {
-    _dialedNumber = number;
-    if (number.isNotEmpty) {
-      _callState = CallState.dialing;
-    } else {
-      _callState = CallState.idle;
-    }
-  }
   bool _isRegistered = false;
   bool _isConnected = false;
   bool _isMuted = false;
   bool _isHeld = false;
+
   dynamic _remoteStream;
-
+  dynamic _localStream;
   bool _endingCall = false;
+  sip.UaSettings? _lastSettings;  // stored for reconnect
 
-  // Stream controller for UI events
   final _eventController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get events => _eventController.stream;
 
@@ -68,212 +57,109 @@ class SipSocketService implements sip.SipUaHelperListener {
   String get incomingNumber => _incomingNumber;
   bool get isRegistered => _isRegistered;
   bool get isConnected => _isConnected;
-  String get bridgeID => _bridgeID;
-  Map<String, dynamic>? connectionData;
-  bool get hasPendingAnswer => _pendingAnswerForQueue;
+  bool get hasPendingAnswer => _pendingAnswer;
+  bool get isVideo => _isVideo;
+  dynamic get remoteStream => _remoteStream;
+  dynamic get localStream => _localStream;
+  bool get isMuted => _isMuted;
+  bool get isHeld => _isHeld;
 
   SipSocketService._internal() {
     _helper.addSipUaHelperListener(this);
+    CallLifecycleService().setReRegisterCallback(_reRegisterIfNeeded);
+  }
+
+  void _reRegisterIfNeeded() {
+    if (!_isConnected || !_isRegistered) {
+      _log('Re-registering SIP after resume (was disconnected or unregistered)');
+      try { _helper.register(); } catch (e) { _log('re-register failed: $e'); }
+    }
   }
 
   void _log(String msg, {Object? data}) {
     final ts = DateTime.now().toIso8601String();
     final log = data != null
-        ? '[$ts] [SIP_SOCKET] $msg | $data'
-        : '[$ts] [SIP_SOCKET] $msg';
+        ? '[$ts] [SIP] $msg | $data'
+        : '[$ts] [SIP] $msg';
     developer.log(log, name: 'Samvaad');
     print(log);
   }
 
   void _emit(SipEvent event, {Map<String, dynamic>? data}) {
-    _log('Emitting event: ${event.name}', data: data);
+    _log('→ ${event.name}', data: data);
     _eventController.add({'event': event.name, ...?data});
   }
 
   // ─── Connect & Register ───────────────────────────────────────────────────
 
   Future<void> connect() async {
-    final username = await AuthService.getUsername();
+    final username = await AuthService.getSavedUsername();
     final password = await AuthService.getSavedPassword();
 
     if (username == null || password == null) {
-      _log('ERROR: Missing credentials for SIP connection');
+      _log('ERROR: Missing credentials');
       return;
     }
 
     try {
-      sip.UaSettings settings = sip.UaSettings();
+      final settings = sip.UaSettings();
       settings.webSocketUrl = 'wss://$_origin:8089/ws';
       settings.uri = 'sip:${username.replaceAll('@', '-')}@$_origin:8089';
       settings.password = password;
       settings.authorizationUser = username.replaceAll('@', '-');
       settings.transportType = sip.TransportType.WS;
-      settings.sessionTimers = false;
-
+      settings.sessionTimers = true;
+      settings.register_expires = 600;
+      settings.register = true;
+      settings.userAgent = 'Samvaad-Flutter';
+      
+      // ICE servers — STUN required for NAT traversal so WebRTC generates
+      // server-reflexive (srflx) candidates that work across different networks.
+      // Without this, only host (local IP) candidates are generated and
+      // video/audio won't flow between mobile and IP phone on different NATs.
+      settings.iceServers = [
+        {'urls': 'stun:stun.l.google.com:19302'},
+        {'urls': 'stun:stun1.l.google.com:19302'},
+        {'urls': 'stun:stun.cloudflare.com:3478'},
+      ];
+      _lastSettings = settings;
       await _helper.start(settings);
     } catch (e) {
-      _log('_helper.start() threw exception', data: {'error': e.toString()});
+      _log('start() exception: $e');
     }
-
-    // Start periodic REST API connection check every 10 seconds
-    _startConnectionCheck();
   }
 
-  // ─── SipListener Callbacks ────────────────────────────────────────────────
+  // ─── SIP Callbacks ────────────────────────────────────────────────────────
 
   @override
   void registrationStateChanged(sip.RegistrationState state) {
     if (state.state == null) return;
 
-    switch (state.state!) {
-      case sip.RegistrationStateEnum.NONE:
-        _isRegistered = false;
-        break;
+    final stateStr = state.state.toString();
+    _log('REGISTRATION STATE: $stateStr');
+
+    switch (state.state) {
       case sip.RegistrationStateEnum.REGISTERED:
         _isRegistered = true;
+        _isConnected = true;
         _log('SIP REGISTERED');
-        _onRegistered();
+        _emit(SipEvent.registered);
+        // Start persistent keep-alive service to keep SIP registered in background
+        _startKeepAliveService();
         break;
       case sip.RegistrationStateEnum.UNREGISTERED:
-        _log('SIP UNREGISTERED');
         _isRegistered = false;
+        _log('SIP UNREGISTERED');
+        _stopKeepAliveService();
         break;
       case sip.RegistrationStateEnum.REGISTRATION_FAILED:
+        _isRegistered = false;
         _log('SIP REGISTRATION FAILED');
-        _isRegistered = false;
         _emit(SipEvent.registrationFailed, data: {'cause': state.cause?.toString()});
+        _stopKeepAliveService();
         break;
-    }
-  }
-
-  @override
-  void transportStateChanged(sip.TransportState state) {
-    switch (state.state) {
-      case sip.TransportStateEnum.NONE:
-      case sip.TransportStateEnum.CONNECTING:
-        break;
-      case sip.TransportStateEnum.CONNECTED:
-        _isConnected = true;
-        break;
-      case sip.TransportStateEnum.DISCONNECTED:
-        _log('WebSocket DISCONNECTED');
-        _isConnected = false;
+      case sip.RegistrationStateEnum.NONE:
         _isRegistered = false;
-        break;
-    }
-  }
-
-  @override
-  void callStateChanged(sip.Call call, sip.CallState state) {
-    _activeCall = call;
-    
-    switch (state.state) {
-      case sip.CallStateEnum.CALL_INITIATION:
-        _endingCall = false;
-        _log('CALL_INITIATION', data: {
-          'direction': call.direction,
-          'remote_identity': call.remote_identity,
-          'callState': _callState.name,
-          'dialedNumber': _dialedNumber,
-        });
-        if (call.direction == 'INCOMING') {
-          if (_lastCallId == call.id) {
-            _log('Auto-rejecting duplicate INVITE (same Call-ID)');
-            _autoRejectedCallId = call.id;
-            call.hangup();
-            FlutterCallkitIncoming.endAllCalls();
-            break;
-          }
-          _lastCallId = call.id;
-          final remoteNumber = call.remote_identity ?? 'Unknown';
-
-          final cleanRemote = remoteNumber.replaceAll(RegExp(r'\D'), '');
-          final cleanDialed = _dialedNumber.replaceAll(RegExp(r'\D'), '');
-
-          final isActuallyOutgoing = _callState == CallState.dialing ||
-              (cleanDialed.isNotEmpty && (cleanRemote.contains(cleanDialed) || cleanDialed.contains(cleanRemote)));
-          _log('CALL_INITIATION check', data: {
-            'isActuallyOutgoing': isActuallyOutgoing,
-            'callState': _callState.name,
-            'cleanRemote': cleanRemote,
-            'cleanDialed': cleanDialed,
-          });
-
-          if (isActuallyOutgoing) {
-            _log('Auto-answering outgoing call');
-            _dialedNumber = '';
-            _callState = CallState.onCall;
-            _activeCall = call;
-            call.answer({'audio': true, 'video': false});
-            _emit(SipEvent.callAnswered);
-            _loadCallContext();
-          } else {
-            _log('INCOMING CALL from: $remoteNumber');
-            _incomingNumber = remoteNumber;
-            _callState = CallState.ringing;
-            _emit(SipEvent.incomingCall, data: {'number': _incomingNumber});
-            _loadCallContext(); // Pre-fetch bridgeID for potential auto disposition
-            // If user already tapped Accept (pendingAnswerForQueue),
-            // answer immediately when the INVITE arrives.
-            if (_pendingAnswerForQueue) {
-              _log('Auto-answering after pendingAnswerForQueue');
-              _pendingAnswerForQueue = false;
-              _callState = CallState.onCall;
-              try {
-                call.answer({'audio': true, 'video': false});
-              } catch (e) {
-                _log('Auto-answer failed: $e');
-                _callState = CallState.idle;
-                break;
-              }
-              _emit(SipEvent.callAnswered);
-              _loadCallContext();
-            }
-          }
-        } else {
-          _log('OUTGOING call direction', data: {
-            'remote_identity': call.remote_identity,
-          });
-        }
-        break;
-
-      case sip.CallStateEnum.PROGRESS:
-        _log('CALL PROGRESS', data: {'cause': state.cause?.toString()});
-        break;
-
-      case sip.CallStateEnum.CONFIRMED:
-        _log('Call CONFIRMED');
-        _callState = CallState.onCall;
-        _emit(SipEvent.callAnswered);
-        CallLifecycleService().onCallStarted();
-        break;
-      case sip.CallStateEnum.STREAM:
-        if (state.originator == 'remote' && state.stream != null) {
-          _remoteStream = state.stream;
-          _playRemoteAudio(state.stream!);
-        }
-        break;
-      case sip.CallStateEnum.FAILED:
-        _log('Call FAILED', data: {
-          'cause': state.cause?.toString(),
-          'originator': state.originator?.toString(),
-        });
-        if (_autoRejectedCallId != null && call.id == _autoRejectedCallId) {
-          _log('Skipping _onCallEnded for auto-rejected call in FAILED state');
-          _autoRejectedCallId = null; // Reset for next time
-          break;
-        }
-        _onCallEnded();
-        _emit(SipEvent.callFailed, data: {'reason': state.cause?.toString() ?? 'unknown'});
-        break;
-      case sip.CallStateEnum.ENDED:
-        _log('Call ENDED');
-        if (_autoRejectedCallId != null && call.id == _autoRejectedCallId) {
-          _log('Skipping _onCallEnded for auto-rejected call in ENDED state');
-          _autoRejectedCallId = null; // Reset for next time
-          break;
-        }
-        _onCallEnded();
         break;
       default:
         break;
@@ -281,333 +167,498 @@ class SipSocketService implements sip.SipUaHelperListener {
   }
 
   @override
-  void onNewMessage(sip.SIPMessageRequest request) {
-    // Matches Next.js newMessage/MESSAGE sip handler
-    final body = request.request.body ?? '';
-    _log('Received SIP MESSAGE: $body');
-    _handleAriMessage(body);
+  void transportStateChanged(sip.TransportState state) {
+    switch (state.state) {
+      case sip.TransportStateEnum.CONNECTED:
+        _isConnected = true;
+        break;
+      case sip.TransportStateEnum.DISCONNECTED:
+        _isConnected = false;
+        _isRegistered = false;
+        _log('WS DISCONNECTED');
+        _emit(SipEvent.connectionLost);
+        // If disconnected during an active call, attempt immediate reconnect
+        // sip_ua has exponential back-off reconnect built in, but also
+        // trigger our own re-connect attempt after 1 second for faster recovery
+        if (_callState != CallState.idle) {
+          Future.delayed(const Duration(seconds: 1), () {
+            if (!_isConnected && _lastSettings != null) {
+              _log('Reconnecting after disconnect during call...');
+              try { _helper.start(_lastSettings!); } catch (_) {}
+            }
+          });
+        }
+        break;
+      default:
+        break;
+    }
   }
+
+  @override
+  void callStateChanged(sip.Call call, sip.CallState state) {
+    _activeCall = call;
+    switch (state.state) {
+      case sip.CallStateEnum.CALL_INITIATION:
+        _endingCall = false;
+        if (call.direction == 'INCOMING') {
+          if (_lastCallId == call.id) {
+            _log('Duplicate INVITE — auto-reject');
+            _autoRejectedCallId = call.id;
+            call.hangup();
+            FlutterCallkitIncoming.endAllCalls();
+            break;
+          }
+          _lastCallId = call.id;
+          final remoteNumber = call.remote_identity ?? 'Unknown';
+          final cleanRemote = remoteNumber.replaceAll(RegExp(r'\D'), '');
+          final cleanDialed = _dialedNumber.replaceAll(RegExp(r'\D'), '');
+
+          final isAutoDial = _callState == CallState.dialing ||
+              (cleanDialed.isNotEmpty &&
+                  (cleanRemote.contains(cleanDialed) || cleanDialed.contains(cleanRemote)));
+
+          if (isAutoDial) {
+            _log('Auto-answer autodial call');
+            _dialedNumber = '';
+            _callState = CallState.onCall;
+            _activeCall = call;
+            call.answer({'audio': true, 'video': false});
+            _emit(SipEvent.callAnswered);
+          } else {
+            _log('INCOMING from: $remoteNumber');
+            _incomingNumber = remoteNumber;
+            _callState = CallState.ringing;
+            // Start foreground service NOW so the Dart VM stays alive
+            // even if user is on lockscreen or switches apps
+            CallLifecycleService().onCallStarted();
+            // Auto-detect video in incoming SDP
+            try {
+              final sdp = call.session.request?.body as String? ?? '';
+              _isVideo = sdp.contains('m=video');
+              _log('Incoming call — video detected: $_isVideo');
+            } catch (_) {
+              _isVideo = false;
+            }
+            _emit(SipEvent.incomingCall, data: {'number': _incomingNumber, 'isVideo': _isVideo});
+            if (_pendingAnswer) {
+              _log('Pending answer — answering immediately (video=$_isVideo)');
+              _pendingAnswer = false;
+              answerCall(video: _isVideo);
+            }
+          }
+        }
+        break;
+
+      case sip.CallStateEnum.PROGRESS:
+        _log('PROGRESS');
+        break;
+
+      case sip.CallStateEnum.CONFIRMED:
+        _log('CONFIRMED');
+        _callState = CallState.onCall;
+        _emit(SipEvent.callAnswered);
+        // onCallStarted is idempotent — safe to call again even if already called at RINGING
+        CallLifecycleService().onCallStarted();
+        // After call confirmed, prefer H264 over VP8 on sender side
+        _preferH264OnSender(call);
+        // Munge local SDP to force H264 Constrained Baseline profile for Grandstream
+        _mungeLocalSdpForH264(call);
+        break;
+
+      case sip.CallStateEnum.STREAM:
+        _log('STREAM — originator: ${state.originator}');
+        if (state.originator == 'remote' && state.stream != null) {
+          _remoteStream = state.stream;
+          final remoteTracks = state.stream!.getTracks();
+          _log('REMOTE STREAM tracks: ${remoteTracks.map((t) => "${t.kind}:${t.id}").join(", ")}');
+          // Ensure remote video track is enabled
+          for (final track in remoteTracks) {
+            if (track.kind == 'video' && !track.enabled) {
+              track.enabled = true;
+              _log('Enabled remote video track: ${track.id}');
+            }
+          }
+          // Play remote audio for both voice and video calls
+          try { playRemoteAudio(state.stream!); } catch (_) {}
+          _emit(SipEvent.callAnswered, data: {'stream': 'remote'});
+          _eventController.add({'event': 'streamUpdated'});
+        } else if (state.originator == 'local' && state.stream != null) {
+          _localStream = state.stream;
+          final localTracks = state.stream!.getTracks();
+          _log('LOCAL STREAM tracks: ${localTracks.map((t) => "${t.kind}:${t.id}").join(", ")}');
+          // Ensure local video track is enabled
+          for (final track in localTracks) {
+            if (track.kind == 'video' && !track.enabled) {
+              track.enabled = true;
+              _log('Enabled local video track: ${track.id}');
+            }
+          }
+          _eventController.add({'event': 'streamUpdated'});
+        }
+        break;
+
+      case sip.CallStateEnum.FAILED:
+        _log('FAILED: ${state.cause}');
+        if (_autoRejectedCallId != null && call.id == _autoRejectedCallId) {
+          _autoRejectedCallId = null;
+          break;
+        }
+        _onCallEnded();
+        _emit(SipEvent.callFailed, data: {'reason': state.cause?.toString() ?? 'unknown'});
+        break;
+
+      case sip.CallStateEnum.ENDED:
+        _log('ENDED');
+        if (_autoRejectedCallId != null && call.id == _autoRejectedCallId) {
+          _autoRejectedCallId = null;
+          break;
+        }
+        _onCallEnded();
+        break;
+
+      default:
+        break;
+    }
+  }
+
+  @override
+  void onNewMessage(sip.SIPMessageRequest request) {}
 
   @override
   void onNewNotify(sip.Notify notify) {}
 
   @override
-  void onNewReinvite(sip.ReInvite reinvite) {}
-
-
-
-  // ─── ARI Message Handler (matches webphone newMessage handler) ────────────
-
-  void _handleAriMessage(String body) {
-    if (body.contains('customer channel answered') ||
-        body.contains('agent channel answered')) {
-      _log('Customer/Agent channel ANSWERED');
-      if (_callState != CallState.onCall) {
-        _callState = CallState.onCall;
-        _emit(SipEvent.callAnswered, data: {'message': body});
-      }
-      _loadCallContext();
-    } else if (body.contains('customer channel disconnected')) {
-      _log('Customer channel DISCONNECTED');
-      _onCallEnded();
-    } else if (body.contains('force_login_request') ||
-        body.contains('Force Login Request')) {
-      _log('Force login request received');
-      _emit(SipEvent.connectionLost, data: {'reason': 'force_login'});
-    } else if (body.contains('customer host channel connected')) {
-      _log('Conference participant CONNECTED');
-      _emit(SipEvent.messageReceived, data: {'message': body});
-    } else if (body.contains('customer host channel diconnected') ||
-        body.contains('customer host channel disconnected')) {
-      _log('Conference participant DISCONNECTED');
-      _emit(SipEvent.messageReceived, data: {'message': body});
-    }
+  void onNewReinvite(sip.ReInvite reinvite) {
+    // Re-INVITE handling - codec preference already set in CONFIRMED
   }
 
-  // ─── After Registration ───────────────────────────────────────────────────
+  // ─── H264 codec preference ────────────────────────────────────────────────
 
-  Future<void> _onRegistered() async {
-    // Skip userReady/userConnection during an active call
-    // to avoid server-side state interference with the call.
-    if (_callState == CallState.onCall) {
-      _emit(SipEvent.registered);
-      return;
-    }
-
-    await ApiService.userReady();
-
-    final connResult = await ApiService.userConnection();
-    connectionData = connResult['data'] as Map<String, dynamic>?;
-    if (connResult['success'] == true) {
-      final msg = connResult['data']['message'];
-      if (msg == 'poor connection problem ,please login again') {
-        _isConnected = false;
-        _isRegistered = false;
-        return;
-      }
-    }
-
-    _emit(SipEvent.registered);
-  }
-
-  // ─── Load Call Context ────────────────────────────────────────────────────
-
-  Future<void> _loadCallContext() async {
-    final result = await ApiService.userOnCall();
-    if (result['success'] == true) {
-      _bridgeID = result['data']?['currentcalldata']?['bridgeID'] ?? '';
-    }
-  }
-
-  // ─── Call Ended ───────────────────────────────────────────────────────────
-
-  Future<void> _onCallEnded() async {
-    if (_endingCall) return;
-    _endingCall = true;
-    _callState = CallState.disposition;
-    _emit(SipEvent.callEnded, data: {'bridgeID': _bridgeID});
-    CallLifecycleService().onCallEnded();
-
-    // Submit disposition only if we have a real bridgeID (answered call)
-    var bridgeID = _bridgeID;
-    if (bridgeID.isEmpty) {
-      _log('bridgeID empty, fetching from userOnCall...');
-      final ctx = await ApiService.userOnCall();
-      bridgeID = ctx['data']?['currentcalldata']?['bridgeID']?.toString() ?? '';
-      
-      if (bridgeID.isEmpty) {
-        _log('userOnCall bridgeID also empty, fetching from userConnection...');
-        final uctx = await ApiService.userConnection();
-        final queues = uctx['data']?['currentCallqueue'] as List<dynamic>? ?? [];
-        if (queues.isNotEmpty) {
-          bridgeID = queues.first['channelID']?.toString() ?? '';
-          _log('Found bridgeID (channelID) in currentCallqueue: $bridgeID');
-        } else {
-          final followUps = uctx['data']?['followUpDispoes'] as List<dynamic>? ?? [];
-          if (followUps.isNotEmpty) {
-            bridgeID = followUps.first['bridgeID']?.toString() ?? '';
-            _log('Found bridgeID in followUpDispoes: $bridgeID');
-          }
+  /// After CONFIRMED, reorder video codec so H264 is preferred over VP8.
+  /// This affects the re-INVITE / subsequent negotiation so the IP phone
+  /// (which only has H264) can receive our video stream.
+  Future<void> _preferH264OnSender(sip.Call call) async {
+    try {
+      final pc = call.peerConnection;
+      if (pc == null) return;
+      final transceivers = await pc.getTransceivers();
+      for (final transceiver in transceivers) {
+        if (transceiver.sender.track?.kind != 'video') continue;
+        // Get available codecs and keep ONLY H264
+        final capabilities = await getRtpSenderCapabilities('video');
+        final codecs = capabilities?.codecs ?? [];
+        if (codecs.isEmpty) continue;
+        // Filter: H264 ONLY, remove all other codecs (VP8, VP9, AV1, etc.)
+        final h264Only = codecs.where((c) => (c.mimeType ?? '').toLowerCase().contains('h264')).toList();
+        if (h264Only.isNotEmpty) {
+          await transceiver.setCodecPreferences(h264Only);
+          _log('Set H264 ONLY in codec preferences for video transceiver (removed ${codecs.length - h264Only.length} other codecs)');
         }
       }
+    } catch (e) {
+      _log('_preferH264OnSender failed (non-fatal): $e');
     }
+  }
 
-    // Call ended API
-    await ApiService.callEnded();
+  /// Munge SDP to force H264 Constrained Baseline profile (42E01F) and packetization-mode=1
+  /// Grandstream phones cannot decode High/Main profiles (640C1F, 640032, etc.)
+  /// Also removes all non-H264 video codecs from SDP
+  String _mungeSdpForH264(String sdp) {
+    final lines = sdp.split('\r\n');
+    final munged = <String>[];
+    bool inVideoSection = false;
+    for (var line in lines) {
+      // Track video section
+      if (line.startsWith('m=video')) {
+        inVideoSection = true;
+      } else if (line.startsWith('m=')) {
+        inVideoSection = false;
+      }
 
-    final finalBridgeID = bridgeID.isNotEmpty ? bridgeID : 'deadCallId';
-    await ApiService.submitDisposition(finalBridgeID, 'Auto Disposed');
+      // Remove non-H264 video codec lines from SDP
+      if (inVideoSection && line.startsWith('a=rtpmap:') && !line.toLowerCase().contains('h264')) {
+        _log('Removing non-H264 video codec from SDP: $line');
+        continue;
+      }
 
+      // Remove non-H264 fmtp lines
+      if (inVideoSection && line.startsWith('a=fmtp:') && !line.toLowerCase().contains('h264')) {
+        _log('Removing non-H264 fmtp from SDP: $line');
+        continue;
+      }
+
+      if (line.startsWith('a=fmtp:') && line.toLowerCase().contains('h264')) {
+        // Replace profile-level-id with Constrained Baseline (42E01F)
+        line = line.replaceAll(RegExp(r'profile-level-id=[0-9a-fA-F]{6}'), 'profile-level-id=42E01F');
+        // Ensure packetization-mode=1
+        if (!line.contains('packetization-mode')) {
+          line = '$line;packetization-mode=1';
+        } else {
+          line = line.replaceAll(RegExp(r'packetization-mode=\d'), 'packetization-mode=1');
+        }
+        _log('Munged H264 fmtp: $line');
+      }
+      munged.add(line);
+    }
+    return munged.join('\r\n');
+  }
+
+  /// Apply SDP munging to the local description after CONFIRMED
+  Future<void> _mungeLocalSdpForH264(sip.Call call) async {
+    try {
+      final pc = call.peerConnection;
+      if (pc == null) return;
+      final localDesc = await pc.getLocalDescription();
+      if (localDesc == null) return;
+      final originalSdp = localDesc.sdp;
+      if (originalSdp == null) return;
+      // Always attempt munging even if H264 not present (might be VP8 that needs removal)
+      final mungedSdp = _mungeSdpForH264(originalSdp);
+      if (mungedSdp != originalSdp) {
+        await pc.setLocalDescription(RTCSessionDescription(mungedSdp, localDesc.type));
+        _log('Applied H264 SDP munging to local description');
+      }
+    } catch (e) {
+      _log('_mungeLocalSdpForH264 failed (non-fatal): $e');
+    }
+  }
+
+  // ─── Call Ended (pure SIP — no agent APIs) ────────────────────────────────
+
+  void _onCallEnded() {
+    if (_endingCall) return;
+    _endingCall = true;
     _callState = CallState.idle;
-    _bridgeID = '';
+    _emit(SipEvent.callEnded);
+    CallLifecycleService().onCallEnded();
+
     _incomingNumber = '';
     _dialedNumber = '';
     _isMuted = false;
     _isHeld = false;
     _remoteStream = null;
+    _localStream = null;
     _activeCall = null;
-    _pendingAnswerForQueue = false;
+    _pendingAnswer = false;
+    _isVideo = false;
 
-    removeRemoteAudio();
+    try { removeRemoteAudio(); } catch (_) {}
     _endingCall = false;
   }
 
-  // ─── Connection Check (matches webphone CONNECTION_CHECK_SCHEDULER_MS = 5000) ─
+  // ─── Outgoing Call ────────────────────────────────────────────────────────
 
-  void _handlePoorConnection({
-    bool tryRestore = false,
-  }) {
-    _isConnected = false;
-    _isRegistered = false;
-    if (tryRestore) {
-      _restoreUserSession();
-    }
+  void setDialedNumber(String number, {bool video = false}) {
+    _dialedNumber = number;
+    _isVideo = video;
+    _callState = number.isNotEmpty ? CallState.dialing : CallState.idle;
   }
 
-  Future<void> _restoreUserSession() async {
-    final readyResult = await ApiService.userReady();
-    if (readyResult['success'] == true) {
-      final retryResult = await ApiService.userConnection();
-      connectionData = retryResult['data'] as Map<String, dynamic>?;
-      if (retryResult['success'] == true &&
-          retryResult['data']['isUserLogin'] == true &&
-          retryResult['data']['status'] != 'poor connection') {
-        _isConnected = true;
-        _emit(SipEvent.connectionRestored);
-        return;
-      }
-    }
-    // Restore failed — keep disconnected, try again next cycle
-  }
-
-  void _startConnectionCheck() {
-    _connectionCheckTimer?.cancel();
-    _connectionCheckTimer = Timer.periodic(const Duration(seconds: 10), (
-      _,
-    ) async {
-      final result = await ApiService.userConnection();
-      connectionData = result['data'] as Map<String, dynamic>?;
-      if (result['success'] == true) {
-        final msg = result['data']['message'];
-
-        if (msg == 'poor connection problem ,please login again') {
-          _handlePoorConnection(tryRestore: true);
-        } else if (result['data']['isUserLogin'] == false) {
-          await ApiService.userReady();
-          final retryResult = await ApiService.userConnection();
-          if (retryResult['success'] == true &&
-              retryResult['data']['isUserLogin'] == true) {
-            if (!_isConnected) {
-              _isConnected = true;
-              _emit(SipEvent.connectionRestored);
-            }
-          } else {
-            _connectionCheckTimer?.cancel();
-            _isConnected = false;
-            _isRegistered = false;
-            _helper.stop();
-            _emit(SipEvent.connectionLost, data: {'reason': 'session_expired'});
-          }
-        } else {
-          if (!_isConnected) {
-            _isConnected = true;
-            _emit(SipEvent.connectionRestored);
-          }
-        }
-      } else {
-        _log('Connection check request failed', data: result);
-      }
-    });
-  }
-
-  // ─── Play Remote Audio (Web only) ──────────────────────────────────────────
-
-  void _playRemoteAudio(dynamic stream) {
+  /// Acquire a MediaStream with the correct codec preference.
+  /// We request H264 explicitly so the SDP offer/answer includes H264,
+  /// matching what Asterisk+IP phones expect (they have H264, not VP8).
+  Future<MediaStream?> _acquireVideoStream() async {
     try {
-      playRemoteAudio(stream);
-    } catch (e) {
-      _log('Failed to play remote audio', data: {'error': e.toString()});
-    }
-  }
-
-  // ─── Send SIP BYE (end call) ──────────────────────────────────────────────
-
-  Future<void> endCall() async {
-    final call = _activeCall;
-    if (call != null) {
-      try {
-        call.session.terminate();
-      } catch (e) {
-        _log('Exception during session.terminate: $e');
+      await Permission.microphone.request();
+      await Permission.camera.request();
+      // Request with H264 codec preference — on Android WebRTC this makes
+      // H264 appear first in the SDP m=video line, beating VP8.
+      // Use Constrained Baseline profile (42E01F) for Grandstream compatibility.
+      final stream = await navigator.mediaDevices.getUserMedia({
+        'audio': true,
+        'video': {
+          'width': {'ideal': 1280},
+          'height': {'ideal': 720},
+          'frameRate': {'ideal': 30},
+          'facingMode': 'user',
+          'optional': [
+            {'googCpuOveruseDetection': false},
+            // Force H264 with Constrained Baseline profile for Grandstream compatibility
+            {'googLeakyBucket': true},
+            {'googTemporalLayeredScreencast': false},
+          ],
+        },
+      });
+      // Ensure all video tracks are enabled
+      for (final track in stream.getVideoTracks()) {
+        track.enabled = true;
       }
+      _log('MediaStream acquired: tracks=${stream.getTracks().map((t) => t.kind).join(",")} (video tracks enabled)');
+      return stream;
+    } catch (e) {
+      _log('_acquireVideoStream failed: $e');
+      return null;
     }
-    await _onCallEnded();
   }
 
-  // ─── Answer Incoming Call ─────────────────────────────────────────────────
+  Map<String, dynamic> get _pcConfig => {
+    'iceServers': [
+      {'urls': 'stun:stun.l.google.com:19302'},
+      {'urls': 'stun:stun1.l.google.com:19302'},
+      {'urls': 'stun:stun.cloudflare.com:3478'},
+    ],
+    'sdpSemantics': 'unified-plan',
+  };
 
-  void answerCall() {
+  Future<void> makeCall(String number, {bool video = false}) async {
+    _dialedNumber = number;
+    _isVideo = video;
+    _callState = CallState.dialing;
+    // Start foreground service immediately so WS stays alive if user
+    // switches app before the call is answered
+    CallLifecycleService().onCallStarted();
+    final uri = 'sip:$number@$_origin:8089';
+    _log('makeCall → $uri (video=$video)');
+    try {
+      Map<String, dynamic>? customOptions;
+      if (video) {
+        final stream = await _acquireVideoStream();
+        customOptions = {
+          'pcConfig': _pcConfig,
+          if (stream != null) 'mediaStream': stream,
+          if (stream == null) 'mediaConstraints': {
+            'audio': true,
+            'video': {'facingMode': 'user'},
+          },
+        };
+      } else {
+        customOptions = {'pcConfig': _pcConfig};
+      }
+      final call = await _helper.call(uri, voiceOnly: !video, customOptions: customOptions);
+      // Immediately apply H264 preference and SDP munging to the call before SDP is sent
+      if (video && call != null) {
+        _log('Applying H264 preference to outgoing call before SDP exchange');
+        await _preferH264OnSender(call);
+        // Also munge the offer SDP to remove VP8
+        await Future.delayed(const Duration(milliseconds: 100));
+        await _mungeLocalSdpForH264(call);
+      }
+    } catch (e) {
+      _log('makeCall failed: $e');
+      _callState = CallState.idle;
+    }
+  }
+
+  // ─── Answer Incoming ──────────────────────────────────────────────────────
+
+  Future<void> answerCall({bool video = false}) async {
+    _isVideo = video;
     final call = _activeCall;
     if (call != null) {
       if (_callState == CallState.onCall) {
-        _log('Already on call — skipping duplicate answer');
+        _log('Already on call — skip duplicate answer');
         return;
       }
-      _log('Answering SIP call');
+      _log('Answering SIP call (video=$video)');
+      // Request permissions first — getUserMedia fails with 480 if denied
       try {
-        call.answer({'audio': true, 'video': false});
+        await Permission.microphone.request();
+        if (video) await Permission.camera.request();
+      } catch (_) {}
+      try {
+        Map<String, dynamic> options;
+        if (video) {
+          // Pre-acquire H264 stream so SDP answer advertises H264 (not VP8).
+          // IP phones (3006) only speak H264 — Asterisk cannot transcode video.
+          final stream = await _acquireVideoStream();
+          options = {
+            'pcConfig': _pcConfig,
+            if (stream != null) 'mediaStream': stream,
+            if (stream == null) 'mediaConstraints': {'audio': true, 'video': true},
+          };
+        } else {
+          options = {
+            'pcConfig': _pcConfig,
+            'mediaConstraints': {'audio': true, 'video': false},
+          };
+        }
+        _log('answer options keys: ${options.keys.toList()}');
+        call.answer(options);
+        // Apply H264-only codec preference and SDP munging immediately after answering
+        _preferH264OnSender(call);
+        await Future.delayed(const Duration(milliseconds: 500));
+        _mungeLocalSdpForH264(call);
       } catch (e) {
         _log('answerCall failed: $e');
         return;
       }
-      _loadCallContext();
+      _callState = CallState.onCall;
       CallLifecycleService().onCallStarted();
-    } else if (!_pendingAnswerForQueue) {
-      _log('answerCall: queuing answer — no active call yet');
-      _pendingAnswerForQueue = true;
-      ApiService.agentAvailable();
     } else {
-      _log('answerCall: already pending answer for queue — skipping');
+      _log('No active call yet — queuing answer (video=$video)');
+      _pendingAnswer = true;
     }
   }
 
   Future<void> rejectCall() async {
     final call = _activeCall;
     if (call != null) {
-      try {
-        call.session.terminate();
-      } catch (e) {
-        _log('Exception during reject/terminate: $e');
-      }
+      try { call.session.terminate(); } catch (e) { _log('reject failed: $e'); }
     }
-    await _onCallEnded();
+    _onCallEnded();
     _emit(SipEvent.callFailed, data: {'reason': 'rejected'});
   }
 
-  // ─── Call Control ─────────────────────────────────────────────────────────
+  Future<void> endCall() async {
+    final call = _activeCall;
+    if (call != null) {
+      try { call.session.terminate(); } catch (e) { _log('terminate failed: $e'); }
+    }
+    _onCallEnded();
+  }
 
-  /// Local-only mute — disables/enables audio tracks without SIP re-INVITE.
-  /// Matches webphone behavior.
+  // ─── Call Controls ────────────────────────────────────────────────────────
+
   void mute(bool muted) {
     if (muted == _isMuted) return;
     final call = _activeCall;
     if (call == null) return;
     try {
-      if (muted) {
-        call.mute(true, false);
-      } else {
-        call.unmute(true, false);
-      }
+      muted ? call.mute(true, false) : call.unmute(true, false);
       _isMuted = muted;
     } catch (e) {
-      _log('Exception during local mute: $e');
+      _log('mute failed: $e');
     }
   }
 
-  bool _wasMutedBeforeHold = false;
-
-  /// HTTP-only hold/unhold — no SIP re-INVITE. Matches webphone behavior.
-  Future<void> toggleHold() async {
+  void toggleHold() {
+    final call = _activeCall;
+    if (call == null) return;
     try {
       if (_isHeld) {
-        await ApiService.reqUnHold();
-        if (!_wasMutedBeforeHold) {
-          mute(false);
-        }
+        call.unhold();
       } else {
-        _wasMutedBeforeHold = _isMuted;
-        mute(true);
-        await ApiService.reqHold();
+        call.hold();
       }
       _isHeld = !_isHeld;
     } catch (e) {
-      _log('Exception during hold/unhold: $e');
+      _log('hold failed: $e');
     }
   }
 
   void sendDTMF(String tone) {
-    final call = _activeCall;
-    if (call == null) return;
-    try {
-      call.sendDTMF(tone);
-    } catch (e) {
-      _log('Exception during sendDTMF: $e');
-    }
+    try { _activeCall?.sendDTMF(tone); } catch (e) { _log('DTMF failed: $e'); }
   }
-
-  dynamic get remoteStream => _remoteStream;
-  bool get isMuted => _isMuted;
-  bool get isHeld => _isHeld;
 
   // ─── Disconnect ───────────────────────────────────────────────────────────
 
   void disconnect() {
-    _connectionCheckTimer?.cancel();
     _helper.stop();
     _isConnected = false;
     _isRegistered = false;
     _callState = CallState.idle;
-    _activeCall = null;
+    _stopKeepAliveService();
+  }
+
+  // ─── Keep-Alive Service ─────────────────────────────────────────────────────
+
+  void _startKeepAliveService() {
+    // Keep-Alive disabled to save battery. Relying on FCM/PushKit to wake up instead.
+    _log('SIP Keep-Alive disabled (battery optimization)');
+  }
+
+  void _stopKeepAliveService() {
+    // Keep-Alive disabled to save battery.
   }
 
   void dispose() {
