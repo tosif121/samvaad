@@ -26,6 +26,12 @@ class _DialpadScreenState extends State<DialpadScreen>
   int _callSeconds = 0;
   Timer? _callTimer;
 
+  // Guards against re-showing the incoming call screen for a call that was
+  // just manually declined/answered, in case a lifecycle resume event
+  // fires before SipSocketService's callState has fully settled.
+  String? _lastHandledNumber;
+  DateTime? _lastHandledAt;
+
   @override
   void initState() {
     debugPrint('[SCREEN] DialpadScreen ACTIVE');
@@ -45,8 +51,17 @@ class _DialpadScreenState extends State<DialpadScreen>
     _appLifecycleState = state;
     if (state == AppLifecycleState.resumed) {
       RingtoneService().clearNotification();
+
+      final recentlyHandledSameNumber = _lastHandledNumber != null &&
+          _lastHandledNumber == _sip.incomingNumber &&
+          _lastHandledAt != null &&
+          DateTime.now().difference(_lastHandledAt!) <
+              const Duration(seconds: 3);
+
       if (_sip.callState == CallState.ringing &&
           !_isShowingIncomingDialog &&
+          !_isOnCall &&
+          !recentlyHandledSameNumber &&
           _sip.isRegistered) {
         _showIncomingCall(_sip.incomingNumber);
       }
@@ -84,6 +99,15 @@ class _DialpadScreenState extends State<DialpadScreen>
           if (_isOnCall) break;
           if (_isShowingIncomingDialog) break;
 
+          final recentlyHandledSameNumber = _lastHandledNumber == number &&
+              _lastHandledAt != null &&
+              DateTime.now().difference(_lastHandledAt!) <
+                  const Duration(seconds: 3);
+          if (recentlyHandledSameNumber) {
+            await _sip.rejectCall();
+            break;
+          }
+
           RingtoneService().stopRinging();
 
           if (_appLifecycleState != AppLifecycleState.resumed) {
@@ -99,6 +123,8 @@ class _DialpadScreenState extends State<DialpadScreen>
         case 'callAnswered':
           _isShowingIncomingDialog = false;
           _isOnCall = true;
+          _lastHandledNumber = _sip.incomingNumber;
+          _lastHandledAt = DateTime.now();
           if (_activeCallNumber.isEmpty) {
             _activeCallNumber = _sip.incomingNumber;
           }
@@ -111,6 +137,10 @@ class _DialpadScreenState extends State<DialpadScreen>
         case 'callFailed':
           _isOnCall = false;
           _isShowingIncomingDialog = false;
+          _lastHandledNumber = _activeCallNumber.isNotEmpty
+              ? _activeCallNumber
+              : _sip.incomingNumber;
+          _lastHandledAt = DateTime.now();
           _activeCallNumber = '';
           _callTimer?.cancel();
           _callSeconds = 0;
@@ -178,6 +208,8 @@ class _DialpadScreenState extends State<DialpadScreen>
     );
 
     _isShowingIncomingDialog = false;
+    _lastHandledNumber = number;
+    _lastHandledAt = DateTime.now();
 
     if (result == true) {
       if (!_sip.isRegistered) {

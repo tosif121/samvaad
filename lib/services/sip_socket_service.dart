@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:developer' as developer;
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:sip_ua/sip_ua.dart' as sip;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/sip_credentials.dart';
@@ -25,8 +26,15 @@ enum SipEvent {
 class SipSocketService implements sip.SipUaHelperListener {
   static final SipSocketService _instance = SipSocketService._internal();
   factory SipSocketService() => _instance;
+  static SipSocketService get instance => _instance;
 
   final sip.SIPUAHelper _helper = sip.SIPUAHelper();
+
+  // Native <-> Dart bridge used by ConnectionService (Android) / CallKit
+  // (iOS) so a push-triggered native call UI can be shown before SIP
+  // registration completes, then bound to the real SIP call once it lands.
+  static const MethodChannel _platform =
+      MethodChannel('sip_native_bridge');
 
   CallState _callState = CallState.idle;
   sip.Call? _activeCall;
@@ -44,6 +52,13 @@ class SipSocketService implements sip.SipUaHelperListener {
   // an explicit endCall()/rejectCall() racing with it).
   bool _callEndedHandled = false;
 
+  // Set when a call arrives via FCM/VoIP push before the real SIP INVITE
+  // has been received. Used to bind the native call UI (already showing)
+  // to the SIP call once it confirms, and to route native answer/reject/
+  // end actions back into the SIP session.
+  String? _pendingPushCallId;
+  String? _pendingPushCallerNumber;
+
   SipCredentials? _credentials;
 
   final _eventController = StreamController<Map<String, dynamic>>.broadcast();
@@ -59,6 +74,7 @@ class SipSocketService implements sip.SipUaHelperListener {
 
   SipSocketService._internal() {
     _helper.addSipUaHelperListener(this);
+    _platform.setMethodCallHandler(_handleNativeMethodCall);
   }
 
   void _log(String msg, {Object? data}) {
@@ -79,13 +95,66 @@ class SipSocketService implements sip.SipUaHelperListener {
     _eventController.add({'event': event.name, ...?data});
   }
 
+  // ---------------------------------------------------------------------
+  // Native bridge (ConnectionService / CallKit)
+  // ---------------------------------------------------------------------
+
+  /// Invokes a method on the native side. Failures are logged, never
+  /// thrown, since native call-UI sync is best-effort and must not break
+  /// SIP call flow if the channel isn't attached (e.g. on web/desktop).
+  Future<void> _notifyNative(String method, Map<String, dynamic> args) async {
+    try {
+      await _platform.invokeMethod(method, args);
+    } catch (e) {
+      _log('Native bridge call failed: $method', data: e.toString());
+    }
+  }
+
+  /// Handles calls initiated FROM native (user tapped Answer/Reject/End on
+  /// the OS-level incoming call UI, or a headless push handler).
+  Future<dynamic> _handleNativeMethodCall(MethodCall call) async {
+    _log('Native method call received: ${call.method}', data: call.arguments);
+    switch (call.method) {
+      case 'nativeAnswerCall':
+        answerCall();
+        break;
+      case 'nativeEndCall':
+        await endCall();
+        break;
+      case 'nativeRejectCall':
+        await rejectCall();
+        break;
+      case 'handleIncomingPush':
+        final args = Map<String, dynamic>.from(call.arguments as Map);
+        await fastReconnectAndRegister(
+          callId: args['call_id'] as String? ?? '',
+          callerNumber: args['caller_number'] as String?,
+        );
+        break;
+      default:
+        _log('Unhandled native method: ${call.method}');
+    }
+    return null;
+  }
+
+  // ---------------------------------------------------------------------
+  // Connection lifecycle
+  // ---------------------------------------------------------------------
+
   Future<void> connect([SipCredentials? creds]) async {
+    // Guard against duplicate connect() calls racing each other — e.g. a
+    // normal app-start connect() overlapping with an FCM-triggered
+    // fastReconnectAndRegister(). Without the _isRegistered check here,
+    // a second call would call _helper.stop() on an already-registered
+    // UA and tear the transport down seconds after it registered.
     if (_isRegistered) {
-      _log('Already registered');
+      _log('connect() ignored — already registered',
+          data: StackTrace.current.toString());
       return;
     }
     if (_connecting) {
-      _log('Already connecting — skipping duplicate');
+      _log('connect() ignored — already connecting',
+          data: StackTrace.current.toString());
       return;
     }
 
@@ -108,7 +177,7 @@ class SipSocketService implements sip.SipUaHelperListener {
       await Future.delayed(const Duration(milliseconds: 2600));
     }
 
-    _log('connect() called');
+    _log('connect() called', data: StackTrace.current.toString());
 
     try {
       sip.UaSettings settings = sip.UaSettings();
@@ -131,6 +200,37 @@ class SipSocketService implements sip.SipUaHelperListener {
     } finally {
       _connecting = false;
     }
+  }
+
+  /// Lightweight reconnect path used when the app is woken by an FCM/VoIP
+  /// push for an incoming call. Skips anything not required to get
+  /// registered and receive the pending INVITE as fast as possible.
+  ///
+  /// [callId] correlates this push to the native call UI already shown by
+  /// ConnectionService/CallKit, so the SIP call can be bound to it once
+  /// CALL_INITIATION fires, and native answer/reject/end actions can be
+  /// routed to the right SIP session.
+  Future<void> fastReconnectAndRegister({
+    required String callId,
+    String? callerNumber,
+  }) async {
+    _pendingPushCallId = callId.isNotEmpty ? callId : null;
+    _pendingPushCallerNumber = callerNumber;
+
+    if (_isRegistered) {
+      _log('fastReconnectAndRegister: already registered, nothing to do');
+      return;
+    }
+
+    if (_credentials == null) {
+      await loadCredentials();
+    }
+    if (_credentials == null) {
+      _log('fastReconnectAndRegister: no credentials, cannot register');
+      return;
+    }
+
+    await connect(_credentials);
   }
 
   void setCredentials(SipCredentials creds) {
@@ -165,6 +265,10 @@ class SipSocketService implements sip.SipUaHelperListener {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('sip_credentials');
   }
+
+  // ---------------------------------------------------------------------
+  // sip_ua listener callbacks
+  // ---------------------------------------------------------------------
 
   @override
   void registrationStateChanged(sip.RegistrationState state) {
@@ -208,7 +312,7 @@ class SipSocketService implements sip.SipUaHelperListener {
         }
         break;
       case sip.TransportStateEnum.DISCONNECTED:
-        _log('WebSocket DISCONNECTED');
+        _log('WebSocket DISCONNECTED', data: StackTrace.current.toString());
         final wasConnected = _isConnected;
         _isConnected = false;
         _isRegistered = false;
@@ -232,6 +336,15 @@ class SipSocketService implements sip.SipUaHelperListener {
           _incomingNumber = remoteNumber;
           _callState = CallState.ringing;
           _emit(SipEvent.incomingCall, data: {'number': _incomingNumber});
+
+          // If this call arrived after a push already showed a native
+          // call UI, bind to it instead of leaving it unmatched. If no
+          // push preceded this (foreground call), _pendingPushCallId is
+          // null and this is a no-op on the native side.
+          _notifyNative('bindIncomingCall', {
+            'callId': _pendingPushCallId ?? '',
+            'number': remoteNumber,
+          });
         }
         break;
 
@@ -243,10 +356,11 @@ class SipSocketService implements sip.SipUaHelperListener {
         _callState = CallState.onCall;
         _emit(SipEvent.callAnswered);
         CallLifecycleService().onCallStarted();
+        _notifyNative('callActive', {'callId': _pendingPushCallId ?? ''});
         break;
 
       case sip.CallStateEnum.STREAM:
-        if (state.originator == 'remote' && state.stream != null) {
+        if (state.originator == sip.Originator.remote && state.stream != null) {
           _remoteStream = state.stream;
           _playRemoteAudio(state.stream!);
         }
@@ -290,6 +404,10 @@ class SipSocketService implements sip.SipUaHelperListener {
     // currently supported; intentionally unhandled.
   }
 
+  // ---------------------------------------------------------------------
+  // Call teardown
+  // ---------------------------------------------------------------------
+
   /// Cleans up local state after a call ends, exactly once per call.
   ///
   /// If [emitFailedReason] is provided, a single SipEvent.callFailed is
@@ -310,11 +428,14 @@ class SipSocketService implements sip.SipUaHelperListener {
     }
 
     CallLifecycleService().onCallEnded();
+    _notifyNative('callEnded', {'callId': _pendingPushCallId ?? ''});
 
     _incomingNumber = '';
     _isMuted = false;
     _remoteStream = null;
     _activeCall = null;
+    _pendingPushCallId = null;
+    _pendingPushCallerNumber = null;
     removeRemoteAudio();
   }
 
@@ -325,6 +446,10 @@ class SipSocketService implements sip.SipUaHelperListener {
       _log('Failed to play remote audio', data: {'error': e.toString()});
     }
   }
+
+  // ---------------------------------------------------------------------
+  // Public call controls
+  // ---------------------------------------------------------------------
 
   Future<void> endCall() async {
     final call = _activeCall;
@@ -425,6 +550,7 @@ class SipSocketService implements sip.SipUaHelperListener {
   bool get isMuted => _isMuted;
 
   void disconnect() {
+    _log('disconnect() called', data: StackTrace.current.toString());
     _helper.stop();
     _isConnected = false;
     _isRegistered = false;

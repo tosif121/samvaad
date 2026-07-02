@@ -25,11 +25,24 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
     _sipSubscription = _sip.events.listen((event) {
       if (!mounted || _dismissed) return;
       final type = event['event'] as String;
+
       if (type == 'callEnded' || type == 'callFailed') {
         _dismissed = true;
         _onDismiss();
         RingtoneService().stopRinging();
-        Navigator.of(context).pop();
+        RingtoneService().clearNotification();
+        Navigator.of(context).pop(false);
+      } else if (type == 'callAnswered') {
+        // Call was answered — possibly from the native lock-screen /
+        // ConnectionService / CallKit UI rather than this screen. Dismiss
+        // so whatever shows the active-call UI can take over, without
+        // calling answerCall() again.
+        _dismissed = true;
+        _onDismiss();
+        _sipSubscription?.cancel();
+        RingtoneService().stopRinging();
+        RingtoneService().clearNotification();
+        Navigator.of(context).pop(true);
       }
     });
   }
@@ -47,20 +60,31 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
 
   Future<void> _decline() async {
     _dismissed = true;
-    _onDismiss();
     _sipSubscription?.cancel();
     RingtoneService().stopRinging();
     RingtoneService().clearNotification();
-    if (mounted) Navigator.of(context).pop(false);
+
+    // IMPORTANT: reject the SIP call BEFORE dismissing the dialog / calling
+    // onDismiss(). rejectCall() synchronously flips SipSocketService's
+    // callState to idle before this await returns. If we popped/dismissed
+    // first, there's a brief window where _isShowingIncomingDialog is
+    // already false in the parent but callState is still `ringing` — if
+    // an app lifecycle event (resume) fires in that window, the parent's
+    // didChangeAppLifecycleState re-shows this exact call. Doing the SIP
+    // reject first closes that race entirely.
     await _sip.rejectCall();
+
+    _onDismiss();
+    if (mounted) Navigator.of(context).pop(false);
   }
 
   void _accept() {
     _dismissed = true;
-    _onDismiss();
     _sipSubscription?.cancel();
     RingtoneService().stopRinging();
     RingtoneService().clearNotification();
+    _sip.answerCall();
+    _onDismiss();
     if (mounted) Navigator.of(context).pop(true);
   }
 
@@ -138,7 +162,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
             ),
             const SizedBox(height: 8),
             Text(
-              'Calling...',
+              'is calling you',
               style: TextStyle(fontSize: 15, color: Colors.grey[500]),
             ),
             const Spacer(),
