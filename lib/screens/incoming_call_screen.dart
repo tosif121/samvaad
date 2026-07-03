@@ -78,14 +78,22 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
     if (mounted) Navigator.of(context).pop(false);
   }
 
-  void _accept() {
+  Future<void> _accept() async {
     _dismissed = true;
     _sipSubscription?.cancel();
     RingtoneService().stopRinging();
     RingtoneService().clearNotification();
-    _sip.answerCall();
-    _onDismiss();
-    if (mounted) Navigator.of(context).pop(true);
+
+    try {
+      debugPrint("Accept pressed");
+      _onDismiss();
+      if (mounted) {
+        Navigator.of(context).pop(true);
+      }
+    } catch (e, st) {
+      debugPrint("answerCall failed: $e");
+      debugPrintStack(stackTrace: st);
+    }
   }
 
   @override

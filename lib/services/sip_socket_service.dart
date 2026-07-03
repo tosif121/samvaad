@@ -51,6 +51,7 @@ class SipSocketService implements sip.SipUaHelperListener {
   // (e.g. once from callStateChanged's ENDED/FAILED branch and once from
   // an explicit endCall()/rejectCall() racing with it).
   bool _callEndedHandled = false;
+  bool _isAnswering = false;
 
   // Set when a call arrives via FCM/VoIP push before the real SIP INVITE
   // has been received. Used to bind the native call UI (already showing)
@@ -71,6 +72,7 @@ class SipSocketService implements sip.SipUaHelperListener {
   String get incomingNumber => _incomingNumber;
   bool get isRegistered => _isRegistered;
   bool get isConnected => _isConnected;
+  String? get activeCallId => _activeCall?.id;
 
   SipSocketService._internal() {
     _helper.addSipUaHelperListener(this);
@@ -116,7 +118,7 @@ class SipSocketService implements sip.SipUaHelperListener {
     _log('Native method call received: ${call.method}', data: call.arguments);
     switch (call.method) {
       case 'nativeAnswerCall':
-        answerCall();
+        await answerCall();
         break;
       case 'nativeEndCall':
         await endCall();
@@ -325,7 +327,15 @@ class SipSocketService implements sip.SipUaHelperListener {
 
   @override
   void callStateChanged(sip.Call call, sip.CallState state) {
-    _activeCall = call;
+    _log('callStateChanged: ${state.state} for call ID: ${call.id}');
+    if (state.state == sip.CallStateEnum.CALL_INITIATION || _activeCall == null) {
+      _activeCall = call;
+    }
+
+    if (_activeCall != null && _activeCall!.id != call.id) {
+      _log('Ignoring state ${state.state} for non-active call ${call.id}');
+      return;
+    }
 
     switch (state.state) {
       case sip.CallStateEnum.CALL_INITIATION:
@@ -418,6 +428,7 @@ class SipSocketService implements sip.SipUaHelperListener {
   void _finishCall({String? emitFailedReason}) {
     if (_callEndedHandled) return;
     _callEndedHandled = true;
+    _isAnswering = false;
 
     _callState = CallState.idle;
 
@@ -463,22 +474,35 @@ class SipSocketService implements sip.SipUaHelperListener {
     _finishCall();
   }
 
-  void answerCall() {
+  Future<void> answerCall() async {
     final call = _activeCall;
     if (call == null) {
       _log('answerCall called with no active call — ignoring');
       return;
     }
-    if (_callState == CallState.onCall) {
-      _log('Already on call — skipping duplicate answer');
+    if (_isAnswering || _callState == CallState.onCall || call.state == sip.CallStateEnum.CONFIRMED) {
+      _log('Already answering or on call — skipping duplicate answer. state: ${call.state}');
       return;
     }
-    _log('Answering SIP call');
+    
+    _isAnswering = true;
+    _log('Answering SIP call (Attempt started) - Call ID: ${call.id}');
+    
     try {
-      call.answer({'audio': true, 'video': false});
+      final mediaConstraints = <String, dynamic>{
+        'audio': true,
+        'video': false,
+      };
+
+      _log('Before call.answer() - constraints: $mediaConstraints');
+      call.answer({
+        'mediaConstraints': mediaConstraints,
+      });
+      _log('After call.answer() - success');
     } catch (e) {
       _log('answerCall failed: $e');
       _emit(SipEvent.callFailed, data: {'reason': 'answer_failed'});
+      _isAnswering = false;
       return;
     }
     CallLifecycleService().onCallStarted();
@@ -494,7 +518,7 @@ class SipSocketService implements sip.SipUaHelperListener {
     _callState = CallState.dialing;
     _incomingNumber = number;
     try {
-      await _helper.call(number);
+      await _helper.call(number, voiceOnly: true);
     } catch (e) {
       _log('makeCall failed: $e');
       _finishCall(emitFailedReason: e.toString());

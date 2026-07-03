@@ -183,10 +183,18 @@ class _DialpadScreenState extends State<DialpadScreen>
   }
 
   Future<void> _showIncomingCall(String number) async {
-    if (_isShowingIncomingDialog) return;
-    if (_isOnCall) return;
+    final callId = _sip.activeCallId ?? 'unknown_id';
+    final callState = _sip.callState.name;
+    debugPrint('[DIALPAD] _showIncomingCall invoked for $number. Call ID: $callId, State: $callState');
 
-    debugPrint('[DIALPAD] _showIncomingCall for $number');
+    if (_isShowingIncomingDialog) {
+      debugPrint('[DIALPAD] _showIncomingCall aborted: _isShowingIncomingDialog is true');
+      return;
+    }
+    if (_isOnCall) {
+      debugPrint('[DIALPAD] _showIncomingCall aborted: _isOnCall is true');
+      return;
+    }
     _isShowingIncomingDialog = true;
     RingtoneService().cleanupForegroundService();
     await Future.delayed(const Duration(milliseconds: 200));
@@ -231,8 +239,8 @@ class _DialpadScreenState extends State<DialpadScreen>
         }
         return;
       }
-      _sip.answerCall();
-      setState(() {});
+      await _sip.answerCall();
+      if (mounted) setState(() {});
     } else {
       RingtoneService().clearNotification();
     }
