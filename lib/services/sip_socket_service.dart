@@ -57,7 +57,13 @@ class SipSocketService implements sip.SipUaHelperListener {
   // to the SIP call once it confirms, and to route native answer/reject/
   // end actions back into the SIP session.
   String? _pendingPushCallId;
-  String? _pendingPushCallerNumber;
+
+  // Queued native actions for the period between push arrival and INVITE
+  // landing. The user may answer/reject on the native ConnectionService UI
+  // before the SIP INVITE arrives; these flags ensure the action executes
+  // the moment the call becomes available.
+  bool _pendingAnswer = false;
+  bool _pendingReject = false;
 
   SipCredentials? _credentials;
 
@@ -215,7 +221,8 @@ class SipSocketService implements sip.SipUaHelperListener {
     String? callerNumber,
   }) async {
     _pendingPushCallId = callId.isNotEmpty ? callId : null;
-    _pendingPushCallerNumber = callerNumber;
+    _pendingAnswer = false;
+    _pendingReject = false;
 
     if (_isRegistered) {
       _log('fastReconnectAndRegister: already registered, nothing to do');
@@ -345,6 +352,18 @@ class SipSocketService implements sip.SipUaHelperListener {
             'callId': _pendingPushCallId ?? '',
             'number': remoteNumber,
           });
+
+          // Execute any pending answer/reject that the user performed on
+          // the native ConnectionService UI before the INVITE landed.
+          if (_pendingAnswer) {
+            _pendingAnswer = false;
+            _log('Executing queued answer for pending call');
+            answerCall();
+          } else if (_pendingReject) {
+            _pendingReject = false;
+            _log('Executing queued reject for pending call');
+            rejectCall();
+          }
         }
         break;
 
@@ -435,7 +454,8 @@ class SipSocketService implements sip.SipUaHelperListener {
     _remoteStream = null;
     _activeCall = null;
     _pendingPushCallId = null;
-    _pendingPushCallerNumber = null;
+    _pendingAnswer = false;
+    _pendingReject = false;
     removeRemoteAudio();
   }
 
@@ -466,7 +486,9 @@ class SipSocketService implements sip.SipUaHelperListener {
   void answerCall() {
     final call = _activeCall;
     if (call == null) {
-      _log('answerCall called with no active call — ignoring');
+      _log('answerCall called with no active call — queuing as pending');
+      _pendingAnswer = true;
+      _pendingReject = false;
       return;
     }
     if (_callState == CallState.onCall) {
@@ -503,12 +525,16 @@ class SipSocketService implements sip.SipUaHelperListener {
 
   Future<void> rejectCall() async {
     final call = _activeCall;
-    if (call != null) {
-      try {
-        call.session.terminate();
-      } catch (e) {
-        _log('Exception during reject/terminate: $e');
-      }
+    if (call == null) {
+      _log('rejectCall called with no active call — queuing as pending');
+      _pendingReject = true;
+      _pendingAnswer = false;
+      return;
+    }
+    try {
+      call.session.terminate();
+    } catch (e) {
+      _log('Exception during reject/terminate: $e');
     }
     // Rejection is reported as a single callFailed event (not callEnded).
     _finishCall(emitFailedReason: 'rejected');

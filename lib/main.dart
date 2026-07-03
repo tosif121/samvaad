@@ -1,11 +1,46 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'screens/login_screen.dart';
 import 'services/call_lifecycle_service.dart';
+import 'services/sip_socket_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp();
   CallLifecycleService().init();
   runApp(const SamvaadApp());
+}
+
+@pragma('vm:entry-point')
+Future<void> backgroundMain() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp();
+
+  final sip = SipSocketService();
+
+  const channel = MethodChannel('sip_native_bridge');
+  channel.setMethodCallHandler((call) async {
+    switch (call.method) {
+      case 'handleIncomingPush':
+        final args = Map<String, dynamic>.from(call.arguments as Map);
+        await sip.fastReconnectAndRegister(
+          callId: args['call_id'] as String? ?? '',
+          callerNumber: args['caller_number'] as String?,
+        );
+        break;
+      case 'nativeAnswerCall':
+        sip.answerCall();
+        break;
+      case 'nativeEndCall':
+        await sip.endCall();
+        break;
+      case 'nativeRejectCall':
+        await sip.rejectCall();
+        break;
+    }
+    return null;
+  });
 }
 
 class SamvaadApp extends StatelessWidget {

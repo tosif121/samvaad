@@ -13,11 +13,13 @@ import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "com.example.samvaad/ringtone"
+    private val SIP_BRIDGE_CHANNEL = "sip_native_bridge"
     private var mediaPlayer: MediaPlayer? = null
 
     companion object {
         private const val TAG = "MainActivity"
         var isAlive = false
+        var isInForeground = false
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -67,6 +69,9 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+
+        SipBridge.methodChannel =
+            MethodChannel(flutterEngine.dartExecutor.binaryMessenger, SIP_BRIDGE_CHANNEL)
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
@@ -154,6 +159,16 @@ class MainActivity : FlutterActivity() {
             Log.d(TAG, "Incoming call from notification for: $number")
             intent.putExtra("fcm_number", null as String?) // consume the extra
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        isInForeground = true
+    }
+
+    override fun onPause() {
+        super.onPause()
+        isInForeground = false
     }
 
     override fun onDestroy() {

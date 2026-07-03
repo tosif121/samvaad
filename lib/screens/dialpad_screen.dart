@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'incoming_call_screen.dart';
 import 'login_screen.dart';
@@ -31,10 +33,12 @@ class _DialpadScreenState extends State<DialpadScreen>
   // fires before SipSocketService's callState has fully settled.
   String? _lastHandledNumber;
   DateTime? _lastHandledAt;
+  String? _fcmToken;
 
   @override
   void initState() {
     debugPrint('[SCREEN] DialpadScreen ACTIVE');
+    _fetchFcmToken();
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _initSip();
@@ -44,6 +48,26 @@ class _DialpadScreenState extends State<DialpadScreen>
       }
     });
 
+  }
+
+  Future<void> _fetchFcmToken() async {
+    await _requestNotificationPermission();
+    try {
+      final token = await FirebaseMessaging.instance.getToken();
+      if (mounted) {
+        setState(() {
+          _fcmToken = token;
+        });
+      }
+    } catch (e) {
+      debugPrint('[DIALPAD] Failed to fetch FCM token: $e');
+    }
+  }
+
+  Future<void> _requestNotificationPermission() async {
+    if (await Permission.notification.isDenied) {
+      await Permission.notification.request();
+    }
   }
 
   @override
@@ -289,10 +313,11 @@ class _DialpadScreenState extends State<DialpadScreen>
             IconButton(
               icon: const Icon(Icons.logout),
               onPressed: () async {
+                final navigator = Navigator.of(context);
                 _sip.disconnect();
                 await _sip.clearCredentials();
                 if (mounted) {
-                  Navigator.of(context).pushReplacement(
+                  navigator.pushReplacement(
                     MaterialPageRoute(builder: (_) => const LoginScreen()),
                   );
                 }
@@ -406,7 +431,38 @@ class _DialpadScreenState extends State<DialpadScreen>
                   child: const Icon(Icons.call, color: Colors.white, size: 32),
                 ),
               ),
-              const SizedBox(height: 4),
+              const SizedBox(height: 16),
+              if (_fcmToken != null)
+                GestureDetector(
+                  onTap: () {
+                    Clipboard.setData(ClipboardData(text: _fcmToken!));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('FCM Token copied to clipboard')),
+                    );
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Flexible(
+                          child: Text(
+                            'FCM Token: $_fcmToken',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: Colors.grey[500],
+                              fontSize: 12,
+                              decoration: TextDecoration.underline,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Icon(Icons.copy, size: 14, color: Colors.grey[500]),
+                      ],
+                    ),
+                  ),
+                ),
             ],
           ),
         ),
