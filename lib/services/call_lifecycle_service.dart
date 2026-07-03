@@ -1,9 +1,9 @@
 import 'dart:async';
-import 'dart:developer' as developer;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:audio_session/audio_session.dart';
+import 'log_service.dart';
 
 const _kChannel = MethodChannel('com.samwad/ringtone');
 
@@ -113,9 +113,6 @@ class CallLifecycleService with WidgetsBindingObserver {
   }
 
   void _log(String msg) {
-    developer.log(
-      '[${DateTime.now().toIso8601String()}] [CALL_LIFECYCLE] $msg',
-      name: 'Samvaad',
-    );
+    LogService().write('CALL_LIFECYCLE', msg);
   }
 }

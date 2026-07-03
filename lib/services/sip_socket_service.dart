@@ -1,6 +1,4 @@
 import 'dart:async';
-import 'dart:developer' as developer;
-import 'package:flutter/services.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -9,6 +7,7 @@ import 'auth_service.dart';
 import 'remote_audio_stub.dart'
     if (dart.library.html) 'remote_audio_web.dart';
 import 'call_lifecycle_service.dart';
+import 'log_service.dart';
 
 enum CallState { idle, dialing, ringing, onCall }
 
@@ -67,6 +66,12 @@ class SipSocketService implements sip.SipUaHelperListener {
   SipSocketService._internal() {
     _helper.addSipUaHelperListener(this);
     CallLifecycleService().setReRegisterCallback(_reRegisterIfNeeded);
+    LogService().init().then((_) {
+      LogService().write('SIP', 'LogService initialized');
+      LogService().logFilePath.then((path) {
+        print('=== SAMVAAD LOG FILE: $path ===');
+      });
+    });
   }
 
   void _reRegisterIfNeeded() {
@@ -77,12 +82,7 @@ class SipSocketService implements sip.SipUaHelperListener {
   }
 
   void _log(String msg, {Object? data}) {
-    final ts = DateTime.now().toIso8601String();
-    final log = data != null
-        ? '[$ts] [SIP] $msg | $data'
-        : '[$ts] [SIP] $msg';
-    developer.log(log, name: 'Samvaad');
-    print(log);
+    LogService().write('SIP', msg, data: data);
   }
 
   void _emit(SipEvent event, {Map<String, dynamic>? data}) {
@@ -220,10 +220,8 @@ class SipSocketService implements sip.SipUaHelperListener {
           if (isAutoDial) {
             _log('Auto-answer autodial call');
             _dialedNumber = '';
-            _callState = CallState.onCall;
             _activeCall = call;
-            call.answer({'audio': true, 'video': false});
-            _emit(SipEvent.callAnswered);
+            answerCall(video: _isVideo);
           } else {
             _log('INCOMING from: $remoteNumber');
             _incomingNumber = remoteNumber;
@@ -251,17 +249,49 @@ class SipSocketService implements sip.SipUaHelperListener {
 
       case sip.CallStateEnum.PROGRESS:
         _log('PROGRESS');
+        if (call.peerConnection != null) {
+          final pc = call.peerConnection!;
+          Future(() async {
+            try {
+              final localSdp = await pc.getLocalDescription();
+              final remoteSdp = await pc.getRemoteDescription();
+              _log('PROGRESS: signalingState=${pc.signalingState} local=${localSdp?.type ?? '-'} remote=${remoteSdp?.type ?? '-'}');
+              if (remoteSdp?.sdp != null) {
+                final remoteVideoLines = remoteSdp!.sdp!.split('\r\n').where((l) =>
+                    l.startsWith('m=video') || l.startsWith('a=rtpmap:') || l.startsWith('a=fmtp:'));
+                _log('PROGRESS remote video SDP:\n${remoteVideoLines.join("\n")}');
+              }
+            } catch (_) {}
+          });
+        }
         break;
 
       case sip.CallStateEnum.CONFIRMED:
         _log('CONFIRMED');
         _callState = CallState.onCall;
         _emit(SipEvent.callAnswered);
-        // onCallStarted is idempotent — safe to call again even if already called at RINGING
         CallLifecycleService().onCallStarted();
-        // After call confirmed, prefer H264 over VP8 on sender side
+        if (call.peerConnection != null) {
+          final pc = call.peerConnection!;
+          Future(() async {
+            try {
+              final localSdp = await pc.getLocalDescription();
+              final remoteSdp = await pc.getRemoteDescription();
+              _log('CONFIRMED: signalingState=${pc.signalingState} local=${localSdp?.type ?? '-'} remote=${remoteSdp?.type ?? '-'}');
+              if (localSdp?.sdp != null) {
+                final localVideoLines = localSdp!.sdp!.split('\r\n').where((l) =>
+                    l.startsWith('m=video') || l.startsWith('a=rtpmap:') || l.startsWith('a=fmtp:'));
+                _log('CONFIRMED local video SDP:\n${localVideoLines.join("\n")}');
+              }
+              if (remoteSdp?.sdp != null) {
+                final remoteVideoLines = remoteSdp!.sdp!.split('\r\n').where((l) =>
+                    l.startsWith('m=video') || l.startsWith('a=rtpmap:') || l.startsWith('a=fmtp:'));
+                _log('CONFIRMED remote video SDP:\n${remoteVideoLines.join("\n")}');
+              }
+            } catch (_) {}
+          });
+        }
         _preferH264OnSender(call);
-        // Munge local SDP to force H264 Constrained Baseline profile for Grandstream
         _mungeLocalSdpForH264(call);
         break;
 
@@ -292,6 +322,15 @@ class SipSocketService implements sip.SipUaHelperListener {
               track.enabled = true;
               _log('Enabled local video track: ${track.id}');
             }
+          }
+          // Schedule H264 codec preference BEFORE offer is created.
+          // sip_ua adds tracks to PC synchronously after emitting STREAM,
+          // then asynchronously creates the offer. A microtask runs between
+          // addTrack and createOffer, allowing us to set codec preferences
+          // so the initial SDP offer uses H264-only for Grandstream compat.
+          if (_isVideo && _activeCall != null) {
+            final c = _activeCall!;
+            Future.microtask(() => _preferH264OnSender(c));
           }
           _eventController.add({'event': 'streamUpdated'});
         }
@@ -342,17 +381,23 @@ class SipSocketService implements sip.SipUaHelperListener {
       final pc = call.peerConnection;
       if (pc == null) return;
       final transceivers = await pc.getTransceivers();
+      _log('_preferH264OnSender: ${transceivers.length} transceivers found');
       for (final transceiver in transceivers) {
         if (transceiver.sender.track?.kind != 'video') continue;
-        // Get available codecs and keep ONLY H264
         final capabilities = await getRtpSenderCapabilities('video');
         final codecs = capabilities?.codecs ?? [];
-        if (codecs.isEmpty) continue;
-        // Filter: H264 ONLY, remove all other codecs (VP8, VP9, AV1, etc.)
+        if (codecs.isEmpty) {
+          _log('_preferH264OnSender: no video codec capabilities available');
+          continue;
+        }
+        final availCodecs = codecs.map((c) => '${c.mimeType}/${c.clockRate}').join(', ');
+        _log('_preferH264OnSender: available codecs: $availCodecs');
         final h264Only = codecs.where((c) => (c.mimeType ?? '').toLowerCase().contains('h264')).toList();
         if (h264Only.isNotEmpty) {
           await transceiver.setCodecPreferences(h264Only);
           _log('Set H264 ONLY in codec preferences for video transceiver (removed ${codecs.length - h264Only.length} other codecs)');
+        } else {
+          _log('_preferH264OnSender: WARNING - H264 not found in sender capabilities!');
         }
       }
     } catch (e) {
@@ -365,12 +410,52 @@ class SipSocketService implements sip.SipUaHelperListener {
   /// Also removes all non-H264 video codecs from SDP
   String _mungeSdpForH264(String sdp) {
     final lines = sdp.split('\r\n');
-    final munged = <String>[];
+
+    // First pass: identify H264 payload types in the video section
+    final h264Payloads = <String>{};
     bool inVideoSection = false;
-    for (var line in lines) {
-      // Track video section
+    for (final line in lines) {
       if (line.startsWith('m=video')) {
         inVideoSection = true;
+      } else if (line.startsWith('m=') && !line.startsWith('m=video')) {
+        inVideoSection = false;
+      }
+      if (inVideoSection && line.startsWith('a=rtpmap:')) {
+        final ptEnd = line.indexOf(' ', 9);
+        if (ptEnd > 9) {
+          final pt = line.substring(9, ptEnd);
+          if (line.toLowerCase().contains('h264')) {
+            h264Payloads.add(pt);
+          }
+        }
+      }
+    }
+
+    // If no H264 found, return original SDP unchanged
+    if (h264Payloads.isEmpty) {
+      _log('_mungeSdpForH264: No H264 codecs found in SDP, returning unchanged');
+      return sdp;
+    }
+
+    _log('_mungeSdpForH264: H264 payload types found: ${h264Payloads.join(', ')}');
+
+    // Second pass: munge the SDP
+    final munged = <String>[];
+    inVideoSection = false;
+    for (var line in lines) {
+      if (line.startsWith('m=video')) {
+        inVideoSection = true;
+        // Remove non-H264 payload types from m=video line
+        final parts = line.split(' ');
+        if (parts.length >= 4) {
+          final originalPts = parts.sublist(3);
+          final pts = originalPts.where((pt) => h264Payloads.contains(pt)).toList();
+          if (pts.isNotEmpty && pts.length != originalPts.length) {
+            final newMline = '${parts.sublist(0, 3).join(' ')} ${pts.join(' ')}';
+            _log('_mungeSdpForH264: m=video updated\n  before: $line\n  after : $newMline');
+            line = newMline;
+          }
+        }
       } else if (line.startsWith('m=')) {
         inVideoSection = false;
       }
@@ -387,10 +472,17 @@ class SipSocketService implements sip.SipUaHelperListener {
         continue;
       }
 
+      // Remove rtcp-fb lines for non-H264 payload types
+      if (inVideoSection && line.startsWith('a=rtcp-fb:')) {
+        final fbPayloadMatch = RegExp(r'^a=rtcp-fb:(\d+)').firstMatch(line);
+        if (fbPayloadMatch != null && !h264Payloads.contains(fbPayloadMatch.group(1))) {
+          _log('Removing non-H264 rtcp-fb from SDP: $line');
+          continue;
+        }
+      }
+
       if (line.startsWith('a=fmtp:') && line.toLowerCase().contains('h264')) {
-        // Replace profile-level-id with Constrained Baseline (42E01F)
         line = line.replaceAll(RegExp(r'profile-level-id=[0-9a-fA-F]{6}'), 'profile-level-id=42E01F');
-        // Ensure packetization-mode=1
         if (!line.contains('packetization-mode')) {
           line = '$line;packetization-mode=1';
         } else {
@@ -408,15 +500,37 @@ class SipSocketService implements sip.SipUaHelperListener {
     try {
       final pc = call.peerConnection;
       if (pc == null) return;
+
       final localDesc = await pc.getLocalDescription();
-      if (localDesc == null) return;
+      final remoteDesc = await pc.getRemoteDescription();
+      _log('_mungeLocalSdpForH264: localDesc=${localDesc?.type ?? 'null'}, remoteDesc=${remoteDesc?.type ?? 'null'}');
+
+      if (localDesc == null) {
+        _log('_mungeLocalSdpForH264: localDesc is NULL — cannot munge');
+        return;
+      }
       final originalSdp = localDesc.sdp;
-      if (originalSdp == null) return;
-      // Always attempt munging even if H264 not present (might be VP8 that needs removal)
+      if (originalSdp == null || originalSdp.isEmpty) {
+        _log('_mungeLocalSdpForH264: local SDP is empty');
+        return;
+      }
+
+      // Log video section of original SDP
+      final videoLines = originalSdp.split('\r\n').where((l) =>
+          l.startsWith('m=video') || l.startsWith('a=rtpmap:') || l.startsWith('a=fmtp:'));
+      _log('_mungeLocalSdpForH264: original video SDP lines:\n${videoLines.join("\n")}');
+
       final mungedSdp = _mungeSdpForH264(originalSdp);
       if (mungedSdp != originalSdp) {
+        // Log video section of munged SDP
+        final mungedVideoLines = mungedSdp.split('\r\n').where((l) =>
+            l.startsWith('m=video') || l.startsWith('a=rtpmap:') || l.startsWith('a=fmtp:'));
+        _log('_mungeLocalSdpForH264: munged video SDP lines:\n${mungedVideoLines.join("\n")}');
+
         await pc.setLocalDescription(RTCSessionDescription(mungedSdp, localDesc.type));
         _log('Applied H264 SDP munging to local description');
+      } else {
+        _log('_mungeLocalSdpForH264: SDP unchanged after munging (no H264 found or already only H264)');
       }
     } catch (e) {
       _log('_mungeLocalSdpForH264 failed (non-fatal): $e');
@@ -524,15 +638,7 @@ class SipSocketService implements sip.SipUaHelperListener {
       } else {
         customOptions = {'pcConfig': _pcConfig};
       }
-      final call = await _helper.call(uri, voiceOnly: !video, customOptions: customOptions);
-      // Immediately apply H264 preference and SDP munging to the call before SDP is sent
-      if (video && call != null) {
-        _log('Applying H264 preference to outgoing call before SDP exchange');
-        await _preferH264OnSender(call);
-        // Also munge the offer SDP to remove VP8
-        await Future.delayed(const Duration(milliseconds: 100));
-        await _mungeLocalSdpForH264(call);
-      }
+      await _helper.call(uri, voiceOnly: !video, customOptions: customOptions);
     } catch (e) {
       _log('makeCall failed: $e');
       _callState = CallState.idle;
@@ -574,7 +680,6 @@ class SipSocketService implements sip.SipUaHelperListener {
         }
         _log('answer options keys: ${options.keys.toList()}');
         call.answer(options);
-        // Apply H264-only codec preference and SDP munging immediately after answering
         _preferH264OnSender(call);
         await Future.delayed(const Duration(milliseconds: 500));
         _mungeLocalSdpForH264(call);
