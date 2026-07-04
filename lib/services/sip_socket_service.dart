@@ -378,6 +378,9 @@ class SipSocketService implements sip.SipUaHelperListener {
         _emit(SipEvent.callAnswered);
         CallLifecycleService().onCallStarted();
         _notifyNative('callActive', {'callId': _pendingPushCallId ?? ''});
+        unawaited(Helper.setSpeakerphoneOn(_isVideoCall).then((_) {
+          _isSpeakerOn = _isVideoCall;
+        }).catchError((_) {}));
 
         if (_isVideoCall && _activeCall != null && _activeCall!.direction == sip.Direction.outgoing) {
           _log('Adding video via re-INVITE');

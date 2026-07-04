@@ -691,6 +691,7 @@ class _DialpadScreenState extends State<DialpadScreen>
         final isWide = constraints.maxWidth > 600;
 
         return Stack(
+          fit: StackFit.expand,
           children: [
             _buildVideoView(),
             Positioned.fill(
@@ -708,136 +709,220 @@ class _DialpadScreenState extends State<DialpadScreen>
                         ),
                       ),
                 child: SafeArea(
-                  child: Column(
-                          children: [
-                            if (!isVideo) ...[
-                              const SizedBox(height: 48),
-                              Container(
-                                width: 96,
-                                height: 96,
-                                decoration: BoxDecoration(
-                                  color: cs.primary.withValues(alpha: 0.08),
-                                  shape: BoxShape.circle,
-                                  border: Border.all(
-                                    color: cs.primary.withValues(alpha: 0.2),
-                                    width: 4,
-                                  ),
-                                ),
-                                child: Icon(
-                                  Icons.person,
-                                  size: 48,
-                                  color: cs.primary,
-                                ),
-                              ),
-                              const SizedBox(height: 20),
-                              Text(
-                                _activeCallNumber,
-                                style: TextStyle(
-                                  fontSize: 28,
-                                  fontWeight: FontWeight.w800,
-                                  color: cs.onSurface,
-                                  letterSpacing: 1,
-                                ),
-                              ),
-                            ],
-                            if (isVideo)
-                              const SizedBox(height: 120)
-                            else
-                              const SizedBox(height: 12),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 20, vertical: 8),
-                              decoration: BoxDecoration(
-                                color: isVideo
-                                    ? Colors.white.withValues(alpha: 0.15)
-                                    : cs.secondary.withValues(alpha: 0.1),
-                                borderRadius: BorderRadius.circular(20),
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(
-                                    Icons.access_time_rounded,
-                                    size: 18,
-                                    color: isVideo
-                                        ? Colors.white
-                                        : cs.secondary,
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    _sip.isHeld ? 'On Hold' : _formattedTime,
-                                    style: TextStyle(
-                                      fontSize: 18,
-                                      color: isVideo
-                                          ? Colors.white
-                                          : cs.secondary,
-                                      fontWeight: FontWeight.w700,
-                                      fontFamily: 'monospace',
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            if (_isShowingKeypad) ...[
-                              const SizedBox(height: 16),
-                              Expanded(
-                                child: Padding(
-                                  padding: EdgeInsets.symmetric(
-                                    horizontal: isWide ? 120 : 32,
-                                  ),
-                                  child: Column(
-                                    mainAxisAlignment:
-                                        MainAxisAlignment.center,
-                                    children: [
-                                      _buildDtmfRow(['1', '2', '3']),
-                                      _buildDtmfRow(['4', '5', '6']),
-                                      _buildDtmfRow(['7', '8', '9']),
-                                      _buildDtmfRow(['*', '0', '#']),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ] else
-                              const Spacer(),
-                            Center(
-                              child: _buildCallControls(
-                                  isVideo: isVideo, cs: cs, isLandscape: isLandscape),
-                            ),
-                            const SizedBox(height: 16),
-                            Center(
-                              child: GestureDetector(
-                                onTap: _endCall,
-                                child: Container(
-                                  width: 68,
-                                  height: 68,
-                                  decoration: BoxDecoration(
-                                    color: cs.error,
-                                    shape: BoxShape.circle,
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: cs.error.withValues(alpha: 0.35),
-                                        blurRadius: 16,
-                                        offset: const Offset(0, 6),
-                                      ),
-                                    ],
-                                  ),
-                                  child: const Icon(
-                                    Icons.call_end_rounded,
-                                    color: Colors.white,
-                                    size: 30,
-                                  ),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 32),
-                          ],
-                        ),
+                  child: isVideo
+                      ? _buildVideoCallContent(isLandscape, isWide)
+                      : _buildAudioCallContent(isLandscape, isWide),
                 ),
               ),
             ),
           ],
         );
       },
+    );
+  }
+
+  Widget _buildAudioCallContent(bool isLandscape, bool isWide) {
+    final cs = Theme.of(context).colorScheme;
+    return Column(
+      children: [
+        const Spacer(flex: 2),
+        Container(
+          width: 120,
+          height: 120,
+          decoration: BoxDecoration(
+            color: cs.primary.withValues(alpha: 0.08),
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: cs.primary.withValues(alpha: 0.2),
+              width: 3,
+            ),
+          ),
+          child: Icon(
+            Icons.person,
+            size: 60,
+            color: cs.primary,
+          ),
+        ),
+        const SizedBox(height: 24),
+        Text(
+          _activeCallNumber.isEmpty ? 'Unknown' : _activeCallNumber,
+          style: TextStyle(
+            fontSize: 28,
+            fontWeight: FontWeight.w700,
+            color: cs.onSurface,
+            letterSpacing: 1,
+          ),
+        ),
+        const SizedBox(height: 12),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+          decoration: BoxDecoration(
+            color: cs.secondary.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.access_time_rounded,
+                size: 18,
+                color: cs.secondary,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                _sip.isHeld ? 'On Hold' : _formattedTime,
+                style: TextStyle(
+                  fontSize: 18,
+                  color: cs.secondary,
+                  fontWeight: FontWeight.w700,
+                  fontFamily: 'monospace',
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (_isShowingKeypad) ...[
+          const SizedBox(height: 16),
+          SizedBox(
+            height: 260,
+            child: Padding(
+              padding: EdgeInsets.symmetric(
+                horizontal: isWide ? 120 : 32,
+              ),
+              child: Column(
+                children: [
+                  _buildDtmfRow(['1', '2', '3']),
+                  _buildDtmfRow(['4', '5', '6']),
+                  _buildDtmfRow(['7', '8', '9']),
+                  _buildDtmfRow(['*', '0', '#']),
+                ],
+              ),
+            ),
+          ),
+        ] else
+          const Spacer(flex: 2),
+        Center(
+          child: _buildCallControls(
+              isVideo: false, cs: cs, isLandscape: isLandscape),
+        ),
+        const SizedBox(height: 16),
+        Center(
+          child: GestureDetector(
+            onTap: _endCall,
+            child: Container(
+              width: 72,
+              height: 72,
+              decoration: BoxDecoration(
+                color: cs.error,
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: cs.error.withValues(alpha: 0.4),
+                    blurRadius: 20,
+                    offset: const Offset(0, 6),
+                  ),
+                ],
+              ),
+              child: const Icon(
+                Icons.call_end_rounded,
+                color: Colors.white,
+                size: 32,
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 32),
+      ],
+    );
+  }
+
+  Widget _buildVideoCallContent(bool isLandscape, bool isWide) {
+    final cs = Theme.of(context).colorScheme;
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(top: 60),
+          child: Container(
+            padding: const EdgeInsets.symmetric(
+                horizontal: 20, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  Icons.access_time_rounded,
+                  size: 18,
+                  color: Colors.white,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  _sip.isHeld ? 'On Hold' : _formattedTime,
+                  style: const TextStyle(
+                    fontSize: 18,
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                    fontFamily: 'monospace',
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        const Spacer(),
+        if (_isShowingKeypad) ...[
+          SizedBox(
+            height: 260,
+            child: Padding(
+              padding: EdgeInsets.symmetric(
+                horizontal: isWide ? 120 : 32,
+              ),
+              child: Column(
+                children: [
+                  _buildDtmfRow(['1', '2', '3']),
+                  _buildDtmfRow(['4', '5', '6']),
+                  _buildDtmfRow(['7', '8', '9']),
+                  _buildDtmfRow(['*', '0', '#']),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+        ],
+        Center(
+          child: _buildCallControls(
+              isVideo: true, cs: cs, isLandscape: isLandscape),
+        ),
+        const SizedBox(height: 16),
+        Center(
+          child: GestureDetector(
+            onTap: _endCall,
+            child: Container(
+              width: 72,
+              height: 72,
+              decoration: BoxDecoration(
+                color: cs.error,
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: cs.error.withValues(alpha: 0.35),
+                    blurRadius: 20,
+                    offset: const Offset(0, 6),
+                  ),
+                ],
+              ),
+              child: const Icon(
+                Icons.call_end_rounded,
+                color: Colors.white,
+                size: 32,
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 32),
+      ],
     );
   }
 
@@ -888,42 +973,33 @@ class _DialpadScreenState extends State<DialpadScreen>
             },
             isVideo: isVideo,
           ),
-          _buildControlButton(
-            icon: _sip.isSpeakerOn
-                ? Icons.volume_up_rounded
-                : Icons.volume_down_rounded,
-            label: 'Speaker',
-            isActive: _sip.isSpeakerOn,
-            onPressed: () {
-              _sip.toggleSpeaker(!_sip.isSpeakerOn);
-              setState(() {});
-            },
-            isVideo: isVideo,
-          ),
-          _buildControlButton(
-            icon: _sip.isHeld
-                ? Icons.play_arrow_rounded
-                : Icons.pause_rounded,
-            label: _sip.isHeld ? 'Resume' : 'Hold',
-            isActive: _sip.isHeld,
-            onPressed: () {
-              setState(() {
-                _sip.toggleHold(!_sip.isHeld);
-              });
-            },
-            isVideo: isVideo,
-          ),
-          _buildControlButton(
-            icon: Icons.dialpad_rounded,
-            label: 'Keypad',
-            isActive: _isShowingKeypad,
-            onPressed: () {
-              setState(() {
-                _isShowingKeypad = !_isShowingKeypad;
-              });
-            },
-            isVideo: isVideo,
-          ),
+          if (!isVideo)
+            _buildControlButton(
+              icon: _sip.isSpeakerOn
+                  ? Icons.volume_up_rounded
+                  : Icons.volume_down_rounded,
+              label: 'Speaker',
+              isActive: _sip.isSpeakerOn,
+              onPressed: () {
+                _sip.toggleSpeaker(!_sip.isSpeakerOn);
+                setState(() {});
+              },
+              isVideo: isVideo,
+            ),
+          if (!isVideo)
+            _buildControlButton(
+              icon: _sip.isHeld
+                  ? Icons.play_arrow_rounded
+                  : Icons.pause_rounded,
+              label: _sip.isHeld ? 'Resume' : 'Hold',
+              isActive: _sip.isHeld,
+              onPressed: () {
+                setState(() {
+                  _sip.toggleHold(!_sip.isHeld);
+                });
+              },
+              isVideo: isVideo,
+            ),
         ],
       ),
     );
@@ -937,19 +1013,27 @@ class _DialpadScreenState extends State<DialpadScreen>
     required bool isVideo,
   }) {
     final cs = Theme.of(context).colorScheme;
+    final isOnDark = isVideo;
     final bgColor = isActive
         ? cs.primary
-        : isVideo
+        : isOnDark
             ? Colors.white.withValues(alpha: 0.15)
-            : cs.surface;
+            : Colors.grey.shade100;
     final fgColor = isActive
         ? Colors.white
-        : isVideo
+        : isOnDark
             ? Colors.white
             : cs.onSurface;
-    final shadow = isActive
-        ? cs.primary.withValues(alpha: 0.35)
-        : Colors.black.withValues(alpha: isVideo ? 0 : 0.06);
+    final labelColor = isActive
+        ? cs.primary
+        : isOnDark
+            ? Colors.white.withValues(alpha: 0.7)
+            : cs.onSurface.withValues(alpha: 0.6);
+    final borderColor = isActive
+        ? null
+        : isOnDark
+            ? null
+            : Colors.grey.shade200;
 
     return GestureDetector(
       onTap: onPressed,
@@ -962,12 +1046,22 @@ class _DialpadScreenState extends State<DialpadScreen>
             decoration: BoxDecoration(
               color: bgColor,
               shape: BoxShape.circle,
+              border: borderColor != null
+                  ? Border.all(color: borderColor, width: 1)
+                  : null,
               boxShadow: [
-                BoxShadow(
-                  color: shadow,
-                  blurRadius: 10,
-                  offset: const Offset(0, 4),
-                ),
+                if (!isOnDark)
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.06),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2),
+                  ),
+                if (isActive)
+                  BoxShadow(
+                    color: cs.primary.withValues(alpha: 0.3),
+                    blurRadius: 12,
+                    offset: const Offset(0, 4),
+                  ),
               ],
             ),
             child: Icon(icon, size: 24, color: fgColor),
@@ -977,10 +1071,8 @@ class _DialpadScreenState extends State<DialpadScreen>
             label,
             style: TextStyle(
               fontSize: 11,
-              fontWeight: FontWeight.w600,
-              color: isVideo
-                  ? Colors.white.withValues(alpha: 0.8)
-                  : cs.onSurface.withValues(alpha: 0.6),
+              fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
+              color: labelColor,
             ),
           ),
         ],
@@ -989,15 +1081,12 @@ class _DialpadScreenState extends State<DialpadScreen>
   }
 
   Widget _buildDtmfKey(String key) {
-    final cs = Theme.of(context).colorScheme;
     final isVideo = _sip.isVideoCall;
     return Expanded(
       child: Padding(
         padding: const EdgeInsets.all(4),
         child: Material(
-          color: isVideo
-              ? Colors.white.withValues(alpha: 0.1)
-              : cs.surface,
+          color: Colors.white.withValues(alpha: isVideo ? 0.1 : 0.08),
           borderRadius: BorderRadius.circular(14),
           child: InkWell(
             borderRadius: BorderRadius.circular(14),
@@ -1006,18 +1095,16 @@ class _DialpadScreenState extends State<DialpadScreen>
               alignment: Alignment.center,
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(14),
-                border: isVideo
-                    ? Border.all(
-                        color: Colors.white.withValues(alpha: 0.1))
-                    : Border.all(
-                        color: cs.outline.withValues(alpha: 0.15)),
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.1),
+                ),
               ),
               child: Text(
                 key,
                 style: TextStyle(
                   fontSize: 24,
                   fontWeight: FontWeight.w600,
-                  color: isVideo ? Colors.white : cs.onSurface,
+                  color: Colors.white.withValues(alpha: 0.85),
                 ),
               ),
             ),
