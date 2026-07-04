@@ -33,10 +33,6 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
         RingtoneService().clearNotification();
         Navigator.of(context).pop(false);
       } else if (type == 'callAnswered') {
-        // Call was answered — possibly from the native lock-screen /
-        // ConnectionService / CallKit UI rather than this screen. Dismiss
-        // so whatever shows the active-call UI can take over, without
-        // calling answerCall() again.
         _dismissed = true;
         _onDismiss();
         _sipSubscription?.cancel();
@@ -64,21 +60,13 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
     RingtoneService().stopRinging();
     RingtoneService().clearNotification();
 
-    // IMPORTANT: reject the SIP call BEFORE dismissing the dialog / calling
-    // onDismiss(). rejectCall() synchronously flips SipSocketService's
-    // callState to idle before this await returns. If we popped/dismissed
-    // first, there's a brief window where _isShowingIncomingDialog is
-    // already false in the parent but callState is still `ringing` — if
-    // an app lifecycle event (resume) fires in that window, the parent's
-    // didChangeAppLifecycleState re-shows this exact call. Doing the SIP
-    // reject first closes that race entirely.
     await _sip.rejectCall();
 
     _onDismiss();
     if (mounted) Navigator.of(context).pop(false);
   }
 
-  Future<void> _accept() async {
+  Future<void> _acceptCall() async {
     _dismissed = true;
     _sipSubscription?.cancel();
     RingtoneService().stopRinging();
@@ -88,10 +76,10 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
       debugPrint("Accept pressed");
       _onDismiss();
       if (mounted) {
-        Navigator.of(context).pop(true);
+        Navigator.of(context).pop('answer');
       }
     } catch (e, st) {
-      debugPrint("answerCall failed: $e");
+      debugPrint("Accept failed: $e");
       debugPrintStack(stackTrace: st);
     }
   }
@@ -175,9 +163,9 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
             ),
             const Spacer(),
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 64),
+              padding: const EdgeInsets.symmetric(horizontal: 32),
               child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: [
                   Column(
                     children: [
@@ -218,7 +206,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
                   Column(
                     children: [
                       GestureDetector(
-                        onTap: _accept,
+                        onTap: _acceptCall,
                         child: Container(
                           width: 68,
                           height: 68,
@@ -242,7 +230,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
                       ),
                       const SizedBox(height: 10),
                       const Text(
-                        'Accept',
+                        'Answer',
                         style: TextStyle(
                           fontSize: 14,
                           fontWeight: FontWeight.w500,

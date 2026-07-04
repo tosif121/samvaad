@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../models/sip_credentials.dart';
 import '../services/sip_socket_service.dart';
 import 'dialpad_screen.dart';
@@ -48,7 +49,12 @@ class _LoginScreenState extends State<LoginScreen> {
     _tryAutoLogin();
   }
 
+  Future<void> _requestPermissions() async {
+    await [Permission.microphone, Permission.camera].request();
+  }
+
   Future<void> _tryAutoLogin() async {
+    await _requestPermissions();
     await _sip.loadCredentials();
     if (_sip.hasCredentials && mounted) {
       setState(() => _connecting = true);
@@ -87,6 +93,7 @@ class _LoginScreenState extends State<LoginScreen> {
       _error = null;
     });
 
+    await _requestPermissions();
     await _sip.saveCredentials(creds);
     unawaited(_sip.connect(creds).then((_) {}));
   }

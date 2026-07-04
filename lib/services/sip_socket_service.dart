@@ -9,6 +9,7 @@ import '../models/sip_credentials.dart';
 import 'remote_audio_stub.dart'
     if (dart.library.html) 'remote_audio_web.dart';
 import 'call_lifecycle_service.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 enum CallState { idle, dialing, ringing, onCall }
 
@@ -21,6 +22,7 @@ enum SipEvent {
   callFailed,
   connectionLost,
   connectionRestored,
+  streamAdded,
 }
 
 class SipSocketService implements sip.SipUaHelperListener {
@@ -42,6 +44,9 @@ class SipSocketService implements sip.SipUaHelperListener {
   bool _isRegistered = false;
   bool _isConnected = false;
   bool _isMuted = false;
+  bool _isVideoCall = false;
+  bool _isLocalVideoMuted = false;
+  dynamic _localStream;
   dynamic _remoteStream;
 
   bool _connecting = false;
@@ -58,8 +63,7 @@ class SipSocketService implements sip.SipUaHelperListener {
   // to the SIP call once it confirms, and to route native answer/reject/
   // end actions back into the SIP session.
   String? _pendingPushCallId;
-  String? _pendingPushCallerNumber;
-
+  
   SipCredentials? _credentials;
 
   final _eventController = StreamController<Map<String, dynamic>>.broadcast();
@@ -72,6 +76,9 @@ class SipSocketService implements sip.SipUaHelperListener {
   String get incomingNumber => _incomingNumber;
   bool get isRegistered => _isRegistered;
   bool get isConnected => _isConnected;
+  bool get isVideoCall => _isVideoCall;
+  bool get isLocalVideoMuted => _isLocalVideoMuted;
+  dynamic get localStream => _localStream;
   String? get activeCallId => _activeCall?.id;
 
   SipSocketService._internal() {
@@ -217,7 +224,6 @@ class SipSocketService implements sip.SipUaHelperListener {
     String? callerNumber,
   }) async {
     _pendingPushCallId = callId.isNotEmpty ? callId : null;
-    _pendingPushCallerNumber = callerNumber;
 
     if (_isRegistered) {
       _log('fastReconnectAndRegister: already registered, nothing to do');
@@ -345,6 +351,7 @@ class SipSocketService implements sip.SipUaHelperListener {
           _log('INCOMING CALL from: $remoteNumber');
           _incomingNumber = remoteNumber;
           _callState = CallState.ringing;
+          _isVideoCall = call.remote_has_video;
           _emit(SipEvent.incomingCall, data: {'number': _incomingNumber});
 
           // If this call arrived after a push already showed a native
@@ -367,13 +374,46 @@ class SipSocketService implements sip.SipUaHelperListener {
         _emit(SipEvent.callAnswered);
         CallLifecycleService().onCallStarted();
         _notifyNative('callActive', {'callId': _pendingPushCallId ?? ''});
+
+        if (_isVideoCall && _activeCall != null && _activeCall!.direction == sip.Direction.outgoing) {
+          _log('Adding video via re-INVITE');
+          try {
+            final videoOptions = _helper.buildCallOptions(false);
+            videoOptions['mediaConstraints'] = <String, dynamic>{
+              'audio': true,
+              'video': <String, dynamic>{
+                'mandatory': <String, dynamic>{
+                  'minWidth': '640',
+                  'minHeight': '480',
+                  'minFrameRate': '30',
+                },
+                'facingMode': 'user',
+                'optional': <dynamic>[],
+              },
+            };
+            if (videoOptions['rtcOfferConstraints'] is Map) {
+              (videoOptions['rtcOfferConstraints'] as Map)['offerModifiers'] = [_makeH264Modifier()];
+            }
+            if (videoOptions['rtcAnswerConstraints'] is Map) {
+              (videoOptions['rtcAnswerConstraints'] as Map)['offerModifiers'] = [_makeH264Modifier()];
+            }
+            _activeCall!.renegotiate(options: videoOptions, useUpdate: false);
+            _log('re-INVITE sent for video');
+          } catch (e) {
+            _log('re-INVITE failed: $e');
+          }
+        }
         break;
 
       case sip.CallStateEnum.STREAM:
+        if (state.originator == sip.Originator.local && state.stream != null) {
+          _localStream = state.stream;
+        }
         if (state.originator == sip.Originator.remote && state.stream != null) {
           _remoteStream = state.stream;
           _playRemoteAudio(state.stream!);
         }
+        _emit(SipEvent.streamAdded);
         break;
 
       case sip.CallStateEnum.FAILED:
@@ -410,8 +450,7 @@ class SipSocketService implements sip.SipUaHelperListener {
 
   @override
   void onNewReinvite(sip.ReInvite reinvite) {
-    // Re-INVITEs (e.g. hold/resume from the remote party) are not
-    // currently supported; intentionally unhandled.
+    _log('Re-INVITE received — auto-handled by sip_ua');
   }
 
   // ---------------------------------------------------------------------
@@ -446,7 +485,6 @@ class SipSocketService implements sip.SipUaHelperListener {
     _remoteStream = null;
     _activeCall = null;
     _pendingPushCallId = null;
-    _pendingPushCallerNumber = null;
     removeRemoteAudio();
   }
 
@@ -474,7 +512,9 @@ class SipSocketService implements sip.SipUaHelperListener {
     _finishCall();
   }
 
-  Future<void> answerCall() async {
+  set isVideoCall(bool value) => _isVideoCall = value;
+
+  Future<void> answerCall({bool? isVideo}) async {
     final call = _activeCall;
     if (call == null) {
       _log('answerCall called with no active call — ignoring');
@@ -484,21 +524,19 @@ class SipSocketService implements sip.SipUaHelperListener {
       _log('Already answering or on call — skipping duplicate answer. state: ${call.state}');
       return;
     }
-    
+
+    if (isVideo != null) _isVideoCall = isVideo;
+
     _isAnswering = true;
     _log('Answering SIP call (Attempt started) - Call ID: ${call.id}');
     
     try {
-      final mediaConstraints = <String, dynamic>{
-        'audio': true,
-        'video': false,
-      };
+      final options = _helper.buildCallOptions(!_isVideoCall);
 
-      _log('Before call.answer() - constraints: $mediaConstraints');
-      call.answer({
-        'mediaConstraints': mediaConstraints,
-      });
+      _log('Before call.answer() - options: $options');
+      call.answer(options);
       _log('After call.answer() - success');
+      _isAnswering = false;
     } catch (e) {
       _log('answerCall failed: $e');
       _emit(SipEvent.callFailed, data: {'reason': 'answer_failed'});
@@ -517,12 +555,223 @@ class SipSocketService implements sip.SipUaHelperListener {
     _log('Making outgoing call to: $number');
     _callState = CallState.dialing;
     _incomingNumber = number;
+    _isVideoCall = false;
     try {
       await _helper.call(number, voiceOnly: true);
     } catch (e) {
       _log('makeCall failed: $e');
       _finishCall(emitFailedReason: e.toString());
     }
+  }
+
+  
+  Future<void> makeVideoCall(String number) async {
+    if (!_isRegistered) {
+      _log('Cannot call — not registered');
+      _emit(SipEvent.callFailed, data: {'reason': 'not_registered'});
+      return;
+    }
+    _log('Making outgoing video call to: $number');
+    _callState = CallState.dialing;
+    _incomingNumber = number;
+    _isVideoCall = true;
+    try {
+      await _helper.call(number, voiceOnly: false, customOptions: <String, dynamic>{
+        'rtcOfferConstraints': <String, dynamic>{
+          'mandatory': <String, dynamic>{
+            'OfferToReceiveAudio': true,
+            'OfferToReceiveVideo': true,
+          },
+          'offerModifiers': [_makeH264Modifier()],
+        },
+      });
+    } catch (e) {
+      _log('makeVideoCall failed: $e');
+      _finishCall(emitFailedReason: e.toString());
+    }
+  }
+
+  void toggleVideo(bool hide) {
+    if (_activeCall == null) return;
+    try {
+      if (hide) {
+        _activeCall!.mute(false, true);
+      } else {
+        _activeCall!.unmute(false, true);
+      }
+      _isLocalVideoMuted = hide;
+    } catch (e) {
+      _log('Exception during video toggle: $e');
+    }
+  }
+
+  Future<void> switchCamera() async {
+    final stream = _localStream as MediaStream?;
+    if (stream == null) return;
+    
+    final videoTracks = stream.getVideoTracks();
+    if (videoTracks.isNotEmpty) {
+      final track = videoTracks.first;
+      try {
+        await Helper.switchCamera(track);
+      } catch (e) {
+        _log('Failed to switch camera: $e');
+      }
+    }
+  }
+
+  int _randomSsrc() => DateTime.now().microsecondsSinceEpoch & 0x7FFFFFFF;
+
+  String _mungeSdpForH264(String sdp) {
+    if (!sdp.contains('m=video')) return sdp;
+
+    // Safely split by lines handling both \r\n and \n to avoid truncation issues
+    final lines = sdp.replaceAll('\r\n', '\n').split('\n');
+    final videoStart = lines.indexWhere((l) => l.startsWith('m=video'));
+    if (videoStart == -1) return sdp;
+
+    final videoLine = lines[videoStart];
+    final parts = videoLine.split(' ');
+    if (parts.length < 4) return sdp;
+
+    final allPts = parts.skip(3).toList();
+
+    // Collect rtpmap info to identify codec types
+    final Map<String, String> ptCodec = {};
+    for (int i = videoStart; i < lines.length; i++) {
+      final l = lines[i];
+      if (l.startsWith('m=') && i > videoStart) break;
+      final m = RegExp(r'^a=rtpmap:(\d+) (\S+)').firstMatch(l);
+      if (m != null) ptCodec[m.group(1)!] = m.group(2)!;
+    }
+
+    final h264Pts = ptCodec.entries
+        .where((e) => e.value.toLowerCase().startsWith('h264'))
+        .map((e) => e.key)
+        .toSet();
+    final rtxForH264 = ptCodec.entries
+        .where((e) => e.value.toLowerCase().startsWith('rtx'))
+        .where((e) {
+      final aptM = RegExp(r'^a=fmtp:(\d+) apt=(\d+)');
+      for (int i = videoStart; i < lines.length; i++) {
+        final l = lines[i];
+        if (l.startsWith('m=') && i > videoStart) break;
+        final m = aptM.firstMatch(l);
+        if (m != null && m.group(1) == e.key && h264Pts.contains(m.group(2))) {
+          return true;
+        }
+      }
+      return false;
+    }).map((e) => e.key).toSet();
+
+    final keepPts = {...h264Pts, ...rtxForH264};
+    final newPts = allPts.where((pt) => keepPts.contains(pt)).toList();
+
+    // Fallback if no H264 codecs found rather than stripping video completely
+    if (newPts.isEmpty) {
+      _log('WARNING: No H264 codecs found in SDP. Falling back to original SDP.');
+      return sdp;
+    }
+
+    lines[videoStart] = '${parts[0]} ${parts[1]} ${parts[2]} ${newPts.join(" ")}';
+
+    // Find the end of the video section first to bound the backwards loop safely
+    int videoEnd = lines.length;
+    for (int i = videoStart + 1; i < lines.length; i++) {
+      if (lines[i].startsWith('m=')) {
+        videoEnd = i;
+        break;
+      }
+    }
+
+    // Process only within the bounds of the m=video section
+    for (int i = videoEnd - 1; i > videoStart; i--) {
+      final l = lines[i];
+      if (l.startsWith('a=rtpmap:') || l.startsWith('a=fmtp:') || l.startsWith('a=rtcp-fb:')) {
+        final m = RegExp(r'^a=[a-zA-Z0-9-]+:(\d+)').firstMatch(l);
+        if (m != null) {
+          final pt = m.group(1)!;
+          if (!keepPts.contains(pt)) {
+            lines.removeAt(i);
+          } else if (l.startsWith('a=fmtp:') && h264Pts.contains(pt)) {
+            lines[i] = l.replaceAllMapped(
+              RegExp(r'profile-level-id=[0-9a-fA-F]+'),
+              (_) => 'profile-level-id=42e01f',
+            );
+          }
+        }
+      }
+    }
+
+    return lines.join('\r\n');
+  }
+
+  String _injectVideoToSdp(String sdp) {
+    final lines = sdp.replaceAll('\r\n', '\n').split('\n');
+    final audioIdx = lines.indexWhere((l) => l.startsWith('m=audio'));
+    if (audioIdx == -1) return sdp;
+
+    int audioEnd = lines.length;
+    for (int i = audioIdx + 1; i < lines.length; i++) {
+      if (lines[i].startsWith('m=')) {
+        audioEnd = i;
+        break;
+      }
+    }
+
+    final videoLines = <String>[
+      'm=video 9 UDP/TLS/RTP/SAVPF 103 104',
+      'c=IN IP4 0.0.0.0',
+      'b=AS:128',
+      'a=sendrecv',
+      'a=rtpmap:103 H264/90000',
+      'a=rtpmap:104 rtx/90000',
+      'a=fmtp:103 profile-level-id=42e01f;packetization-mode=1',
+      'a=fmtp:104 apt=103',
+      'a=ssrc-group:FID ${_randomSsrc()} ${_randomSsrc()}',
+      'a=ssrc:${_randomSsrc()} cname:samvaad',
+      'a=ssrc:${_randomSsrc()} msid:samvaad_video samvaad_video',
+      'a=ssrc:${_randomSsrc()} mslabel:samvaad_video',
+      'a=ssrc:${_randomSsrc()} label:samvaad_video',
+      'a=ssrc:${_randomSsrc()} cname:samvaad',
+      'a=ssrc:${_randomSsrc()} msid:samvaad_video samvaad_video',
+      'a=ssrc:${_randomSsrc()} mslabel:samvaad_video',
+      'a=ssrc:${_randomSsrc()} label:samvaad_video',
+    ];
+
+    lines.insertAll(audioEnd, videoLines);
+    return lines.join('\r\n');
+  }
+
+  Future<RTCSessionDescription> Function(RTCSessionDescription) _makeH264Modifier() {
+    return (desc) async {
+      var sdp = desc.sdp;
+      var type = desc.type ?? 'offer'; // Ensure type is never null!
+
+      if (sdp == null || sdp.isEmpty) {
+        _log('ERROR: Modifier received null/empty SDP. Returning unmodified.');
+        return RTCSessionDescription(sdp, type);
+      }
+
+      if (type == 'answer' && !sdp.contains('m=video')) {
+        _log('Injected m=video into answer (Asterisk stripped it)');
+        sdp = _injectVideoToSdp(sdp);
+      }
+      
+      final munged = _mungeSdpForH264(sdp);
+      
+      // Strict Verification Check!
+      if (munged.isEmpty || !munged.contains('m=video')) {
+        _log('ERROR: Munged SDP is empty or lost m=video! Falling back to original SDP.');
+        return RTCSessionDescription(sdp, type);
+      }
+
+      _log('H264 munge (before setLocalDescription): orig(${sdp.length})→munged(${munged.length}) '
+           'has_m=video=${munged.contains("m=video")} has_H264=${munged.contains("H264")} type=$type');
+      
+      // Properly reconstruct the RTCSessionDescription using the validated 'type'
+      return RTCSessionDescription(munged, type);
+    };
   }
 
   Future<void> rejectCall() async {

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'incoming_call_screen.dart';
 import 'login_screen.dart';
 import '../services/sip_socket_service.dart';
@@ -18,6 +19,8 @@ class _DialpadScreenState extends State<DialpadScreen>
   final _sip = SipSocketService();
   StreamSubscription? _sipSubscription;
   final _phoneController = TextEditingController();
+  final _localRenderer = RTCVideoRenderer();
+  final _remoteRenderer = RTCVideoRenderer();
   final _phoneFocusNode = FocusNode();
   bool _isShowingIncomingDialog = false;
   bool _isOnCall = false;
@@ -32,10 +35,16 @@ class _DialpadScreenState extends State<DialpadScreen>
   String? _lastHandledNumber;
   DateTime? _lastHandledAt;
 
+  Future<void> _initRenderers() async {
+    await _localRenderer.initialize();
+    await _remoteRenderer.initialize();
+  }
+
   @override
   void initState() {
     debugPrint('[SCREEN] DialpadScreen ACTIVE');
     super.initState();
+    _initRenderers();
     WidgetsBinding.instance.addObserver(this);
     _initSip();
     _phoneFocusNode.addListener(() {
@@ -70,15 +79,20 @@ class _DialpadScreenState extends State<DialpadScreen>
 
 
 
-  Future<bool> _requestMicrophonePermission() async {
-    final micStatus = await Permission.microphone.request();
-    final camStatus = await Permission.camera.request();
+  Future<bool> _requestPermissions({required bool isVideo}) async {
+    final statuses = await [Permission.microphone, Permission.camera].request();
+    final micStatus = statuses[Permission.microphone]!;
+    final camStatus = statuses[Permission.camera]!;
+    
     debugPrint('[PERMISSION] mic: ${micStatus.isGranted}, cam: ${camStatus.isGranted}');
+    if (isVideo && !camStatus.isGranted) return false;
     return micStatus.isGranted;
   }
 
   @override
   void dispose() {
+    _localRenderer.dispose();
+    _remoteRenderer.dispose();
     WidgetsBinding.instance.removeObserver(this);
     _sipSubscription?.cancel();
     _callTimer?.cancel();
@@ -131,6 +145,19 @@ class _DialpadScreenState extends State<DialpadScreen>
           RingtoneService().stopRinging();
           _startCallTimer();
           if (mounted) setState(() {});
+          break;
+
+        case 'streamAdded':
+          if (mounted) {
+            setState(() {
+              if (_localRenderer.srcObject != _sip.localStream) {
+                _localRenderer.srcObject = _sip.localStream as MediaStream?;
+              }
+              if (_remoteRenderer.srcObject != _sip.remoteStream) {
+                _remoteRenderer.srcObject = _sip.remoteStream as MediaStream?;
+              }
+            });
+          }
           break;
 
         case 'callEnded':
@@ -202,7 +229,7 @@ class _DialpadScreenState extends State<DialpadScreen>
     RingtoneService().clearNotification();
 
     if (!mounted) return;
-    final result = await showGeneralDialog<bool>(
+    final result = await showGeneralDialog<dynamic>(
       context: context,
       barrierDismissible: false,
       barrierColor: Colors.transparent,
@@ -219,7 +246,7 @@ class _DialpadScreenState extends State<DialpadScreen>
     _lastHandledNumber = number;
     _lastHandledAt = DateTime.now();
 
-    if (result == true) {
+    if (result == 'answer') {
       if (!_sip.isRegistered) {
         int waitCount = 0;
         while (!_sip.isRegistered && mounted) {
@@ -231,15 +258,23 @@ class _DialpadScreenState extends State<DialpadScreen>
       if (!mounted) return;
       RingtoneService().clearNotification();
       _activeCallNumber = number;
-      if (!await _requestMicrophonePermission()) {
+      if (!await _requestPermissions(isVideo: false)) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Microphone permission is required to answer calls')),
+            const SnackBar(content: Text('Permissions are required to answer calls')),
           );
         }
         return;
       }
       await _sip.answerCall();
+      _isOnCall = true;
+      _startCallTimer();
+      if (mounted) setState(() {});
+    } else if (result == true) {
+      // call was already answered (via callAnswered event)
+      RingtoneService().clearNotification();
+      _isOnCall = true;
+      _startCallTimer();
       if (mounted) setState(() {});
     } else {
       RingtoneService().clearNotification();
@@ -267,17 +302,36 @@ class _DialpadScreenState extends State<DialpadScreen>
   Future<void> _onCallPressed() async {
     final number = _phoneController.text.trim();
     if (number.isEmpty) return;
-    if (!await _requestMicrophonePermission()) {
+    if (!await _requestPermissions(isVideo: false)) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Microphone permission is required to make calls')),
+          const SnackBar(content: Text('Permissions are required to make calls')),
         );
       }
       return;
     }
     _activeCallNumber = number;
+    _isOnCall = true;
     _phoneController.clear();
     _sip.makeCall(number);
+    setState(() {});
+  }
+
+  Future<void> _onVideoCallPressed() async {
+    final number = _phoneController.text.trim();
+    if (number.isEmpty) return;
+    if (!await _requestPermissions(isVideo: true)) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Permissions are required to make video calls')),
+        );
+      }
+      return;
+    }
+    _activeCallNumber = number;
+    _isOnCall = true;
+    _phoneController.clear();
+    _sip.makeVideoCall(number);
     setState(() {});
   }
 
@@ -395,24 +449,49 @@ class _DialpadScreenState extends State<DialpadScreen>
           padding: const EdgeInsets.only(bottom: 24),
           child: Column(
             children: [
-              GestureDetector(
-                onTap: _onCallPressed,
-                child: Container(
-                  width: 64,
-                  height: 64,
-                  decoration: BoxDecoration(
-                    color: Colors.green,
-                    shape: BoxShape.circle,
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.green.withValues(alpha: 0.4),
-                        blurRadius: 16,
-                        offset: const Offset(0, 8),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  GestureDetector(
+                    onTap: _onCallPressed,
+                    child: Container(
+                      width: 64,
+                      height: 64,
+                      decoration: BoxDecoration(
+                        color: Colors.green,
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.green.withValues(alpha: 0.4),
+                            blurRadius: 16,
+                            offset: const Offset(0, 8),
+                          ),
+                        ],
                       ),
-                    ],
+                      child: const Icon(Icons.call, color: Colors.white, size: 32),
+                    ),
                   ),
-                  child: const Icon(Icons.call, color: Colors.white, size: 32),
-                ),
+                  const SizedBox(width: 32),
+                  GestureDetector(
+                    onTap: _onVideoCallPressed,
+                    child: Container(
+                      width: 64,
+                      height: 64,
+                      decoration: BoxDecoration(
+                        color: Colors.blue,
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.blue.withValues(alpha: 0.4),
+                            blurRadius: 16,
+                            offset: const Offset(0, 8),
+                          ),
+                        ],
+                      ),
+                      child: const Icon(Icons.videocam, color: Colors.white, size: 32),
+                    ),
+                  ),
+                ],
               ),
               const SizedBox(height: 4),
             ],
@@ -446,97 +525,166 @@ class _DialpadScreenState extends State<DialpadScreen>
     );
   }
 
-  Widget _buildOnCallUI() {
-    return Column(
+  Widget _buildVideoView() {
+    if (!_sip.isVideoCall) return const SizedBox.shrink();
+    return Stack(
       children: [
-        const SizedBox(height: 48),
-        Container(
-          width: 80,
-          height: 80,
-          decoration: BoxDecoration(
-            color: const Color(0xFF4299EB).withValues(alpha: 0.12),
-            shape: BoxShape.circle,
-            border: Border.all(
-              color: const Color(0xFF4299EB).withValues(alpha: 0.4),
-              width: 3,
-            ),
-          ),
-          child: const Icon(
-            Icons.person,
-            size: 42,
-            color: Color(0xFF4299EB),
-          ),
-        ),
-        const SizedBox(height: 16),
-        Text(
-          _activeCallNumber,
-          style: const TextStyle(
-            fontSize: 22,
-            fontWeight: FontWeight.bold,
-            color: Color(0xFF1a1a1a),
-            letterSpacing: 1,
-          ),
-        ),
-        const SizedBox(height: 12),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-          decoration: BoxDecoration(
-            color: Colors.green.withValues(alpha: 0.1),
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.access_time, size: 16, color: Colors.green),
-              const SizedBox(width: 6),
-              Text(
-                _formattedTime,
-                style: const TextStyle(
-                  fontSize: 16,
-                  color: Colors.green,
-                  fontWeight: FontWeight.w600,
-                  fontFamily: 'monospace',
-                ),
-              ),
-            ],
-          ),
-        ),
-        const Spacer(),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 64),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: [
-              _buildControlButton(
-                icon: _sip.isMuted ? Icons.mic_off : Icons.mic,
-                label: _sip.isMuted ? 'Unmute' : 'Mute',
-                isActive: _sip.isMuted,
-                onPressed: () => _sip.mute(!_sip.isMuted),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 24),
-        GestureDetector(
-          onTap: _endCall,
+        Positioned.fill(
           child: Container(
-            width: 60,
-            height: 60,
-            decoration: BoxDecoration(
-              color: Colors.redAccent,
-              shape: BoxShape.circle,
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.redAccent.withValues(alpha: 0.4),
-                  blurRadius: 16,
-                  offset: const Offset(0, 8),
-                ),
-              ],
+            color: Colors.black,
+            child: RTCVideoView(
+              _remoteRenderer,
+              objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
             ),
-            child: const Icon(Icons.call_end, color: Colors.white, size: 32),
           ),
         ),
-        const SizedBox(height: 32),
+        if (!_sip.isLocalVideoMuted)
+          Positioned(
+            right: 20,
+            top: 20,
+            width: 120,
+            height: 160,
+            child: Container(
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.white24, width: 2),
+                borderRadius: BorderRadius.circular(12),
+                color: Colors.black54,
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: RTCVideoView(
+                  _localRenderer,
+                  mirror: true,
+                  objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildOnCallUI() {
+    return Stack(
+      children: [
+        _buildVideoView(),
+        Column(
+          children: [
+            if (!_sip.isVideoCall) ...[
+              const SizedBox(height: 48),
+              Container(
+                width: 80,
+                height: 80,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF4299EB).withValues(alpha: 0.12),
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: const Color(0xFF4299EB).withValues(alpha: 0.4),
+                    width: 3,
+                  ),
+                ),
+                child: const Icon(
+                  Icons.person,
+                  size: 42,
+                  color: Color(0xFF4299EB),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                _activeCallNumber,
+                style: const TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF1a1a1a),
+                  letterSpacing: 1,
+                ),
+              ),
+            ],
+            if (_sip.isVideoCall) const SizedBox(height: 48),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+              decoration: BoxDecoration(
+                color: _sip.isVideoCall ? Colors.black54 : Colors.green.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.access_time, size: 16, color: _sip.isVideoCall ? Colors.white : Colors.green),
+                  const SizedBox(width: 6),
+                  Text(
+                    _formattedTime,
+                    style: TextStyle(
+                      fontSize: 16,
+                      color: _sip.isVideoCall ? Colors.white : Colors.green,
+                      fontWeight: FontWeight.w600,
+                      fontFamily: 'monospace',
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Spacer(),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  if (_sip.isVideoCall) ...[
+                    _buildControlButton(
+                      icon: Icons.switch_camera,
+                      label: 'Flip',
+                      isActive: false,
+                      onPressed: () => _sip.switchCamera(),
+                    ),
+                    _buildControlButton(
+                      icon: _sip.isLocalVideoMuted ? Icons.videocam_off : Icons.videocam,
+                      label: _sip.isLocalVideoMuted ? 'Show Video' : 'Hide Video',
+                      isActive: _sip.isLocalVideoMuted,
+                      onPressed: () {
+                        setState(() {
+                          _sip.toggleVideo(!_sip.isLocalVideoMuted);
+                        });
+                      },
+                    ),
+                  ],
+                  _buildControlButton(
+                    icon: _sip.isMuted ? Icons.mic_off : Icons.mic,
+                    label: _sip.isMuted ? 'Unmute' : 'Mute',
+                    isActive: _sip.isMuted,
+                    onPressed: () {
+                      setState(() {
+                        _sip.mute(!_sip.isMuted);
+                      });
+                    },
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 24),
+            GestureDetector(
+              onTap: _endCall,
+              child: Container(
+                width: 60,
+                height: 60,
+                decoration: BoxDecoration(
+                  color: Colors.redAccent,
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.redAccent.withValues(alpha: 0.4),
+                      blurRadius: 16,
+                      offset: const Offset(0, 8),
+                    ),
+                  ],
+                ),
+                child: const Icon(Icons.call_end, color: Colors.white, size: 32),
+              ),
+            ),
+            const SizedBox(height: 32),
+          ],
+        ),
       ],
     );
   }
