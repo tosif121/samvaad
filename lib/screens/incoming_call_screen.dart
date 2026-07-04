@@ -13,15 +13,26 @@ class IncomingCallScreen extends StatefulWidget {
   State<IncomingCallScreen> createState() => _IncomingCallScreenState();
 }
 
-class _IncomingCallScreenState extends State<IncomingCallScreen> {
+class _IncomingCallScreenState extends State<IncomingCallScreen>
+    with SingleTickerProviderStateMixin {
   final _sip = SipSocketService();
   StreamSubscription? _sipSubscription;
   bool _dismissed = false;
+  late AnimationController _pulseController;
+  late Animation<double> _pulseAnim;
 
   @override
   void initState() {
     debugPrint('[SCREEN] IncomingCallScreen ACTIVE');
     super.initState();
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1200),
+    )..repeat(reverse: true);
+    _pulseAnim = Tween<double>(begin: 1.0, end: 1.08).animate(
+      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
+    );
+
     _sipSubscription = _sip.events.listen((event) {
       if (!mounted || _dismissed) return;
       final type = event['event'] as String;
@@ -45,6 +56,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
 
   @override
   void dispose() {
+    _pulseController.dispose();
     _sipSubscription?.cancel();
     RingtoneService().stopRinging();
     super.dispose();
@@ -86,165 +98,140 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: cs.surface,
       body: SafeArea(
         child: Column(
           children: [
             const SizedBox(height: 60),
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
               decoration: BoxDecoration(
-                color: const Color(0xFF4299EB).withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(20),
+                color: cs.primary.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(24),
               ),
-              child: const Text(
+              child: Text(
                 'Incoming Call',
                 style: TextStyle(
-                  fontSize: 14,
-                  color: Color(0xFF4299EB),
-                  fontWeight: FontWeight.w600,
+                  fontSize: 13,
+                  color: cs.primary,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.8,
                 ),
               ),
             ),
-            const SizedBox(height: 40),
-            Stack(
-              alignment: Alignment.center,
-              children: [
-                Container(
-                  width: 160,
-                  height: 160,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: const Color(0xFF4299EB).withValues(alpha: 0.06),
+            const SizedBox(height: 48),
+            AnimatedBuilder(
+              animation: _pulseAnim,
+              builder: (context, child) {
+                return Transform.scale(
+                  scale: _pulseAnim.value,
+                  child: child,
+                );
+              },
+              child: Container(
+                width: 120,
+                height: 120,
+                decoration: BoxDecoration(
+                  color: cs.primary.withValues(alpha: 0.08),
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: cs.primary.withValues(alpha: 0.2),
+                    width: 4,
                   ),
                 ),
-                Container(
-                  width: 130,
-                  height: 130,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: const Color(0xFF4299EB).withValues(alpha: 0.1),
-                  ),
+                child: Icon(
+                  Icons.person,
+                  size: 56,
+                  color: cs.primary,
                 ),
-                Container(
-                  width: 100,
-                  height: 100,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: const Color(0xFF4299EB).withValues(alpha: 0.15),
-                    border: Border.all(
-                      color: const Color(0xFF4299EB),
-                      width: 3,
-                    ),
-                  ),
-                  child: const Icon(
-                    Icons.person,
-                    size: 50,
-                    color: Color(0xFF4299EB),
-                  ),
-                ),
-              ],
+              ),
             ),
-            const SizedBox(height: 36),
+            const SizedBox(height: 32),
             Text(
               widget.phoneNumber,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 28,
-                fontWeight: FontWeight.bold,
-                color: Color(0xFF1a1a1a),
+                fontWeight: FontWeight.w800,
+                color: cs.onSurface,
                 letterSpacing: 1,
               ),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 10),
             Text(
               'is calling you',
-              style: TextStyle(fontSize: 15, color: Colors.grey[500]),
+              style: TextStyle(fontSize: 15, color: cs.onSurface.withValues(alpha: 0.5)),
             ),
             const Spacer(),
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 32),
+              padding: const EdgeInsets.symmetric(horizontal: 48),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: [
-                  Column(
-                    children: [
-                      GestureDetector(
-                        onTap: _decline,
-                        child: Container(
-                          width: 68,
-                          height: 68,
-                          decoration: BoxDecoration(
-                            color: Colors.redAccent,
-                            shape: BoxShape.circle,
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.redAccent.withValues(alpha: 0.4),
-                                blurRadius: 16,
-                                offset: const Offset(0, 8),
-                              ),
-                            ],
-                          ),
-                          child: const Icon(
-                            Icons.call_end,
-                            color: Colors.white,
-                            size: 30,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      const Text(
-                        'Decline',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w500,
-                          color: Colors.redAccent,
-                        ),
-                      ),
-                    ],
+                  _buildActionButton(
+                    context,
+                    icon: Icons.call_end_rounded,
+                    label: 'Decline',
+                    color: cs.error,
+                    onTap: _decline,
                   ),
-                  Column(
-                    children: [
-                      GestureDetector(
-                        onTap: _acceptCall,
-                        child: Container(
-                          width: 68,
-                          height: 68,
-                          decoration: BoxDecoration(
-                            color: Colors.green,
-                            shape: BoxShape.circle,
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.green.withValues(alpha: 0.4),
-                                blurRadius: 16,
-                                offset: const Offset(0, 8),
-                              ),
-                            ],
-                          ),
-                          child: const Icon(
-                            Icons.call,
-                            color: Colors.white,
-                            size: 30,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      const Text(
-                        'Answer',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w500,
-                          color: Colors.green,
-                        ),
-                      ),
-                    ],
+                  _buildActionButton(
+                    context,
+                    icon: Icons.call_rounded,
+                    label: 'Answer',
+                    color: cs.secondary,
+                    onTap: _acceptCall,
                   ),
                 ],
               ),
             ),
-            const SizedBox(height: 72),
+            const SizedBox(height: 64),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildActionButton(
+    BuildContext context, {
+    required IconData icon,
+    required String label,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 72,
+            height: 72,
+            decoration: BoxDecoration(
+              color: color,
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: color.withValues(alpha: 0.35),
+                  blurRadius: 16,
+                  offset: const Offset(0, 6),
+                ),
+              ],
+            ),
+            child: Icon(icon, color: Colors.white, size: 32),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: color,
+            ),
+          ),
+        ],
       ),
     );
   }

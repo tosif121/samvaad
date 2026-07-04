@@ -24,14 +24,12 @@ class _DialpadScreenState extends State<DialpadScreen>
   final _phoneFocusNode = FocusNode();
   bool _isShowingIncomingDialog = false;
   bool _isOnCall = false;
+  bool _isShowingKeypad = false;
   AppLifecycleState _appLifecycleState = AppLifecycleState.resumed;
   String _activeCallNumber = '';
   int _callSeconds = 0;
   Timer? _callTimer;
 
-  // Guards against re-showing the incoming call screen for a call that was
-  // just manually declined/answered, in case a lifecycle resume event
-  // fires before SipSocketService's callState has fully settled.
   String? _lastHandledNumber;
   DateTime? _lastHandledAt;
 
@@ -52,7 +50,6 @@ class _DialpadScreenState extends State<DialpadScreen>
         _phoneFocusNode.unfocus();
       }
     });
-
   }
 
   @override
@@ -77,14 +74,14 @@ class _DialpadScreenState extends State<DialpadScreen>
     }
   }
 
-
-
   Future<bool> _requestPermissions({required bool isVideo}) async {
-    final statuses = await [Permission.microphone, Permission.camera].request();
+    final statuses =
+        await [Permission.microphone, Permission.camera].request();
     final micStatus = statuses[Permission.microphone]!;
     final camStatus = statuses[Permission.camera]!;
-    
-    debugPrint('[PERMISSION] mic: ${micStatus.isGranted}, cam: ${camStatus.isGranted}');
+
+    debugPrint(
+        '[PERMISSION] mic: ${micStatus.isGranted}, cam: ${camStatus.isGranted}');
     if (isVideo && !camStatus.isGranted) return false;
     return micStatus.isGranted;
   }
@@ -151,10 +148,12 @@ class _DialpadScreenState extends State<DialpadScreen>
           if (mounted) {
             setState(() {
               if (_localRenderer.srcObject != _sip.localStream) {
-                _localRenderer.srcObject = _sip.localStream as MediaStream?;
+                _localRenderer.srcObject =
+                    _sip.localStream as MediaStream?;
               }
               if (_remoteRenderer.srcObject != _sip.remoteStream) {
-                _remoteRenderer.srcObject = _sip.remoteStream as MediaStream?;
+                _remoteRenderer.srcObject =
+                    _sip.remoteStream as MediaStream?;
               }
             });
           }
@@ -163,6 +162,7 @@ class _DialpadScreenState extends State<DialpadScreen>
         case 'callEnded':
         case 'callFailed':
           _isOnCall = false;
+          _isShowingKeypad = false;
           _isShowingIncomingDialog = false;
           _lastHandledNumber = _activeCallNumber.isNotEmpty
               ? _activeCallNumber
@@ -212,10 +212,12 @@ class _DialpadScreenState extends State<DialpadScreen>
   Future<void> _showIncomingCall(String number) async {
     final callId = _sip.activeCallId ?? 'unknown_id';
     final callState = _sip.callState.name;
-    debugPrint('[DIALPAD] _showIncomingCall invoked for $number. Call ID: $callId, State: $callState');
+    debugPrint(
+        '[DIALPAD] _showIncomingCall invoked for $number. Call ID: $callId, State: $callState');
 
     if (_isShowingIncomingDialog) {
-      debugPrint('[DIALPAD] _showIncomingCall aborted: _isShowingIncomingDialog is true');
+      debugPrint(
+          '[DIALPAD] _showIncomingCall aborted: _isShowingIncomingDialog is true');
       return;
     }
     if (_isOnCall) {
@@ -261,7 +263,9 @@ class _DialpadScreenState extends State<DialpadScreen>
       if (!await _requestPermissions(isVideo: false)) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Permissions are required to answer calls')),
+            const SnackBar(
+                content:
+                    Text('Permissions are required to answer calls')),
           );
         }
         return;
@@ -271,7 +275,6 @@ class _DialpadScreenState extends State<DialpadScreen>
       _startCallTimer();
       if (mounted) setState(() {});
     } else if (result == true) {
-      // call was already answered (via callAnswered event)
       RingtoneService().clearNotification();
       _isOnCall = true;
       _startCallTimer();
@@ -290,7 +293,8 @@ class _DialpadScreenState extends State<DialpadScreen>
   void _onDeleteTap() {
     if (_phoneController.text.isNotEmpty) {
       _phoneController.text = _phoneController.text.substring(
-        0, _phoneController.text.length - 1,
+        0,
+        _phoneController.text.length - 1,
       );
     }
   }
@@ -305,7 +309,9 @@ class _DialpadScreenState extends State<DialpadScreen>
     if (!await _requestPermissions(isVideo: false)) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Permissions are required to make calls')),
+          const SnackBar(
+              content:
+                  Text('Permissions are required to make calls')),
         );
       }
       return;
@@ -323,7 +329,9 @@ class _DialpadScreenState extends State<DialpadScreen>
     if (!await _requestPermissions(isVideo: true)) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Permissions are required to make video calls')),
+          const SnackBar(
+              content:
+                  Text('Permissions are required to make video calls')),
         );
       }
       return;
@@ -349,15 +357,15 @@ class _DialpadScreenState extends State<DialpadScreen>
         actions: [
           if (!_isOnCall)
             IconButton(
-              icon: const Icon(Icons.logout),
+              icon: const Icon(Icons.logout_rounded),
               onPressed: () async {
                 _sip.disconnect();
                 await _sip.clearCredentials();
-                if (mounted) {
-                  Navigator.of(context).pushReplacement(
-                    MaterialPageRoute(builder: (_) => const LoginScreen()),
-                  );
-                }
+                if (!context.mounted) return;
+                Navigator.of(context).pushReplacement(
+                  MaterialPageRoute(
+                      builder: (_) => const LoginScreen()),
+                );
               },
               tooltip: 'Logout',
             ),
@@ -369,158 +377,263 @@ class _DialpadScreenState extends State<DialpadScreen>
     );
   }
 
-  Widget _buildIdleUI() {
-    return Column(
-      children: [
-        // Status indicator
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(
-                _sip.isRegistered ? Icons.check_circle : Icons.hourglass_empty,
-                size: 14,
-                color: _sip.isRegistered ? Colors.green : Colors.orange,
+  Widget _buildStatusIndicator() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: _sip.isRegistered
+                  ? Theme.of(context).colorScheme.secondary
+                  : Colors.orange,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text(
+            _sip.isRegistered
+                ? 'Ready'
+                : _sip.isConnected
+                    ? 'Registering...'
+                    : 'Connecting...',
+            style: TextStyle(
+              fontSize: 13,
+              color: Theme.of(context)
+                  .colorScheme
+                  .onSurface
+                  .withValues(alpha: 0.5),
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildNumberDisplay() {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 32, vertical: 4),
+      padding:
+          const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+      decoration: BoxDecoration(
+        color: cs.surface,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: cs.outline.withValues(alpha: 0.3)),
+      ),
+      constraints: const BoxConstraints(minHeight: 64),
+      child: TextField(
+        controller: _phoneController,
+        focusNode: _phoneFocusNode,
+        readOnly: true,
+        showCursor: false,
+        textAlign: TextAlign.center,
+        style: TextStyle(
+          fontSize: 32,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 3,
+          color: cs.onSurface,
+        ),
+        decoration: InputDecoration(
+          border: InputBorder.none,
+          enabledBorder: InputBorder.none,
+          focusedBorder: InputBorder.none,
+          filled: false,
+          hintText: 'Enter number',
+          hintStyle: TextStyle(
+            color: cs.onSurface.withValues(alpha: 0.25),
+            fontSize: 20,
+            letterSpacing: 0,
+            fontWeight: FontWeight.w500,
+          ),
+          suffixIcon: GestureDetector(
+            onTap: _onDeleteTap,
+            onLongPress: _onClearTap,
+            child: Container(
+              margin: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: cs.surface,
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: cs.outline.withValues(alpha: 0.3),
+                ),
               ),
-              const SizedBox(width: 6),
-              Text(
-                _sip.isRegistered
-                    ? 'Ready'
-                    : _sip.isConnected
-                        ? 'Registering...'
-                        : 'Connecting...',
-                style: TextStyle(fontSize: 13, color: Colors.grey[500]),
+              child: Icon(
+                Icons.backspace_outlined,
+                size: 20,
+                color: _phoneController.text.isEmpty
+                    ? cs.onSurface.withValues(alpha: 0.15)
+                    : cs.onSurface.withValues(alpha: 0.5),
               ),
-            ],
+            ),
           ),
         ),
+        onChanged: (_) => setState(() {}),
+      ),
+    );
+  }
 
-        // Number display
-        Container(
-          margin: const EdgeInsets.symmetric(horizontal: 32, vertical: 8),
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-          decoration: BoxDecoration(
-            color: Colors.grey[50],
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: TextField(
-            controller: _phoneController,
-            focusNode: _phoneFocusNode,
-            readOnly: true,
-            showCursor: false,
-            textAlign: TextAlign.center,
-            style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w500, letterSpacing: 2),
-            decoration: InputDecoration(
-              border: InputBorder.none,
-              hintText: 'Enter number',
-              hintStyle: const TextStyle(color: Colors.grey, fontSize: 20),
-              suffixIcon: GestureDetector(
-                onTap: _onDeleteTap,
-                onLongPress: _onClearTap,
-                child: Icon(
-                  Icons.backspace_outlined,
-                  color: _phoneController.text.isEmpty ? Colors.grey[300] : Colors.grey[600],
+  Widget _buildDialpadGrid() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 4),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          _buildDialRow(['1', '2', '3']),
+          _buildDialRow(['4', '5', '6']),
+          _buildDialRow(['7', '8', '9']),
+          _buildDialRow(['*', '0', '#']),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDialpadKey(String key) {
+    final cs = Theme.of(context).colorScheme;
+    return Expanded(
+      child: Padding(
+        padding: const EdgeInsets.all(5),
+        child: Material(
+          color: cs.surface,
+          borderRadius: BorderRadius.circular(16),
+          elevation: 0,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(16),
+            onTap: () => _onDialPadTap(key),
+            child: Container(
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                    color: cs.outline.withValues(alpha: 0.15)),
+              ),
+              child: Text(
+                key,
+                style: TextStyle(
+                  fontSize: 26,
+                  fontWeight: FontWeight.w600,
+                  color: cs.onSurface,
                 ),
               ),
             ),
-            onChanged: (_) => setState(() {}),
           ),
         ),
+      ),
+    );
+  }
 
-        // Dialpad grid
-        Expanded(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 48, vertical: 8),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                _buildDialRow(['1', '2', '3']),
-                _buildDialRow(['4', '5', '6']),
-                _buildDialRow(['7', '8', '9']),
-                _buildDialRow(['*', '0', '#']),
-              ],
+  Widget _buildCallButtons() {
+    final cs = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 24, top: 12),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          _buildCallButton(
+            icon: Icons.call_rounded,
+            color: cs.secondary,
+            onTap: _onCallPressed,
+          ),
+          const SizedBox(width: 28),
+          _buildCallButton(
+            icon: Icons.videocam_rounded,
+            color: cs.primary,
+            onTap: _onVideoCallPressed,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCallButton({
+    required IconData icon,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 68,
+        height: 68,
+        decoration: BoxDecoration(
+          color: color,
+          shape: BoxShape.circle,
+          boxShadow: [
+            BoxShadow(
+              color: color.withValues(alpha: 0.35),
+              blurRadius: 16,
+              offset: const Offset(0, 6),
             ),
-          ),
+          ],
         ),
+        child: Icon(icon, color: Colors.white, size: 30),
+      ),
+    );
+  }
 
-        // Call button and status
-        Padding(
-          padding: const EdgeInsets.only(bottom: 24),
-          child: Column(
+  Widget _buildIdleUI() {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isLandscape = constraints.maxWidth > 640;
+        final isTablet = constraints.maxWidth > 900;
+        final dialpadMaxWidth = isTablet ? 440.0 : 380.0;
+
+        if (isLandscape) {
+          return Row(
             children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  GestureDetector(
-                    onTap: _onCallPressed,
-                    child: Container(
-                      width: 64,
-                      height: 64,
-                      decoration: BoxDecoration(
-                        color: Colors.green,
-                        shape: BoxShape.circle,
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.green.withValues(alpha: 0.4),
-                            blurRadius: 16,
-                            offset: const Offset(0, 8),
-                          ),
-                        ],
+              Expanded(
+                flex: 1,
+                child: Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      _buildStatusIndicator(),
+                      const SizedBox(height: 24),
+                      SizedBox(
+                        width: isTablet ? 400 : null,
+                        child: _buildNumberDisplay(),
                       ),
-                      child: const Icon(Icons.call, color: Colors.white, size: 32),
-                    ),
+                      const SizedBox(height: 32),
+                      _buildCallButtons(),
+                    ],
                   ),
-                  const SizedBox(width: 32),
-                  GestureDetector(
-                    onTap: _onVideoCallPressed,
-                    child: Container(
-                      width: 64,
-                      height: 64,
-                      decoration: BoxDecoration(
-                        color: Colors.blue,
-                        shape: BoxShape.circle,
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.blue.withValues(alpha: 0.4),
-                            blurRadius: 16,
-                            offset: const Offset(0, 8),
-                          ),
-                        ],
-                      ),
-                      child: const Icon(Icons.videocam, color: Colors.white, size: 32),
-                    ),
-                  ),
-                ],
+                ),
               ),
-              const SizedBox(height: 4),
+              Expanded(
+                flex: 1,
+                child: Center(
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(maxWidth: dialpadMaxWidth),
+                    child: _buildDialpadGrid(),
+                  ),
+                ),
+              ),
             ],
-          ),
-        ),
-      ],
+          );
+        }
+
+        return Column(
+          children: [
+            _buildStatusIndicator(),
+            _buildNumberDisplay(),
+            Expanded(child: _buildDialpadGrid()),
+            _buildCallButtons(),
+          ],
+        );
+      },
     );
   }
 
   Widget _buildDialRow(List<String> keys) {
     return Expanded(
       child: Row(
-        children: keys.map((key) => Expanded(
-          child: GestureDetector(
-            onTap: () => _onDialPadTap(key),
-            child: Container(
-              margin: const EdgeInsets.all(6),
-              decoration: BoxDecoration(
-                color: Colors.grey[50],
-                shape: BoxShape.circle,
-              ),
-              alignment: Alignment.center,
-              child: Text(
-                key,
-                style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w500),
-              ),
-            ),
-          ),
-        )).toList(),
+        children:
+            keys.map((key) => _buildDialpadKey(key)).toList(),
       ),
     );
   }
@@ -534,28 +647,32 @@ class _DialpadScreenState extends State<DialpadScreen>
             color: Colors.black,
             child: RTCVideoView(
               _remoteRenderer,
-              objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+              objectFit:
+                  RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
             ),
           ),
         ),
         if (!_sip.isLocalVideoMuted)
           Positioned(
-            right: 20,
-            top: 20,
-            width: 120,
-            height: 160,
+            right: 16,
+            top: 48,
+            width: 110,
+            height: 150,
             child: Container(
               decoration: BoxDecoration(
-                border: Border.all(color: Colors.white24, width: 2),
-                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.3),
+                    width: 2),
+                borderRadius: BorderRadius.circular(14),
                 color: Colors.black54,
               ),
               child: ClipRRect(
-                borderRadius: BorderRadius.circular(10),
+                borderRadius: BorderRadius.circular(12),
                 child: RTCVideoView(
                   _localRenderer,
                   mirror: true,
-                  objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                  objectFit:
+                      RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
                 ),
               ),
             ),
@@ -565,127 +682,250 @@ class _DialpadScreenState extends State<DialpadScreen>
   }
 
   Widget _buildOnCallUI() {
-    return Stack(
-      children: [
-        _buildVideoView(),
-        Column(
+    final cs = Theme.of(context).colorScheme;
+    final isVideo = _sip.isVideoCall;
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isLandscape = constraints.maxWidth > constraints.maxHeight;
+        final isWide = constraints.maxWidth > 600;
+
+        return Stack(
           children: [
-            if (!_sip.isVideoCall) ...[
-              const SizedBox(height: 48),
-              Container(
-                width: 80,
-                height: 80,
-                decoration: BoxDecoration(
-                  color: const Color(0xFF4299EB).withValues(alpha: 0.12),
-                  shape: BoxShape.circle,
-                  border: Border.all(
-                    color: const Color(0xFF4299EB).withValues(alpha: 0.4),
-                    width: 3,
-                  ),
-                ),
-                child: const Icon(
-                  Icons.person,
-                  size: 42,
-                  color: Color(0xFF4299EB),
-                ),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                _activeCallNumber,
-                style: const TextStyle(
-                  fontSize: 22,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFF1a1a1a),
-                  letterSpacing: 1,
-                ),
-              ),
-            ],
-            if (_sip.isVideoCall) const SizedBox(height: 48),
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-              decoration: BoxDecoration(
-                color: _sip.isVideoCall ? Colors.black54 : Colors.green.withValues(alpha: 0.1),
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.access_time, size: 16, color: _sip.isVideoCall ? Colors.white : Colors.green),
-                  const SizedBox(width: 6),
-                  Text(
-                    _formattedTime,
-                    style: TextStyle(
-                      fontSize: 16,
-                      color: _sip.isVideoCall ? Colors.white : Colors.green,
-                      fontWeight: FontWeight.w600,
-                      fontFamily: 'monospace',
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const Spacer(),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  if (_sip.isVideoCall) ...[
-                    _buildControlButton(
-                      icon: Icons.switch_camera,
-                      label: 'Flip',
-                      isActive: false,
-                      onPressed: () => _sip.switchCamera(),
-                    ),
-                    _buildControlButton(
-                      icon: _sip.isLocalVideoMuted ? Icons.videocam_off : Icons.videocam,
-                      label: _sip.isLocalVideoMuted ? 'Show Video' : 'Hide Video',
-                      isActive: _sip.isLocalVideoMuted,
-                      onPressed: () {
-                        setState(() {
-                          _sip.toggleVideo(!_sip.isLocalVideoMuted);
-                        });
-                      },
-                    ),
-                  ],
-                  _buildControlButton(
-                    icon: _sip.isMuted ? Icons.mic_off : Icons.mic,
-                    label: _sip.isMuted ? 'Unmute' : 'Mute',
-                    isActive: _sip.isMuted,
-                    onPressed: () {
-                      setState(() {
-                        _sip.mute(!_sip.isMuted);
-                      });
-                    },
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 24),
-            GestureDetector(
-              onTap: _endCall,
+            _buildVideoView(),
+            Positioned.fill(
               child: Container(
-                width: 60,
-                height: 60,
-                decoration: BoxDecoration(
-                  color: Colors.redAccent,
-                  shape: BoxShape.circle,
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.redAccent.withValues(alpha: 0.4),
-                      blurRadius: 16,
-                      offset: const Offset(0, 8),
-                    ),
-                  ],
+                decoration: isVideo
+                    ? const BoxDecoration()
+                    : BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [
+                            cs.surface,
+                            cs.surface.withValues(alpha: 0.95),
+                          ],
+                        ),
+                      ),
+                child: SafeArea(
+                  child: Column(
+                          children: [
+                            if (!isVideo) ...[
+                              const SizedBox(height: 48),
+                              Container(
+                                width: 96,
+                                height: 96,
+                                decoration: BoxDecoration(
+                                  color: cs.primary.withValues(alpha: 0.08),
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: cs.primary.withValues(alpha: 0.2),
+                                    width: 4,
+                                  ),
+                                ),
+                                child: Icon(
+                                  Icons.person,
+                                  size: 48,
+                                  color: cs.primary,
+                                ),
+                              ),
+                              const SizedBox(height: 20),
+                              Text(
+                                _activeCallNumber,
+                                style: TextStyle(
+                                  fontSize: 28,
+                                  fontWeight: FontWeight.w800,
+                                  color: cs.onSurface,
+                                  letterSpacing: 1,
+                                ),
+                              ),
+                            ],
+                            if (isVideo)
+                              const SizedBox(height: 120)
+                            else
+                              const SizedBox(height: 12),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 20, vertical: 8),
+                              decoration: BoxDecoration(
+                                color: isVideo
+                                    ? Colors.white.withValues(alpha: 0.15)
+                                    : cs.secondary.withValues(alpha: 0.1),
+                                borderRadius: BorderRadius.circular(20),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    Icons.access_time_rounded,
+                                    size: 18,
+                                    color: isVideo
+                                        ? Colors.white
+                                        : cs.secondary,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    _sip.isHeld ? 'On Hold' : _formattedTime,
+                                    style: TextStyle(
+                                      fontSize: 18,
+                                      color: isVideo
+                                          ? Colors.white
+                                          : cs.secondary,
+                                      fontWeight: FontWeight.w700,
+                                      fontFamily: 'monospace',
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            if (_isShowingKeypad) ...[
+                              const SizedBox(height: 16),
+                              Expanded(
+                                child: Padding(
+                                  padding: EdgeInsets.symmetric(
+                                    horizontal: isWide ? 120 : 32,
+                                  ),
+                                  child: Column(
+                                    mainAxisAlignment:
+                                        MainAxisAlignment.center,
+                                    children: [
+                                      _buildDtmfRow(['1', '2', '3']),
+                                      _buildDtmfRow(['4', '5', '6']),
+                                      _buildDtmfRow(['7', '8', '9']),
+                                      _buildDtmfRow(['*', '0', '#']),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            ] else
+                              const Spacer(),
+                            Center(
+                              child: _buildCallControls(
+                                  isVideo: isVideo, cs: cs, isLandscape: isLandscape),
+                            ),
+                            const SizedBox(height: 16),
+                            Center(
+                              child: GestureDetector(
+                                onTap: _endCall,
+                                child: Container(
+                                  width: 68,
+                                  height: 68,
+                                  decoration: BoxDecoration(
+                                    color: cs.error,
+                                    shape: BoxShape.circle,
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: cs.error.withValues(alpha: 0.35),
+                                        blurRadius: 16,
+                                        offset: const Offset(0, 6),
+                                      ),
+                                    ],
+                                  ),
+                                  child: const Icon(
+                                    Icons.call_end_rounded,
+                                    color: Colors.white,
+                                    size: 30,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 32),
+                          ],
+                        ),
                 ),
-                child: const Icon(Icons.call_end, color: Colors.white, size: 32),
               ),
             ),
-            const SizedBox(height: 32),
           ],
-        ),
-      ],
+        );
+      },
+    );
+  }
+
+  Widget _buildCallControls({
+    required bool isVideo,
+    required ColorScheme cs,
+    required bool isLandscape,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Wrap(
+        spacing: isLandscape ? 12 : 16,
+        runSpacing: 16,
+        alignment: WrapAlignment.center,
+        children: [
+          if (isVideo) ...[
+            _buildControlButton(
+              icon: Icons.flip_camera_android_rounded,
+              label: 'Flip',
+              isActive: false,
+              onPressed: () => _sip.switchCamera(),
+              isVideo: isVideo,
+            ),
+            _buildControlButton(
+              icon: _sip.isLocalVideoMuted
+                  ? Icons.videocam_off_rounded
+                  : Icons.videocam_rounded,
+              label:
+                  _sip.isLocalVideoMuted ? 'Show Video' : 'Hide Video',
+              isActive: _sip.isLocalVideoMuted,
+              onPressed: () {
+                setState(() {
+                  _sip.toggleVideo(!_sip.isLocalVideoMuted);
+                });
+              },
+              isVideo: isVideo,
+            ),
+          ],
+          _buildControlButton(
+            icon:
+                _sip.isMuted ? Icons.mic_off_rounded : Icons.mic_rounded,
+            label: _sip.isMuted ? 'Unmute' : 'Mute',
+            isActive: _sip.isMuted,
+            onPressed: () {
+              setState(() {
+                _sip.mute(!_sip.isMuted);
+              });
+            },
+            isVideo: isVideo,
+          ),
+          _buildControlButton(
+            icon: _sip.isSpeakerOn
+                ? Icons.volume_up_rounded
+                : Icons.volume_down_rounded,
+            label: 'Speaker',
+            isActive: _sip.isSpeakerOn,
+            onPressed: () {
+              _sip.toggleSpeaker(!_sip.isSpeakerOn);
+              setState(() {});
+            },
+            isVideo: isVideo,
+          ),
+          _buildControlButton(
+            icon: _sip.isHeld
+                ? Icons.play_arrow_rounded
+                : Icons.pause_rounded,
+            label: _sip.isHeld ? 'Resume' : 'Hold',
+            isActive: _sip.isHeld,
+            onPressed: () {
+              setState(() {
+                _sip.toggleHold(!_sip.isHeld);
+              });
+            },
+            isVideo: isVideo,
+          ),
+          _buildControlButton(
+            icon: Icons.dialpad_rounded,
+            label: 'Keypad',
+            isActive: _isShowingKeypad,
+            onPressed: () {
+              setState(() {
+                _isShowingKeypad = !_isShowingKeypad;
+              });
+            },
+            isVideo: isVideo,
+          ),
+        ],
+      ),
     );
   }
 
@@ -694,35 +934,104 @@ class _DialpadScreenState extends State<DialpadScreen>
     required String label,
     bool isActive = false,
     VoidCallback? onPressed,
+    required bool isVideo,
   }) {
+    final cs = Theme.of(context).colorScheme;
+    final bgColor = isActive
+        ? cs.primary
+        : isVideo
+            ? Colors.white.withValues(alpha: 0.15)
+            : cs.surface;
+    final fgColor = isActive
+        ? Colors.white
+        : isVideo
+            ? Colors.white
+            : cs.onSurface;
+    final shadow = isActive
+        ? cs.primary.withValues(alpha: 0.35)
+        : Colors.black.withValues(alpha: isVideo ? 0 : 0.06);
+
     return GestureDetector(
       onTap: onPressed,
       child: Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
           Container(
-            width: 56,
-            height: 56,
+            width: 52,
+            height: 52,
             decoration: BoxDecoration(
-              color: isActive ? const Color(0xFF4299EB) : Colors.white,
+              color: bgColor,
               shape: BoxShape.circle,
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.08),
+                  color: shadow,
                   blurRadius: 10,
                   offset: const Offset(0, 4),
                 ),
               ],
             ),
-            child: Icon(
-              icon,
-              size: 24,
-              color: isActive ? Colors.white : const Color(0xFF4299EB),
-            ),
+            child: Icon(icon, size: 24, color: fgColor),
           ),
           const SizedBox(height: 6),
-          Text(label,
-              style: TextStyle(fontSize: 11, color: Colors.grey[600])),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: isVideo
+                  ? Colors.white.withValues(alpha: 0.8)
+                  : cs.onSurface.withValues(alpha: 0.6),
+            ),
+          ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildDtmfKey(String key) {
+    final cs = Theme.of(context).colorScheme;
+    final isVideo = _sip.isVideoCall;
+    return Expanded(
+      child: Padding(
+        padding: const EdgeInsets.all(4),
+        child: Material(
+          color: isVideo
+              ? Colors.white.withValues(alpha: 0.1)
+              : cs.surface,
+          borderRadius: BorderRadius.circular(14),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(14),
+            onTap: () => _sip.sendDTMF(key),
+            child: Container(
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(14),
+                border: isVideo
+                    ? Border.all(
+                        color: Colors.white.withValues(alpha: 0.1))
+                    : Border.all(
+                        color: cs.outline.withValues(alpha: 0.15)),
+              ),
+              child: Text(
+                key,
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.w600,
+                  color: isVideo ? Colors.white : cs.onSurface,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDtmfRow(List<String> keys) {
+    return Expanded(
+      child: Row(
+        children:
+            keys.map((key) => _buildDtmfKey(key)).toList(),
       ),
     );
   }

@@ -46,6 +46,8 @@ class SipSocketService implements sip.SipUaHelperListener {
   bool _isMuted = false;
   bool _isVideoCall = false;
   bool _isLocalVideoMuted = false;
+  bool _isSpeakerOn = false;
+  bool _isHeld = false;
   dynamic _localStream;
   dynamic _remoteStream;
 
@@ -78,6 +80,8 @@ class SipSocketService implements sip.SipUaHelperListener {
   bool get isConnected => _isConnected;
   bool get isVideoCall => _isVideoCall;
   bool get isLocalVideoMuted => _isLocalVideoMuted;
+  bool get isSpeakerOn => _isSpeakerOn;
+  bool get isHeld => _isHeld;
   dynamic get localStream => _localStream;
   String? get activeCallId => _activeCall?.id;
 
@@ -482,6 +486,9 @@ class SipSocketService implements sip.SipUaHelperListener {
 
     _incomingNumber = '';
     _isMuted = false;
+    _isLocalVideoMuted = false;
+    _isSpeakerOn = false;
+    _isHeld = false;
     _remoteStream = null;
     _activeCall = null;
     _pendingPushCallId = null;
@@ -803,6 +810,29 @@ class SipSocketService implements sip.SipUaHelperListener {
       _isMuted = muted;
     } catch (e) {
       _log('Exception during local mute: $e');
+    }
+  }
+
+  void toggleHold(bool hold) {
+    if (_activeCall == null) return;
+    try {
+      if (hold) {
+        _activeCall!.hold();
+      } else {
+        _activeCall!.unhold();
+      }
+      _isHeld = hold;
+    } catch (e) {
+      _log('Exception during toggleHold: $e');
+    }
+  }
+
+  Future<void> toggleSpeaker(bool on) async {
+    try {
+      await Helper.setSpeakerphoneOn(on);
+      _isSpeakerOn = on;
+    } catch (e) {
+      _log('Exception during toggleSpeaker: $e');
     }
   }
 

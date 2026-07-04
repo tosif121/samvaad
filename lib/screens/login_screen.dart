@@ -45,21 +45,10 @@ class _LoginScreenState extends State<LoginScreen> {
         });
       }
     });
-
-    _tryAutoLogin();
   }
 
   Future<void> _requestPermissions() async {
     await [Permission.microphone, Permission.camera].request();
-  }
-
-  Future<void> _tryAutoLogin() async {
-    await _requestPermissions();
-    await _sip.loadCredentials();
-    if (_sip.hasCredentials && mounted) {
-      setState(() => _connecting = true);
-      unawaited(_sip.connect().then((_) {}));
-    }
   }
 
   @override
@@ -72,7 +61,6 @@ class _LoginScreenState extends State<LoginScreen> {
 
   SipCredentials _buildCreds() {
     String user = _usernameController.text.trim();
-    // Replace @ with - for SIP URI compatibility (common with Asterisk).
     final sipUser = user.replaceAll('@', '-');
     return SipCredentials(
       serverUrl: _defaultServer,
@@ -100,94 +88,155 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final size = MediaQuery.of(context).size;
+    final isWide = size.width > 600;
+
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: cs.surface,
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 32),
-            child: Form(
-              key: _formKey,
+            padding: const EdgeInsets.symmetric(
+              horizontal: 24,
+              vertical: 32,
+            ),
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxWidth: isWide ? 440 : 420,
+              ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(
-                    Icons.phone_in_talk,
-                    size: 64,
-                    color: Theme.of(context).colorScheme.primary,
+                  Container(
+                    padding: const EdgeInsets.all(18),
+                    decoration: BoxDecoration(
+                      color: cs.primary.withValues(alpha: 0.08),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      Icons.phone_in_talk_rounded,
+                      size: 48,
+                      color: cs.primary,
+                    ),
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 28),
                   Text(
                     'Samvaad',
-                    style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                      fontWeight: FontWeight.bold,
+                    style: TextStyle(
+                      fontSize: 32,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.5,
+                      color: cs.onSurface,
                     ),
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'SIP Phone',
-                    style: TextStyle(color: Colors.grey[500], fontSize: 15),
+                    'Sign in to continue',
+                    style: TextStyle(
+                      fontSize: 16,
+                      color: cs.onSurface.withValues(alpha: 0.5),
+                    ),
                   ),
                   const SizedBox(height: 40),
-                  TextFormField(
-                    controller: _usernameController,
-                    decoration: const InputDecoration(
-                      labelText: 'Username',
-                    ),
-                    textInputAction: TextInputAction.next,
-                    validator: (v) =>
-                        v == null || v.trim().isEmpty ? 'Required' : null,
-                  ),
-                  const SizedBox(height: 16),
-                  TextFormField(
-                    controller: _passwordController,
-                    decoration: InputDecoration(
-                      labelText: 'Password',
-                      suffixIcon: IconButton(
-                        icon: Icon(_obscurePassword
-                            ? Icons.visibility_off
-                            : Icons.visibility),
-                        onPressed: () =>
-                            setState(() => _obscurePassword = !_obscurePassword),
-                      ),
-                    ),
-                    obscureText: _obscurePassword,
-                    textInputAction: TextInputAction.done,
-                    onFieldSubmitted: (_) => _login(),
-                    validator: (v) =>
-                        v == null || v.isEmpty ? 'Required' : null,
-                  ),
-                  const SizedBox(height: 32),
-                  if (_error != null)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 16),
-                      child: Text(
-                        _error!,
-                        style: TextStyle(color: Colors.red[700]),
-                      ),
-                    ),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 52,
-                    child: ElevatedButton(
-                      onPressed: _connecting ? null : _login,
-                      child: _connecting
-                          ? const SizedBox(
-                              width: 24,
-                              height: 24,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2.5,
-                                color: Colors.white,
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(28),
+                      child: Form(
+                        key: _formKey,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            TextFormField(
+                              controller: _usernameController,
+                              decoration: const InputDecoration(
+                                labelText: 'Username',
+                                prefixIcon:
+                                    Icon(Icons.person_outline_rounded),
                               ),
-                            )
-                          : const Text(
-                              'Connect',
-                              style: TextStyle(
-                                  fontSize: 17, fontWeight: FontWeight.w600),
+                              textInputAction: TextInputAction.next,
+                              validator: (v) => v == null ||
+                                      v.trim().isEmpty
+                                  ? 'Required'
+                                  : null,
                             ),
+                            const SizedBox(height: 18),
+                            TextFormField(
+                              controller: _passwordController,
+                              decoration: InputDecoration(
+                                labelText: 'Password',
+                                prefixIcon:
+                                    const Icon(Icons.lock_outline_rounded),
+                                suffixIcon: IconButton(
+                                  icon: Icon(_obscurePassword
+                                      ? Icons.visibility_off_rounded
+                                      : Icons.visibility_rounded),
+                                  onPressed: () => setState(
+                                      () => _obscurePassword =
+                                          !_obscurePassword),
+                                ),
+                              ),
+                              obscureText: _obscurePassword,
+                              textInputAction: TextInputAction.done,
+                              onFieldSubmitted: (_) => _login(),
+                              validator: (v) =>
+                                  v == null || v.isEmpty ? 'Required' : null,
+                            ),
+                            const SizedBox(height: 28),
+                            if (_error != null)
+                              Padding(
+                                padding:
+                                    const EdgeInsets.only(bottom: 16),
+                                child: Container(
+                                  padding:
+                                      const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: cs.error
+                                        .withValues(alpha: 0.08),
+                                    borderRadius:
+                                        BorderRadius.circular(12),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Icon(Icons.error_outline_rounded,
+                                          size: 20, color: cs.error),
+                                      const SizedBox(width: 8),
+                                      Flexible(
+                                        child: Text(
+                                          _error!,
+                                          style: TextStyle(
+                                            color: cs.error,
+                                            fontWeight: FontWeight.w500,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            SizedBox(
+                              width: double.infinity,
+                              height: 56,
+                              child: ElevatedButton(
+                                onPressed:
+                                    _connecting ? null : _login,
+                                child: _connecting
+                                    ? SizedBox(
+                                        width: 24,
+                                        height: 24,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 3,
+                                          color: cs.onPrimary,
+                                        ),
+                                      )
+                                    : const Text('Connect'),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
                   ),
-                  const SizedBox(height: 40),
                 ],
               ),
             ),
