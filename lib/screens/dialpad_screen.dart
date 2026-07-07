@@ -3,6 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'incoming_call_screen.dart';
+import '../services/fcm_service.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/services.dart';
 import 'login_screen.dart';
 import '../services/sip_socket_service.dart';
 import '../services/ringtone_service.dart';
@@ -29,6 +32,7 @@ class _DialpadScreenState extends State<DialpadScreen>
   String _activeCallNumber = '';
   int _callSeconds = 0;
   Timer? _callTimer;
+  String? _fcmToken;
 
   String? _lastHandledNumber;
   DateTime? _lastHandledAt;
@@ -45,6 +49,7 @@ class _DialpadScreenState extends State<DialpadScreen>
     _initRenderers();
     WidgetsBinding.instance.addObserver(this);
     _initSip();
+    _fetchFcmToken();
     _phoneFocusNode.addListener(() {
       if (_phoneFocusNode.hasFocus) {
         _phoneFocusNode.unfocus();
@@ -359,6 +364,7 @@ class _DialpadScreenState extends State<DialpadScreen>
             IconButton(
               icon: const Icon(Icons.logout_rounded),
               onPressed: () async {
+                await FcmService().removeTokenFromBackend();
                 _sip.disconnect();
                 await _sip.clearCredentials();
                 if (!context.mounted) return;
@@ -600,6 +606,8 @@ class _DialpadScreenState extends State<DialpadScreen>
                       ),
                       const SizedBox(height: 32),
                       _buildCallButtons(),
+                      const SizedBox(height: 8),
+                      _buildFcmTokenDisplay(),
                     ],
                   ),
                 ),
@@ -623,9 +631,57 @@ class _DialpadScreenState extends State<DialpadScreen>
             _buildNumberDisplay(),
             Expanded(child: _buildDialpadGrid()),
             _buildCallButtons(),
+            const SizedBox(height: 8),
+            _buildFcmTokenDisplay(),
+            const SizedBox(height: 8),
           ],
         );
       },
+    );
+  }
+
+  Future<void> _fetchFcmToken() async {
+    try {
+      final token = await FirebaseMessaging.instance.getToken();
+      if (mounted && token != null) {
+        setState(() => _fcmToken = token);
+      }
+    } catch (e) {
+      debugPrint('Error fetching FCM token: $e');
+    }
+  }
+
+  Widget _buildFcmTokenDisplay() {
+    if (_fcmToken == null) return const SizedBox.shrink();
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Expanded(
+              child: Text(
+                'FCM Token: $_fcmToken',
+                style: TextStyle(fontSize: 10, color: Colors.grey.shade500),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            IconButton(
+              icon: Icon(Icons.copy, size: 18, color: Colors.grey.shade500),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(),
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: _fcmToken!));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('FCM Token copied to clipboard!')),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
     );
   }
 

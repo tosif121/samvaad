@@ -4,6 +4,7 @@ import 'package:permission_handler/permission_handler.dart';
 import '../models/sip_credentials.dart';
 import '../services/sip_socket_service.dart';
 import 'dialpad_screen.dart';
+import '../services/fcm_service.dart';
 
 const _defaultServer = 'wss://devapp.iotcom.io:8089/ws';
 const _defaultHost = 'devapp.iotcom.io:8089';
@@ -35,6 +36,7 @@ class _LoginScreenState extends State<LoginScreen> {
       final type = event['event'] as String;
       if (type == 'registered') {
         setState(() => _connecting = false);
+        FcmService().init(); // Re-initialize FCM to send token with new credentials
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(builder: (_) => const DialpadScreen()),
         );

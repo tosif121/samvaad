@@ -84,8 +84,7 @@ class MainActivity : FlutterActivity() {
                 }
                 "clearNotification" -> {
                     val manager = getSystemService(android.content.Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
-                    manager.cancel(1001)
-                    manager.cancel(1002)
+                    manager.cancelAll()
                     result.success(true)
                 }
                 "cleanupForeground" -> {

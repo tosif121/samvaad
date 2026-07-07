@@ -3,6 +3,8 @@ import 'screens/login_screen.dart';
 import 'screens/dialpad_screen.dart';
 import 'services/call_lifecycle_service.dart';
 import 'services/sip_socket_service.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'services/fcm_service.dart';
 
 const _primaryColor = Color(0xFF4299EB);
 const _secondaryColor = Color(0xFF00C853);
@@ -11,6 +13,10 @@ const _darkText = Color(0xFF1a1a1a);
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  
+  await Firebase.initializeApp();
+  await FcmService().init();
+
   CallLifecycleService().init();
 
   final sip = SipSocketService();

@@ -44,7 +44,7 @@ class SipSocketService implements sip.SipUaHelperListener {
   bool _isRegistered = false;
   bool _isConnected = false;
   bool _isMuted = false;
-  bool _isVideoCall = false;
+  bool isVideoCall = false;
   bool _isLocalVideoMuted = false;
   bool _isSpeakerOn = false;
   bool _isHeld = false;
@@ -78,7 +78,7 @@ class SipSocketService implements sip.SipUaHelperListener {
   String get incomingNumber => _incomingNumber;
   bool get isRegistered => _isRegistered;
   bool get isConnected => _isConnected;
-  bool get isVideoCall => _isVideoCall;
+  // bool get isVideoCall => _isVideoCall;
   bool get isLocalVideoMuted => _isLocalVideoMuted;
   bool get isSpeakerOn => _isSpeakerOn;
   bool get isHeld => _isHeld;
@@ -355,7 +355,7 @@ class SipSocketService implements sip.SipUaHelperListener {
           _log('INCOMING CALL from: $remoteNumber');
           _incomingNumber = remoteNumber;
           _callState = CallState.ringing;
-          _isVideoCall = call.remote_has_video;
+          isVideoCall = call.remote_has_video;
           _emit(SipEvent.incomingCall, data: {'number': _incomingNumber});
 
           // If this call arrived after a push already showed a native
@@ -378,11 +378,11 @@ class SipSocketService implements sip.SipUaHelperListener {
         _emit(SipEvent.callAnswered);
         CallLifecycleService().onCallStarted();
         _notifyNative('callActive', {'callId': _pendingPushCallId ?? ''});
-        unawaited(Helper.setSpeakerphoneOn(_isVideoCall).then((_) {
-          _isSpeakerOn = _isVideoCall;
+        unawaited(Helper.setSpeakerphoneOn(isVideoCall).then((_) {
+          _isSpeakerOn = isVideoCall;
         }).catchError((_) {}));
 
-        if (_isVideoCall && _activeCall != null && _activeCall!.direction == sip.Direction.outgoing) {
+        if (isVideoCall && _activeCall != null && _activeCall!.direction == sip.Direction.outgoing) {
           _log('Adding video via re-INVITE');
           try {
             final videoOptions = _helper.buildCallOptions(false);
@@ -522,7 +522,7 @@ class SipSocketService implements sip.SipUaHelperListener {
     _finishCall();
   }
 
-  set isVideoCall(bool value) => _isVideoCall = value;
+  // set isVideoCall(bool value) => _isVideoCall = value;
 
   Future<void> answerCall({bool? isVideo}) async {
     final call = _activeCall;
@@ -535,13 +535,13 @@ class SipSocketService implements sip.SipUaHelperListener {
       return;
     }
 
-    if (isVideo != null) _isVideoCall = isVideo;
+    if (isVideo != null) isVideoCall = isVideo;
 
     _isAnswering = true;
     _log('Answering SIP call (Attempt started) - Call ID: ${call.id}');
     
     try {
-      final options = _helper.buildCallOptions(!_isVideoCall);
+      final options = _helper.buildCallOptions(!isVideoCall);
 
       _log('Before call.answer() - options: $options');
       call.answer(options);
@@ -565,7 +565,7 @@ class SipSocketService implements sip.SipUaHelperListener {
     _log('Making outgoing call to: $number');
     _callState = CallState.dialing;
     _incomingNumber = number;
-    _isVideoCall = false;
+    isVideoCall = false;
     try {
       await _helper.call(number, voiceOnly: true);
     } catch (e) {
@@ -584,7 +584,7 @@ class SipSocketService implements sip.SipUaHelperListener {
     _log('Making outgoing video call to: $number');
     _callState = CallState.dialing;
     _incomingNumber = number;
-    _isVideoCall = true;
+    isVideoCall = true;
     try {
       await _helper.call(number, voiceOnly: false, customOptions: <String, dynamic>{
         'rtcOfferConstraints': <String, dynamic>{
