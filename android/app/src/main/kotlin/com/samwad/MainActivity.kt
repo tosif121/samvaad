@@ -38,7 +38,7 @@ class MainActivity : FlutterActivity() {
         )
 
         // Request USE_FULL_SCREEN_INTENT permission on Android 14+
-        requestFullScreenIntentPermission()
+        // requestFullScreenIntentPermission()
     }
 
     private fun requestFullScreenIntentPermission() {

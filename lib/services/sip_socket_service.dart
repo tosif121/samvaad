@@ -356,6 +356,13 @@ class SipSocketService implements sip.SipUaHelperListener {
           _incomingNumber = remoteNumber;
           _callState = CallState.ringing;
           isVideoCall = call.remote_has_video;
+          try {
+            final sdp = call.session.request?.body as String? ?? '';
+            if (sdp.contains('m=video')) {
+              isVideoCall = true;
+            }
+          } catch (_) {}
+          _log('Incoming call — video detected: $isVideoCall');
           _emit(SipEvent.incomingCall, data: {'number': _incomingNumber});
 
           // If this call arrived after a push already showed a native
@@ -370,6 +377,19 @@ class SipSocketService implements sip.SipUaHelperListener {
         break;
 
       case sip.CallStateEnum.PROGRESS:
+        _log('Call PROGRESS');
+        if (call.peerConnection != null) {
+          Future(() async {
+            try {
+              final remoteSdp = await call.peerConnection!.getRemoteDescription();
+              if (remoteSdp?.sdp != null) {
+                final mediaLines = remoteSdp!.sdp!.split('\r\n').where((l) =>
+                    l.startsWith('m=') || l.startsWith('a=rtpmap:') || l.startsWith('a=fmtp:'));
+                _log('PROGRESS REMOTE CODECS:\n${mediaLines.join("\n")}');
+              }
+            } catch (_) {}
+          });
+        }
         break;
 
       case sip.CallStateEnum.CONFIRMED:
@@ -382,6 +402,18 @@ class SipSocketService implements sip.SipUaHelperListener {
           _isSpeakerOn = isVideoCall;
         }).catchError((_) {}));
 
+        if (call.peerConnection != null) {
+          Future(() async {
+            try {
+              final remoteSdp = await call.peerConnection!.getRemoteDescription();
+              if (remoteSdp?.sdp != null) {
+                final mediaLines = remoteSdp!.sdp!.split('\r\n').where((l) =>
+                    l.startsWith('m=') || l.startsWith('a=rtpmap:') || l.startsWith('a=fmtp:'));
+                _log('CONFIRMED REMOTE CODECS:\n${mediaLines.join("\n")}');
+              }
+            } catch (_) {}
+          });
+        }
         if (isVideoCall && _activeCall != null && _activeCall!.direction == sip.Direction.outgoing) {
           _log('Adding video via re-INVITE');
           try {
@@ -539,9 +571,36 @@ class SipSocketService implements sip.SipUaHelperListener {
 
     _isAnswering = true;
     _log('Answering SIP call (Attempt started) - Call ID: ${call.id}');
+
+    // [H264 MUNGING - INCOMING CALL]
+    // Android WebRTC often rejects Grandstream's H264 profile (e.g. 42801F).
+    // If it rejects it, Flutter's Answer SDP drops the video stream (m=video 0).
+    // We rewrite the incoming Remote SDP string to 42e01f BEFORE dart-sip-ua parses it.
+    try {
+      if (call.session.request?.body != null) {
+        String remoteSdp = call.session.request!.body as String;
+        if (remoteSdp.contains('m=video') && remoteSdp.contains('H264')) {
+          String newSdp = remoteSdp.replaceAllMapped(
+              RegExp(r'profile-level-id=[0-9a-fA-F]+'),
+              (_) => 'profile-level-id=42e01f');
+          if (newSdp != remoteSdp) {
+            call.session.request!.body = newSdp;
+            _log('Munged incoming REMOTE SDP: changed profile-level-id to 42e01f so WebRTC accepts it');
+          }
+        }
+      }
+    } catch (e) {
+      _log('Failed to munge incoming SDP: $e');
+    }
     
     try {
       final options = _helper.buildCallOptions(!isVideoCall);
+      if (options['rtcOfferConstraints'] is Map) {
+        (options['rtcOfferConstraints'] as Map)['offerModifiers'] = [_makeH264Modifier()];
+      }
+      if (options['rtcAnswerConstraints'] is Map) {
+        (options['rtcAnswerConstraints'] as Map)['offerModifiers'] = [_makeH264Modifier()];
+      }
 
       _log('Before call.answer() - options: $options');
       call.answer(options);
@@ -704,10 +763,16 @@ class SipSocketService implements sip.SipUaHelperListener {
           if (!keepPts.contains(pt)) {
             lines.removeAt(i);
           } else if (l.startsWith('a=fmtp:') && h264Pts.contains(pt)) {
-            lines[i] = l.replaceAllMapped(
+            String updated = l.replaceAllMapped(
               RegExp(r'profile-level-id=[0-9a-fA-F]+'),
               (_) => 'profile-level-id=42e01f',
             );
+            if (!updated.contains('packetization-mode')) {
+              updated = '$updated;packetization-mode=1';
+            } else {
+              updated = updated.replaceAll(RegExp(r'packetization-mode=\d'), 'packetization-mode=1');
+            }
+            lines[i] = updated;
           }
         }
       }

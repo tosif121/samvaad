@@ -96,6 +96,24 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
     }
   }
 
+  Future<void> _acceptVideoCall() async {
+    _dismissed = true;
+    _sipSubscription?.cancel();
+    RingtoneService().stopRinging();
+    RingtoneService().clearNotification();
+
+    try {
+      debugPrint("Accept Video pressed");
+      _onDismiss();
+      if (mounted) {
+        Navigator.of(context).pop('answer_video');
+      }
+    } catch (e, st) {
+      debugPrint("Accept Video failed: $e");
+      debugPrintStack(stackTrace: st);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -180,9 +198,16 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
                   _buildActionButton(
                     context,
                     icon: Icons.call_rounded,
-                    label: 'Answer',
+                    label: 'Audio',
                     color: cs.secondary,
                     onTap: _acceptCall,
+                  ),
+                  _buildActionButton(
+                    context,
+                    icon: Icons.videocam_rounded,
+                    label: 'Video',
+                    color: cs.primary,
+                    onTap: _acceptVideoCall,
                   ),
                 ],
               ),

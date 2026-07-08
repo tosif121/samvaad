@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
@@ -33,6 +35,7 @@ class _DialpadScreenState extends State<DialpadScreen>
   int _callSeconds = 0;
   Timer? _callTimer;
   String? _fcmToken;
+  String? _username;
 
   String? _lastHandledNumber;
   DateTime? _lastHandledAt;
@@ -50,6 +53,7 @@ class _DialpadScreenState extends State<DialpadScreen>
     WidgetsBinding.instance.addObserver(this);
     _initSip();
     _fetchFcmToken();
+    _loadUsername();
     _phoneFocusNode.addListener(() {
       if (_phoneFocusNode.hasFocus) {
         _phoneFocusNode.unfocus();
@@ -253,7 +257,8 @@ class _DialpadScreenState extends State<DialpadScreen>
     _lastHandledNumber = number;
     _lastHandledAt = DateTime.now();
 
-    if (result == 'answer') {
+    if (result == 'answer' || result == 'answer_video') {
+      final isVideoAns = result == 'answer_video';
       if (!_sip.isRegistered) {
         int waitCount = 0;
         while (!_sip.isRegistered && mounted) {
@@ -265,7 +270,7 @@ class _DialpadScreenState extends State<DialpadScreen>
       if (!mounted) return;
       RingtoneService().clearNotification();
       _activeCallNumber = number;
-      if (!await _requestPermissions(isVideo: false)) {
+      if (!await _requestPermissions(isVideo: isVideoAns)) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
@@ -275,7 +280,7 @@ class _DialpadScreenState extends State<DialpadScreen>
         }
         return;
       }
-      await _sip.answerCall();
+      await _sip.answerCall(isVideo: isVideoAns);
       _isOnCall = true;
       _startCallTimer();
       if (mounted) setState(() {});
@@ -358,27 +363,93 @@ class _DialpadScreenState extends State<DialpadScreen>
       appBar: AppBar(
         title: Text(_isOnCall ? 'On Call' : 'Samvaad'),
         titleSpacing: 16,
+        centerTitle: false,
         automaticallyImplyLeading: false,
         actions: [
           if (!_isOnCall)
-            IconButton(
-              icon: const Icon(Icons.logout_rounded),
-              onPressed: () async {
+            Builder(
+              builder: (context) => IconButton(
+                icon: const Icon(Icons.menu_rounded),
+                onPressed: () => Scaffold.of(context).openDrawer(),
+              ),
+            ),
+        ],
+      ),
+      drawer: _isOnCall ? null : _buildDrawer(),
+      body: SafeArea(
+        child: _isOnCall ? _buildOnCallUI() : _buildIdleUI(),
+      ),
+    );
+  }
+
+  Widget _buildDrawer() {
+    final cs = Theme.of(context).colorScheme;
+    return Drawer(
+      child: SafeArea(
+        child: Column(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(24),
+              width: double.infinity,
+              color: cs.primary.withValues(alpha: 0.1),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  CircleAvatar(
+                    radius: 32,
+                    backgroundColor: cs.primary,
+                    child: const Icon(Icons.person, size: 32, color: Colors.white),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    _username ?? 'User',
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                      color: cs.onSurface,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            ListTile(
+              leading: Icon(Icons.info_outline, color: _sip.isRegistered ? cs.secondary : Colors.orange),
+              title: const Text('SIP Status'),
+              subtitle: Text(_sip.isRegistered ? 'Registered' : (_sip.isConnected ? 'Registering...' : 'Disconnected')),
+            ),
+            const Divider(),
+            ListTile(
+              leading: const Icon(Icons.token_outlined),
+              title: const Text('FCM Token'),
+              subtitle: Text(_fcmToken ?? 'Fetching...', maxLines: 1, overflow: TextOverflow.ellipsis),
+              onTap: () {
+                if (_fcmToken != null) {
+                  Clipboard.setData(ClipboardData(text: _fcmToken!));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('FCM Token copied!')),
+                  );
+                  Navigator.pop(context);
+                }
+              },
+            ),
+            const Spacer(),
+            const Divider(),
+            ListTile(
+              leading: Icon(Icons.logout_rounded, color: cs.error),
+              title: Text('Logout', style: TextStyle(color: cs.error)),
+              onTap: () async {
                 await FcmService().removeTokenFromBackend();
                 _sip.disconnect();
                 await _sip.clearCredentials();
                 if (!context.mounted) return;
                 Navigator.of(context).pushReplacement(
-                  MaterialPageRoute(
-                      builder: (_) => const LoginScreen()),
+                  MaterialPageRoute(builder: (_) => const LoginScreen()),
                 );
               },
-              tooltip: 'Logout',
             ),
-        ],
-      ),
-      body: SafeArea(
-        child: _isOnCall ? _buildOnCallUI() : _buildIdleUI(),
+            const SizedBox(height: 16),
+          ],
+        ),
       ),
     );
   }
@@ -651,38 +722,21 @@ class _DialpadScreenState extends State<DialpadScreen>
     }
   }
 
+  Future<void> _loadUsername() async {
+    final prefs = await SharedPreferences.getInstance();
+    final credsStr = prefs.getString('sip_credentials');
+    if (credsStr != null) {
+      final creds = jsonDecode(credsStr);
+      if (mounted) {
+        setState(() {
+          _username = creds['username'];
+        });
+      }
+    }
+  }
+
   Widget _buildFcmTokenDisplay() {
-    if (_fcmToken == null) return const SizedBox.shrink();
-    return SafeArea(
-      top: false,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Expanded(
-              child: Text(
-                'FCM Token: $_fcmToken',
-                style: TextStyle(fontSize: 10, color: Colors.grey.shade500),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-            IconButton(
-              icon: Icon(Icons.copy, size: 18, color: Colors.grey.shade500),
-              padding: EdgeInsets.zero,
-              constraints: const BoxConstraints(),
-              onPressed: () {
-                Clipboard.setData(ClipboardData(text: _fcmToken!));
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('FCM Token copied to clipboard!')),
-                );
-              },
-            ),
-          ],
-        ),
-      ),
-    );
+    return const SizedBox.shrink();
   }
 
   Widget _buildDialRow(List<String> keys) {
