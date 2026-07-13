@@ -195,12 +195,15 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
                     color: cs.error,
                     onTap: _decline,
                   ),
-                  _buildActionButton(
-                    context,
-                    icon: Icons.call_rounded,
-                    label: 'Audio',
-                    color: cs.secondary,
-                    onTap: _acceptCall,
+                  Visibility(
+                    visible: false, // Hidden for VC-only mode
+                    child: _buildActionButton(
+                      context,
+                      icon: Icons.call_rounded,
+                      label: 'Audio',
+                      color: cs.secondary,
+                      onTap: _acceptCall,
+                    ),
                   ),
                   _buildActionButton(
                     context,

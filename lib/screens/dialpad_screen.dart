@@ -418,20 +418,7 @@ class _DialpadScreenState extends State<DialpadScreen>
               subtitle: Text(_sip.isRegistered ? 'Registered' : (_sip.isConnected ? 'Registering...' : 'Disconnected')),
             ),
             const Divider(),
-            ListTile(
-              leading: const Icon(Icons.token_outlined),
-              title: const Text('FCM Token'),
-              subtitle: Text(_fcmToken ?? 'Fetching...', maxLines: 1, overflow: TextOverflow.ellipsis),
-              onTap: () {
-                if (_fcmToken != null) {
-                  Clipboard.setData(ClipboardData(text: _fcmToken!));
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('FCM Token copied!')),
-                  );
-                  Navigator.pop(context);
-                }
-              },
-            ),
+
             const Spacer(),
             const Divider(),
             ListTile(
@@ -610,12 +597,20 @@ class _DialpadScreenState extends State<DialpadScreen>
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          _buildCallButton(
-            icon: Icons.call_rounded,
-            color: cs.secondary,
-            onTap: _onCallPressed,
+          Visibility(
+            visible: false, // Hidden for VC-only mode
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _buildCallButton(
+                  icon: Icons.call_rounded,
+                  color: cs.secondary,
+                  onTap: _onCallPressed,
+                ),
+                const SizedBox(width: 28),
+              ],
+            ),
           ),
-          const SizedBox(width: 28),
           _buildCallButton(
             icon: Icons.videocam_rounded,
             color: cs.primary,

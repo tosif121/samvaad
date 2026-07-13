@@ -1,9 +1,8 @@
 import 'dart:developer';
+import 'package:flutter/widgets.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
-import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
-import 'package:flutter_callkit_incoming/entities/entities.dart';
-import 'package:uuid/uuid.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'dart:io' show Platform;
 import 'dart:convert';
 import 'package:http/http.dart' as http;
@@ -13,67 +12,23 @@ import 'package:shared_preferences/shared_preferences.dart';
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
   log('[FCM_SERVICE] Background message received: ${message.messageId}');
-  
-  // Example of processing an incoming call payload
-  // In a real app, you parse the message.data and trigger CallKit
+
   final type = message.data['type'];
   if (type == 'incomingCall' || type == 'incoming_call') {
-    final callerName = message.data['callerName'] ?? message.data['title'] ?? 'Unknown Caller';
-    final callerNumber = message.data['callerNumber'] ?? message.data['body'] ?? 'Unknown Number';
-    
-    final callKitParams = CallKitParams(
-      id: const Uuid().v4(),
-      nameCaller: callerName,
-      appName: 'Samvaad',
-      handle: callerNumber,
-      type: 0,
-      duration: 30000,
-      missedCallNotification: const NotificationParams(
-        showNotification: true,
-        isShowCallback: true,
-        subtitle: 'Missed call',
-        callbackText: 'Call back',
-      ),
-      extra: <String, dynamic>{'userId': '1a2b3c4d'},
-      headers: <String, dynamic>{'apiKey': 'v1.0', 'platform': 'flutter'},
-      android: const AndroidParams(
-        isCustomNotification: true,
-        isShowLogo: false,
-        ringtonePath: 'system_ringtone_default',
-        backgroundColor: '#0955fa',
-        actionColor: '#4CAF50',
-        textColor: '#ffffff',
-        textAccept: 'Answer',
-        textDecline: 'Decline',
-      ),
-      ios: const IOSParams(
-        iconName: 'CallKitLogo',
-        handleType: 'generic',
-        supportsVideo: true,
-        maximumCallGroups: 2,
-        maximumCallsPerCallGroup: 1,
-        audioSessionMode: 'default',
-        audioSessionActive: true,
-        audioSessionPreferredSampleRate: 44100.0,
-        audioSessionPreferredIOBufferDuration: 0.005,
-        supportsDTMF: true,
-        supportsHolding: true,
-        supportsGrouping: false,
-        supportsUngrouping: false,
-        ringtonePath: 'system_ringtone_default',
-      ),
-    );
-
-    await FlutterCallkitIncoming.showCallkitIncoming(callKitParams);
+    // Native MyFirebaseMessagingService handles notification + app opening
+    // when app is killed or in background. This handler is kept as fallback
+    // for logging and future non-call message types.
+    log('[FCM_SERVICE] Incoming call background message (handled natively)');
   }
 }
 
-class FcmService {
+class FcmService with WidgetsBindingObserver {
   static final FcmService _instance = FcmService._internal();
   factory FcmService() => _instance;
   FcmService._internal();
 
   final FirebaseMessaging _messaging = FirebaseMessaging.instance;
+  final FlutterLocalNotificationsPlugin _localNotificationsPlugin = FlutterLocalNotificationsPlugin();
 
   Future<void> sendTokenToBackend(String token) async {
     try {
@@ -87,12 +42,10 @@ class FcmService {
       final creds = jsonDecode(credsStr);
       final username = creds['extension'] ?? creds['username'] ?? '';
       
-      // Extract tenant from sipUri or username if possible, default to devapp
       String adminuser = "devapp"; 
       if (username.contains('-')) {
         adminuser = username.split('-').last;
       } else if (creds['sipUri'] != null && creds['sipUri'].contains('@')) {
-        // e.g. sip:3006@surya.iotcom.io -> might extract surya
         final domain = creds['sipUri'].split('@').last.split('.').first;
         if (domain != 'devapp') adminuser = domain;
       }
@@ -172,7 +125,29 @@ class FcmService {
   }
 
   Future<void> init() async {
-    // Request permissions (primarily for iOS, but good practice)
+    WidgetsBinding.instance.addObserver(this);
+
+    // Initialize local notifications
+    const AndroidInitializationSettings initializationSettingsAndroid =
+        AndroidInitializationSettings('@mipmap/ic_launcher');
+    const DarwinInitializationSettings initializationSettingsIOS = DarwinInitializationSettings();
+    const InitializationSettings initializationSettings = InitializationSettings(
+        android: initializationSettingsAndroid, iOS: initializationSettingsIOS);
+    
+    await _localNotificationsPlugin.initialize(
+      initializationSettings,
+      onDidReceiveNotificationResponse: (details) {
+        log('[FCM_SERVICE] Local notification tapped: ${details.payload}');
+        // Simply tapping it opens the app. The SIP socket will reconnect automatically
+        // and trigger the incoming call screen if the call is still active.
+        _localNotificationsPlugin.cancelAll();
+      },
+    );
+    
+    // Clear notifications on startup
+    await _localNotificationsPlugin.cancelAll();
+
+    // Request permissions
     NotificationSettings settings = await _messaging.requestPermission(
       alert: true,
       badge: true,
@@ -182,7 +157,6 @@ class FcmService {
 
     log('[FCM_SERVICE] User granted permission: ${settings.authorizationStatus}');
 
-    // Get FCM Token
     try {
       String? token = await _messaging.getToken();
       if (token != null) {
@@ -193,36 +167,26 @@ class FcmService {
       log('[FCM_SERVICE] Error getting FCM token: $e');
     }
 
-    // Listen to token refreshes
     _messaging.onTokenRefresh.listen((newToken) {
       log('[FCM_SERVICE] FCM Token refreshed: $newToken');
       sendTokenToBackend(newToken);
     });
 
-    // Foreground messages
+    // Foreground messages (app is already open)
     FirebaseMessaging.onMessage.listen((RemoteMessage message) {
       log('[FCM_SERVICE] Foreground message received: ${message.messageId}');
-      // Handle foreground message (e.g. trigger CallKit if not already on call)
+      // Ignore foreground notifications since the app will show the SIP incoming call screen automatically.
+      _localNotificationsPlugin.cancelAll();
     });
 
-    // Listen to CallKit events
-    FlutterCallkitIncoming.onEvent.listen((event) {
-      if (event == null) return;
-      switch (event) {
-        case CallEventActionCallAccept():
-          log('[FCM_SERVICE] CallKit Action: Accept');
-          // Fast reconnect and answer using native handle incoming push args
-          // In a real app, you would pass the caller ID from the event body
-          break;
-        case CallEventActionCallDecline():
-          log('[FCM_SERVICE] CallKit Action: Decline');
-          break;
-        default:
-          break;
-      }
-    });
-
-    // Background messages are handled by the top-level handler
     FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      // Clear notifications when app opens
+      _localNotificationsPlugin.cancelAll();
+    }
   }
 }
