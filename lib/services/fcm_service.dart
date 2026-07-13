@@ -8,6 +8,8 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:device_info_plus/device_info_plus.dart';
+
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
@@ -29,6 +31,31 @@ class FcmService with WidgetsBindingObserver {
 
   final FirebaseMessaging _messaging = FirebaseMessaging.instance;
   final FlutterLocalNotificationsPlugin _localNotificationsPlugin = FlutterLocalNotificationsPlugin();
+
+  Future<Map<String, String>> _getDeviceInfo() async {
+    final DeviceInfoPlugin deviceInfo = DeviceInfoPlugin();
+    try {
+      if (Platform.isAndroid) {
+        final AndroidDeviceInfo androidInfo = await deviceInfo.androidInfo;
+        return {
+          "deviceId": androidInfo.id,
+          "deviceName": "${androidInfo.brand} ${androidInfo.model}"
+        };
+      } else if (Platform.isIOS) {
+        final IosDeviceInfo iosInfo = await deviceInfo.iosInfo;
+        return {
+          "deviceId": iosInfo.identifierForVendor ?? "unknown_ios_device",
+          "deviceName": iosInfo.name
+        };
+      }
+    } catch (e) {
+      log('[FCM_SERVICE] Error getting device info: $e');
+    }
+    return {
+      "deviceId": "unknown_device",
+      "deviceName": "Unknown Device"
+    };
+  }
 
   Future<void> sendTokenToBackend(String token) async {
     try {
@@ -52,14 +79,19 @@ class FcmService with WidgetsBindingObserver {
 
       if (username.isEmpty) return;
 
+      final deviceInfo = await _getDeviceInfo();
+
       final payload = {
         "username": username,
         "adminuser": adminuser,
         "token": token,
         "platform": Platform.isAndroid ? "android" : "ios",
-        "deviceId": "flutter_device", 
+        "deviceId": deviceInfo["deviceId"], 
+        "deviceName": deviceInfo["deviceName"],
         "appSecret": "samvaad_mobile_secret_123"
       };
+
+      log("[FCM_SERVICE] Sending payload to backend: ${jsonEncode(payload)}");
 
       final url = Uri.parse('https://devapp.iotcom.io/storeFirebaseTokenMobile');
       final response = await http.post(
