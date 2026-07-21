@@ -179,16 +179,6 @@ class FcmService with WidgetsBindingObserver {
     // Clear notifications on startup
     await _localNotificationsPlugin.cancelAll();
 
-    // Request permissions
-    NotificationSettings settings = await _messaging.requestPermission(
-      alert: true,
-      badge: true,
-      sound: true,
-      provisional: false,
-    );
-
-    log('[FCM_SERVICE] User granted permission: ${settings.authorizationStatus}');
-
     try {
       String? token = await _messaging.getToken();
       if (token != null) {
