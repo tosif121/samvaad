@@ -42,8 +42,6 @@ class MainActivity : FlutterActivity() {
         // Handle incoming call intent for cold start (app was killed)
         handleIncomingCallIntent(intent)
 
-        requestFullScreenIntentPermission()
-        requestSystemAlertWindowPermission()
     }
 
     override fun onResume() {
@@ -54,47 +52,6 @@ class MainActivity : FlutterActivity() {
     override fun onPause() {
         super.onPause()
         isInForeground = false
-    }
-
-    private fun requestFullScreenIntentPermission() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            val notificationManager = getSystemService(android.content.Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
-            if (!notificationManager.canUseFullScreenIntent()) {
-                try {
-                    val intent = Intent(android.provider.Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT).apply {
-                        data = android.net.Uri.parse("package:$packageName")
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    }
-                    startActivity(intent)
-                } catch (e: Exception) {
-                    try {
-                        val fallbackIntent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                            data = android.net.Uri.parse("package:$packageName")
-                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        }
-                        startActivity(fallbackIntent)
-                    } catch (_: Exception) {}
-                }
-            }
-        }
-    }
-
-    private fun requestSystemAlertWindowPermission() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            if (!android.provider.Settings.canDrawOverlays(this)) {
-                try {
-                    val intent = Intent(
-                        android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                        android.net.Uri.parse("package:$packageName")
-                    ).apply {
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    }
-                    startActivity(intent)
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error requesting overlay permission: $e")
-                }
-            }
-        }
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
