@@ -6,8 +6,8 @@ import '../services/sip_socket_service.dart';
 import 'dialpad_screen.dart';
 import '../services/fcm_service.dart';
 
-const _defaultServer = 'wss://devapp.iotcom.io:8089/ws';
-const _defaultHost = 'devapp.iotcom.io:8089';
+const _defaultServer = 'wss://esamwad.iotcom.io:8089/ws';
+const _defaultHost = 'esamwad.iotcom.io:8089';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
