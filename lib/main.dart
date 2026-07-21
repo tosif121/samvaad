@@ -1,134 +1,57 @@
 import 'package:flutter/material.dart';
-import 'screens/login_screen.dart';
-import 'screens/dialpad_screen.dart';
-import 'services/call_lifecycle_service.dart';
-import 'services/sip_socket_service.dart';
+import 'package:webview_flutter/webview_flutter.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'services/fcm_service.dart';
 
-const _primaryColor = Color(0xFF4299EB);
-const _secondaryColor = Color(0xFF00C853);
-const _errorColor = Color(0xFFFF5252);
-const _darkText = Color(0xFF1a1a1a);
-
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
+
   await Firebase.initializeApp();
   await FcmService().init();
 
-  CallLifecycleService().init();
-
-  final sip = SipSocketService();
-  await sip.loadCredentials();
-
-  runApp(SamvaadApp(hasCredentials: sip.hasCredentials));
+  runApp(const SamvaadApp());
 }
 
 class SamvaadApp extends StatelessWidget {
-  final bool hasCredentials;
-
-  const SamvaadApp({super.key, required this.hasCredentials});
+  const SamvaadApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Samvaad',
       debugShowCheckedModeBanner: false,
-      theme: _buildTheme(),
-      home: hasCredentials ? const DialpadScreen() : const LoginScreen(),
+      home: const WebViewScreen(),
     );
   }
+}
 
-  ThemeData _buildTheme() {
-    final colorScheme = ColorScheme.light(
-      primary: _primaryColor,
-      onPrimary: Colors.white,
-      secondary: _secondaryColor,
-      onSecondary: Colors.white,
-      error: _errorColor,
-      onError: Colors.white,
-      surface: Colors.white,
-      onSurface: _darkText,
-      outline: Colors.grey.shade300,
-    );
+class WebViewScreen extends StatefulWidget {
+  const WebViewScreen({super.key});
 
-    return ThemeData(
-      useMaterial3: true,
-      colorScheme: colorScheme,
-      scaffoldBackgroundColor: const Color(0xFFF5F6FA),
-      appBarTheme: AppBarTheme(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        centerTitle: true,
-        iconTheme: IconThemeData(color: colorScheme.primary),
-        titleTextStyle: TextStyle(
-          color: _darkText,
-          fontSize: 22,
-          fontWeight: FontWeight.w700,
-          letterSpacing: 0.5,
+  @override
+  State<WebViewScreen> createState() => _WebViewScreenState();
+}
+
+class _WebViewScreenState extends State<WebViewScreen> {
+  late final WebViewController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = WebViewController()
+      ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setNavigationDelegate(
+        NavigationDelegate(
+          onPageFinished: (_) => setState(() {}),
         ),
-      ),
-      cardTheme: CardThemeData(
-        color: Colors.white,
-        elevation: 0,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(20),
-          side: BorderSide(color: Colors.grey.shade200, width: 1),
-        ),
-      ),
-      elevatedButtonTheme: ElevatedButtonThemeData(
-        style: ElevatedButton.styleFrom(
-          backgroundColor: colorScheme.primary,
-          foregroundColor: Colors.white,
-          elevation: 0,
-          padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 18),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
-          textStyle: const TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 0.5,
-          ),
-        ),
-      ),
-      inputDecorationTheme: InputDecorationTheme(
-        filled: true,
-        fillColor: const Color(0xFFF8F9FA),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: BorderSide(color: Colors.grey.shade200, width: 1.5),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: BorderSide(color: Colors.grey.shade200, width: 1.5),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: const BorderSide(color: _primaryColor, width: 2),
-        ),
-        errorBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: const BorderSide(color: _errorColor, width: 1.5),
-        ),
-        contentPadding: const EdgeInsets.symmetric(
-          horizontal: 24,
-          vertical: 18,
-        ),
-        labelStyle: TextStyle(color: Colors.grey.shade600, fontSize: 15),
-      ),
-      dividerTheme: DividerThemeData(
-        color: Colors.grey.shade200,
-        thickness: 1,
-        space: 1,
-      ),
-      snackBarTheme: SnackBarThemeData(
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-        ),
-      ),
+      )
+      ..loadRequest(Uri.parse('https://devapp.iotcom.io/webphone/v1/'));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: SafeArea(child: WebViewWidget(controller: _controller)),
     );
   }
 }
