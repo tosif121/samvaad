@@ -166,24 +166,35 @@ class FcmService with WidgetsBindingObserver {
     // Clear notifications on startup
     await _localNotificationsPlugin.cancelAll();
 
-    // Request notification permissions (Android 13+ and iOS)
-    NotificationSettings settings = await _messaging.requestPermission(
-      alert: true,
-      badge: true,
-      sound: true,
-      provisional: false,
-    );
-    log('[FCM_SERVICE] Notification permission status: ${settings.authorizationStatus}');
+    // Request permissions ONLY ONCE on initial launch/login
+    final prefs = await SharedPreferences.getInstance();
+    final hasRequestedAll = prefs.getBool('has_requested_all_permissions') ?? false;
 
-    if (Platform.isAndroid) {
-      if (!await Permission.notification.isGranted) {
-        await Permission.notification.request();
+    if (!hasRequestedAll) {
+      await prefs.setBool('has_requested_all_permissions', true);
+
+      // Request Firebase Messaging notification permission
+      NotificationSettings settings = await _messaging.requestPermission(
+        alert: true,
+        badge: true,
+        sound: true,
+        provisional: false,
+      );
+      log('[FCM_SERVICE] Notification permission status: ${settings.authorizationStatus}');
+
+      if (Platform.isAndroid) {
+        // Request Microphone, Camera & Notification permissions in one prompt batch
+        await [
+          Permission.microphone,
+          Permission.camera,
+          Permission.notification,
+        ].request();
+
+        // Request Display over other apps (System Alert Window) once
+        if (!await Permission.systemAlertWindow.isGranted) {
+          await Permission.systemAlertWindow.request();
+        }
       }
-      if (!await Permission.systemAlertWindow.isGranted) {
-        await Permission.systemAlertWindow.request();
-      }
-      // Request exact alarm / full screen intent if supported by permission_handler
-      // For VoIP apps, systemAlertWindow is often used to launch from background.
     }
 
     try {
