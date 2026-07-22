@@ -69,14 +69,7 @@ class FcmService with WidgetsBindingObserver {
       final creds = jsonDecode(credsStr);
       final username = creds['extension'] ?? creds['username'] ?? '';
       
-      String adminuser = "devapp"; 
-      if (username.contains('-')) {
-        adminuser = username.split('-').last;
-      } else if (creds['sipUri'] != null && creds['sipUri'].contains('@')) {
-        final domain = creds['sipUri'].split('@').last.split('.').first;
-        if (domain != 'devapp') adminuser = domain;
-      }
-
+      String adminuser = "matrix";
       if (username.isEmpty) return;
 
       final deviceInfo = await _getDeviceInfo();
@@ -119,14 +112,7 @@ class FcmService with WidgetsBindingObserver {
       final creds = jsonDecode(credsStr);
       final username = creds['extension'] ?? creds['username'] ?? '';
       
-      String adminuser = "devapp"; 
-      if (username.contains('-')) {
-        adminuser = username.split('-').last;
-      } else if (creds['sipUri'] != null && creds['sipUri'].contains('@')) {
-        final domain = creds['sipUri'].split('@').last.split('.').first;
-        if (domain != 'devapp') adminuser = domain;
-      }
-
+      String adminuser = "matrix";
       if (username.isEmpty) return;
 
       String? token = await _messaging.getToken();
@@ -178,6 +164,15 @@ class FcmService with WidgetsBindingObserver {
     
     // Clear notifications on startup
     await _localNotificationsPlugin.cancelAll();
+
+    // Request notification permissions (Android 13+ and iOS)
+    NotificationSettings settings = await _messaging.requestPermission(
+      alert: true,
+      badge: true,
+      sound: true,
+      provisional: false,
+    );
+    log('[FCM_SERVICE] Notification permission status: ${settings.authorizationStatus}');
 
     try {
       String? token = await _messaging.getToken();
