@@ -9,6 +9,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:device_info_plus/device_info_plus.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
@@ -173,6 +174,17 @@ class FcmService with WidgetsBindingObserver {
       provisional: false,
     );
     log('[FCM_SERVICE] Notification permission status: ${settings.authorizationStatus}');
+
+    if (Platform.isAndroid) {
+      if (!await Permission.notification.isGranted) {
+        await Permission.notification.request();
+      }
+      if (!await Permission.systemAlertWindow.isGranted) {
+        await Permission.systemAlertWindow.request();
+      }
+      // Request exact alarm / full screen intent if supported by permission_handler
+      // For VoIP apps, systemAlertWindow is often used to launch from background.
+    }
 
     try {
       String? token = await _messaging.getToken();
