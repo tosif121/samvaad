@@ -1,4 +1,6 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -71,12 +73,38 @@ class _WebViewScreenState extends State<WebViewScreen> {
           onPageStarted: (url) {
             _controller.runJavaScript(notificationJs);
           },
-          onPageFinished: (_) => setState(() {}),
+          onPageFinished: (_) async {
+            setState(() {});
+            await _injectPendingFcmCall();
+          },
         ),
       )
       ..loadRequest(Uri.parse('https://devapp.iotcom.io/webphone/v1/'));
 
     _configureAndroidSettings();
+  }
+
+  static const _channel = MethodChannel('com.example.samvaad/ringtone');
+
+  Future<void> _injectPendingFcmCall() async {
+    try {
+      final data = await _channel.invokeMethod<Map>('getPendingIncomingCall');
+      if (data == null || data.isEmpty) return;
+      final number = data['number'] as String?;
+      final name = data['name'] as String? ?? 'Unknown';
+      if (number == null || number.isEmpty) return;
+      final payload = jsonEncode({'number': number, 'name': name});
+      await _controller.runJavaScript('''
+(function() {
+  var data = $payload;
+  window.pendingIncomingCall = data;
+  window.dispatchEvent(new CustomEvent('fcmIncomingCall', {detail: data}));
+})();
+''');
+      debugPrint('[FCM_BRIDGE] Injected incoming call: $number');
+    } catch (e) {
+      debugPrint('[FCM_BRIDGE] Error: $e');
+    }
   }
 
   Future<void> _configureAndroidSettings() async {

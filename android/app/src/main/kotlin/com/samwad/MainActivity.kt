@@ -19,6 +19,7 @@ class MainActivity : FlutterActivity() {
         private const val TAG = "MainActivity"
         var isAlive = false
         var isInForeground = false
+        var pendingIncomingCallData: Map<String, String?>? = null
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -79,6 +80,11 @@ class MainActivity : FlutterActivity() {
                 }
                 "cleanupForeground" -> {
                     result.success(true)
+                }
+                "getPendingIncomingCall" -> {
+                    val data = pendingIncomingCallData
+                    pendingIncomingCallData = null
+                    result.success(data)
                 }
                 else -> result.notImplemented()
             }
@@ -156,7 +162,12 @@ class MainActivity : FlutterActivity() {
         val number = intent.getStringExtra("fcm_number")
         if (number != null && number.isNotEmpty()) {
             Log.d(TAG, "Incoming call from notification for: $number")
-            intent.putExtra("fcm_number", null as String?) // consume the extra
+            pendingIncomingCallData = mapOf(
+                "number" to number,
+                "name" to (intent.getStringExtra("caller_name") ?: "Unknown"),
+            )
+            intent.putExtra("fcm_number", null as String?)
+            intent.putExtra("caller_name", null as String?)
         }
     }
 
