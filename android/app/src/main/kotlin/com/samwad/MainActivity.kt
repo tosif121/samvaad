@@ -114,7 +114,13 @@ class MainActivity : FlutterActivity() {
         stopRingtone()
         try {
             val uri = RingtoneManager.getActualDefaultRingtoneUri(this, RingtoneManager.TYPE_RINGTONE)
+            val audioAttributes = android.media.AudioAttributes.Builder()
+                .setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build()
+
             mediaPlayer = MediaPlayer().apply {
+                setAudioAttributes(audioAttributes)
                 setDataSource(this@MainActivity, uri)
                 isLooping = true
                 setVolume(1.0f, 1.0f)

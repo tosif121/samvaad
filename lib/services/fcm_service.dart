@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'ringtone_service.dart';
 
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
@@ -70,7 +71,7 @@ class FcmService with WidgetsBindingObserver {
       final creds = jsonDecode(credsStr);
       final username = creds['extension'] ?? creds['username'] ?? '';
       
-      String adminuser = "matrix";
+      String adminuser = "v2-matrix";
       if (username.isEmpty) return;
 
       final deviceInfo = await _getDeviceInfo();
@@ -214,9 +215,12 @@ class FcmService with WidgetsBindingObserver {
 
     // Foreground messages (app is already open)
     FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-      log('[FCM_SERVICE] Foreground message received: ${message.messageId}');
-      // Ignore foreground notifications since the app will show the SIP incoming call screen automatically.
-      _localNotificationsPlugin.cancelAll();
+      log('[FCM_SERVICE] Foreground message received: ${message.messageId}, data: ${message.data}');
+      final type = message.data['type'];
+      if (type == 'incomingCall' || type == 'incoming_call' || type == 'call') {
+        log('[FCM_SERVICE] Ringing on foreground notification...');
+        RingtoneService().startRinging();
+      }
     });
 
     FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
