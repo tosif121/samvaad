@@ -179,43 +179,6 @@ class _ConnectingCallScreenState extends State<ConnectingCallScreen> {
                   ),
                 ),
                 const Spacer(),
-                GestureDetector(
-                  onTap: _cancel,
-                  child: Column(
-                    children: [
-                      Container(
-                        width: 68,
-                        height: 68,
-                        decoration: BoxDecoration(
-                          color: cs.error,
-                          shape: BoxShape.circle,
-                          boxShadow: [
-                            BoxShadow(
-                              color: cs.error.withValues(alpha: 0.4),
-                              blurRadius: 14,
-                              offset: const Offset(0, 6),
-                            ),
-                          ],
-                        ),
-                        child: const Icon(
-                          Icons.call_end_rounded,
-                          color: Colors.white,
-                          size: 32,
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      Text(
-                        'End Call',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color: cs.error,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 56),
               ],
             ),
           ),
