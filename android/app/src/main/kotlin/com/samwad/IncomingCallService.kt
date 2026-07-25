@@ -11,6 +11,8 @@ import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
 import android.util.Log
+import android.media.AudioAttributes
+import android.media.RingtoneManager
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 
@@ -27,14 +29,8 @@ class IncomingCallService : Service() {
         // 1. Show persistent foreground notification (required within ~5s of service start)
         startForeground(NOTIFICATION_ID, createForegroundNotification())
 
-        // 2. Open the app FIRST while FCM whitelist/foreground privilege is active
-        openApp(callerNumber, callerName)
-
-        // 3. Wake device (turn screen on)
+        // 2. Wake device screen if needed
         wakeDevice()
-
-        // 4. Show incoming call notification with fullScreenIntent for lock screen
-        showIncomingCallNotification(callerName, callerNumber)
 
         stopSelf()
 
@@ -84,17 +80,26 @@ class IncomingCallService : Service() {
     private fun showIncomingCallNotification(callerName: String, callerNumber: String) {
         val channelId = "incoming_call_channel"
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val ringtoneUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val audioAttributes = AudioAttributes.Builder()
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                .build()
+
             val channel = NotificationChannel(
                 channelId,
                 "Incoming Calls",
                 NotificationManager.IMPORTANCE_HIGH
             ).apply {
                 description = "Notifications for incoming calls"
+                setSound(null, null)
                 enableVibration(true)
+                vibrationPattern = longArrayOf(0, 1000, 1000, 1000, 1000)
                 enableLights(true)
                 setShowBadge(true)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             }
             notificationManager.createNotificationChannel(channel)
         }
@@ -118,11 +123,14 @@ class IncomingCallService : Service() {
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentTitle("Incoming Call")
             .setContentText("Call from $callerName")
+            .setContentIntent(pendingIntent)
+            .setSound(ringtoneUri)
             .setAutoCancel(true)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setFullScreenIntent(pendingIntent, true)
-            .setOngoing(false)
+            .addAction(android.R.drawable.ic_menu_call, "Answer Call", pendingIntent)
+            .setOngoing(true)
             .build()
 
         notificationManager.notify(1001, notification)

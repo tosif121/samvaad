@@ -1,15 +1,20 @@
 import 'package:flutter/material.dart';
 import 'screens/login_screen.dart';
 import 'screens/dialpad_screen.dart';
+import 'screens/connecting_call_screen.dart';
 import 'services/call_lifecycle_service.dart';
 import 'services/sip_socket_service.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'services/fcm_service.dart';
+import 'services/callkit_service.dart';
 
 const _primaryColor = Color(0xFF4299EB);
 const _secondaryColor = Color(0xFF00C853);
 const _errorColor = Color(0xFFFF5252);
 const _darkText = Color(0xFF1a1a1a);
+
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -22,21 +27,99 @@ Future<void> main() async {
   final sip = SipSocketService();
   await sip.loadCredentials();
 
-  runApp(SamvaadApp(hasCredentials: sip.hasCredentials));
+  Map<String, String>? initialCallInfo;
+  try {
+    initialCallInfo = await CallKitService().getAcceptedCallInfo();
+    if (initialCallInfo != null) {
+      sip.shouldAutoAnswerNextCall = true;
+      CallKitService().isCallKitAnswering = true;
+    }
+  } catch (e) {
+    debugPrint('[MAIN] Error checking initial CallKit call info: $e');
+  }
+
+  // Fallback: check SharedPreferences for a pending call saved by the
+  // FCM background handler (catches the Android cold-start case where
+  // getAcceptedCallInfo() returns null and the onAccept event is lost).
+  if (initialCallInfo == null) {
+    final prefs = await SharedPreferences.getInstance();
+    final pendingNumber = prefs.getString('pending_call_number');
+    if (pendingNumber != null && pendingNumber.isNotEmpty) {
+      final pendingName = prefs.getString('pending_call_name') ?? '';
+      initialCallInfo = {
+        'callerNumber': pendingNumber,
+        'callerName': pendingName,
+      };
+      sip.shouldAutoAnswerNextCall = true;
+      CallKitService().isCallKitAnswering = true;
+      debugPrint('[MAIN] Restored pending call from SharedPreferences: $pendingName ($pendingNumber)');
+    }
+    // Clear prefs after reading (also cleared on call end as a safety net).
+    await prefs.remove('pending_call_number');
+    await prefs.remove('pending_call_name');
+    await prefs.remove('pending_call_id');
+  }
+
+  CallKitService().listenCallEvents(
+    onAccept: (callerNumber, callerName) async {
+      await CallKitService().endCurrentCall();
+      sip.shouldAutoAnswerNextCall = true;
+      CallKitService().isCallKitAnswering = true;
+      if (navigatorKey.currentState != null) {
+        navigatorKey.currentState!.pushAndRemoveUntil(
+          MaterialPageRoute(
+            builder: (context) => ConnectingCallScreen(
+              callerName: callerName,
+              callerNumber: callerNumber,
+            ),
+          ),
+          (route) => false,
+        );
+      }
+    },
+    onDecline: () async {
+      final sipService = SipSocketService();
+      await sipService.endCall();
+      await CallKitService().endCurrentCall();
+    },
+  );
+
+  runApp(SamvaadApp(
+    hasCredentials: sip.hasCredentials,
+    initialCallInfo: initialCallInfo,
+  ));
 }
 
 class SamvaadApp extends StatelessWidget {
   final bool hasCredentials;
+  final Map<String, String>? initialCallInfo;
 
-  const SamvaadApp({super.key, required this.hasCredentials});
+  const SamvaadApp({
+    super.key,
+    required this.hasCredentials,
+    this.initialCallInfo,
+  });
 
   @override
   Widget build(BuildContext context) {
+    Widget initialHome;
+    if (initialCallInfo != null) {
+      initialHome = ConnectingCallScreen(
+        callerName: initialCallInfo!['callerName'] ?? '',
+        callerNumber: initialCallInfo!['callerNumber'] ?? '',
+      );
+    } else if (hasCredentials) {
+      initialHome = const DialpadScreen();
+    } else {
+      initialHome = const LoginScreen();
+    }
+
     return MaterialApp(
+      navigatorKey: navigatorKey,
       title: 'Samvaad',
       debugShowCheckedModeBanner: false,
       theme: _buildTheme(),
-      home: hasCredentials ? const DialpadScreen() : const LoginScreen(),
+      home: initialHome,
     );
   }
 

@@ -9,6 +9,7 @@ import '../models/sip_credentials.dart';
 import 'remote_audio_stub.dart'
     if (dart.library.html) 'remote_audio_web.dart';
 import 'call_lifecycle_service.dart';
+import 'callkit_service.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 enum CallState { idle, dialing, ringing, onCall }
@@ -59,6 +60,9 @@ class SipSocketService implements sip.SipUaHelperListener {
   // an explicit endCall()/rejectCall() racing with it).
   bool _callEndedHandled = false;
   bool _isAnswering = false;
+  bool shouldAutoAnswerNextCall = false;
+
+  bool get isAnswering => _isAnswering;
 
   // Set when a call arrives via FCM/VoIP push before the real SIP INVITE
   // has been received. Used to bind the native call UI (already showing)
@@ -363,6 +367,18 @@ class SipSocketService implements sip.SipUaHelperListener {
             }
           } catch (_) {}
           _log('Incoming call — video detected: $isVideoCall');
+
+          final isAnsweringViaNotification = shouldAutoAnswerNextCall ||
+              _isAnswering ||
+              CallKitService().isCallKitAnswering;
+
+          if (isAnsweringViaNotification) {
+            _log('[SIP_SOCKET] Auto-answering incoming call from CallKit/Notification answer — SUPPRESSING incomingCall event!');
+            shouldAutoAnswerNextCall = false;
+            answerCall();
+            break;
+          }
+
           _emit(SipEvent.incomingCall, data: {'number': _incomingNumber});
 
           // If this call arrived after a push already showed a native
@@ -397,6 +413,7 @@ class SipSocketService implements sip.SipUaHelperListener {
         _callState = CallState.onCall;
         _emit(SipEvent.callAnswered);
         CallLifecycleService().onCallStarted();
+        CallKitService().endCurrentCall();
         _notifyNative('callActive', {'callId': _pendingPushCallId ?? ''});
         unawaited(Helper.setSpeakerphoneOn(isVideoCall).then((_) {
           _isSpeakerOn = isVideoCall;
@@ -528,6 +545,16 @@ class SipSocketService implements sip.SipUaHelperListener {
     _activeCall = null;
     _pendingPushCallId = null;
     removeRemoteAudio();
+
+    // Clear any pending call info saved by the FCM background handler.
+    _clearPendingCallPrefs();
+  }
+
+  static Future<void> _clearPendingCallPrefs() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('pending_call_number');
+    await prefs.remove('pending_call_name');
+    await prefs.remove('pending_call_id');
   }
 
   void _playRemoteAudio(dynamic stream) {

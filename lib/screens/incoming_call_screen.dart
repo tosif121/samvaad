@@ -23,7 +23,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
 
   @override
   void initState() {
-    debugPrint('[SCREEN] IncomingCallScreen ACTIVE');
+    debugPrint('[SCREEN] IncomingCallScreen ACTIVE for ${widget.phoneNumber}. Stack:\n${StackTrace.current}');
     super.initState();
     _pulseController = AnimationController(
       vsync: this,

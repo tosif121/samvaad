@@ -10,19 +10,39 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'ringtone_service.dart';
+import 'callkit_service.dart';
 
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
   log('[FCM_SERVICE] Background message received: ${message.messageId}');
 
-  final type = message.data['type'];
-  if (type == 'incomingCall' || type == 'incoming_call') {
-    // Native MyFirebaseMessagingService handles notification + app opening
-    // when app is killed or in background. This handler is kept as fallback
-    // for logging and future non-call message types.
-    log('[FCM_SERVICE] Incoming call background message (handled natively)');
+  final type = message.data['type'] ?? message.data['event'];
+  if (type == 'incomingCall' || type == 'incoming_call' || type == 'call') {
+    final callerName = message.data['callerName'] ?? message.data['title'] ?? 'Incoming Call';
+    final callerNumber = message.data['callerNumber'] ?? message.data['body'] ?? '';
+    final callId = message.data['call_id'] ?? '';
+
+    // Persist call info so cold start can detect it even if
+    // getAcceptedCallInfo() / onAccept event is missed on Android.
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('pending_call_number', callerNumber);
+    await prefs.setString('pending_call_name', callerName);
+    await prefs.setString('pending_call_id', callId);
+
+    log('[FCM_SERVICE] Triggering CallKit for background call from $callerName');
+    await CallKitService().showIncomingCall(
+      callerName: callerName,
+      callerNumber: callerNumber,
+      callId: callId,
+    );
+  } else if (type == 'cancel' || type == 'hangup' || type == 'call_ended' || type == 'ended' || type == 'missed') {
+    log('[FCM_SERVICE] Received call termination push, ending CallKit UI');
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('pending_call_number');
+    await prefs.remove('pending_call_name');
+    await prefs.remove('pending_call_id');
+    await CallKitService().endCurrentCall();
   }
 }
 
@@ -190,11 +210,6 @@ class FcmService with WidgetsBindingObserver {
           Permission.camera,
           Permission.notification,
         ].request();
-
-        // Request Display over other apps (System Alert Window) once
-        if (!await Permission.systemAlertWindow.isGranted) {
-          await Permission.systemAlertWindow.request();
-        }
       }
     }
 
@@ -216,10 +231,21 @@ class FcmService with WidgetsBindingObserver {
     // Foreground messages (app is already open)
     FirebaseMessaging.onMessage.listen((RemoteMessage message) {
       log('[FCM_SERVICE] Foreground message received: ${message.messageId}, data: ${message.data}');
-      final type = message.data['type'];
+      final type = message.data['type'] ?? message.data['event'];
       if (type == 'incomingCall' || type == 'incoming_call' || type == 'call') {
-        log('[FCM_SERVICE] Ringing on foreground notification...');
-        RingtoneService().startRinging();
+        log('[FCM_SERVICE] Triggering CallKit on foreground notification...');
+        final callerName = message.data['callerName'] ?? message.data['title'] ?? 'Incoming Call';
+        final callerNumber = message.data['callerNumber'] ?? message.data['body'] ?? '';
+        final callId = message.data['call_id'] ?? '';
+
+        CallKitService().showIncomingCall(
+          callerName: callerName,
+          callerNumber: callerNumber,
+          callId: callId,
+        );
+      } else if (type == 'cancel' || type == 'hangup' || type == 'call_ended' || type == 'ended' || type == 'missed') {
+        log('[FCM_SERVICE] Received call termination push in foreground, ending CallKit UI');
+        CallKitService().endCurrentCall();
       }
     });
 

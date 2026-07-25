@@ -7,10 +7,10 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'incoming_call_screen.dart';
 import '../services/fcm_service.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
-import 'package:flutter/services.dart';
 import 'login_screen.dart';
 import '../services/sip_socket_service.dart';
 import '../services/ringtone_service.dart';
+import '../services/callkit_service.dart';
 
 class DialpadScreen extends StatefulWidget {
   const DialpadScreen({super.key});
@@ -43,12 +43,23 @@ class _DialpadScreenState extends State<DialpadScreen>
   Future<void> _initRenderers() async {
     await _localRenderer.initialize();
     await _remoteRenderer.initialize();
+    if (mounted) setState(() {});
   }
 
   @override
   void initState() {
     debugPrint('[SCREEN] DialpadScreen ACTIVE');
     super.initState();
+
+    if (_sip.callState == CallState.onCall ||
+        _sip.isAnswering ||
+        _sip.shouldAutoAnswerNextCall ||
+        CallKitService().isCallKitAnswering) {
+      _isOnCall = true;
+      _activeCallNumber = _sip.incomingNumber;
+      _startCallTimer();
+    }
+
     _initRenderers();
     WidgetsBinding.instance.addObserver(this);
     _initSip();
@@ -73,10 +84,23 @@ class _DialpadScreenState extends State<DialpadScreen>
           DateTime.now().difference(_lastHandledAt!) <
               const Duration(seconds: 3);
 
+      debugPrint('[DIALPAD] Lifecycle RESUMED. '
+          'CallState: ${_sip.callState.name}, '
+          'incomingNumber: ${_sip.incomingNumber}, '
+          'isShowingDialog: $_isShowingIncomingDialog, '
+          'isOnCall: $_isOnCall, '
+          'recentlyHandled: $recentlyHandledSameNumber, '
+          'isCallKitAnswering: ${CallKitService().isCallKitAnswering}, '
+          'isAnswering: ${_sip.isAnswering}, '
+          'shouldAutoAnswer: ${_sip.shouldAutoAnswerNextCall}');
+
       if (_sip.callState == CallState.ringing &&
           !_isShowingIncomingDialog &&
           !_isOnCall &&
           !recentlyHandledSameNumber &&
+          !CallKitService().isCallKitAnswering &&
+          !_sip.isAnswering &&
+          !_sip.shouldAutoAnswerNextCall &&
           _sip.isRegistered) {
         _showIncomingCall(_sip.incomingNumber);
       }
@@ -118,6 +142,11 @@ class _DialpadScreenState extends State<DialpadScreen>
           final number = event['number'] as String? ?? 'Unknown';
           if (_isOnCall) break;
           if (_isShowingIncomingDialog) break;
+          if (_sip.callState == CallState.onCall) break;
+          if (_sip.isAnswering || _sip.shouldAutoAnswerNextCall || CallKitService().isCallKitAnswering) {
+            debugPrint('[DIALPAD] Skipping incomingCall event because call is being answered automatically or via notification');
+            break;
+          }
 
           final recentlyHandledSameNumber = _lastHandledNumber == number &&
               _lastHandledAt != null &&
@@ -221,12 +250,19 @@ class _DialpadScreenState extends State<DialpadScreen>
   Future<void> _showIncomingCall(String number) async {
     final callId = _sip.activeCallId ?? 'unknown_id';
     final callState = _sip.callState.name;
-    debugPrint(
-        '[DIALPAD] _showIncomingCall invoked for $number. Call ID: $callId, State: $callState');
 
-    if (_isShowingIncomingDialog) {
+    debugPrint(
+        '[DIALPAD] _showIncomingCall invoked for $number. '
+        'CallID: $callId, CallState: $callState, '
+        'isShowingDialog: $_isShowingIncomingDialog, '
+        'isCallKitAnswering: ${CallKitService().isCallKitAnswering}, '
+        'isAnswering: ${_sip.isAnswering}, '
+        'shouldAutoAnswer: ${_sip.shouldAutoAnswerNextCall}, '
+        'isOnCall: $_isOnCall');
+
+    if (_isShowingIncomingDialog || CallKitService().isCallKitAnswering || _sip.isAnswering || _sip.shouldAutoAnswerNextCall) {
       debugPrint(
-          '[DIALPAD] _showIncomingCall aborted: _isShowingIncomingDialog is true');
+          '[DIALPAD] _showIncomingCall ABORTED: call is being answered automatically or via notification');
       return;
     }
     if (_isOnCall) {
@@ -359,14 +395,35 @@ class _DialpadScreenState extends State<DialpadScreen>
 
   @override
   Widget build(BuildContext context) {
+    final isOnActiveCall = _isOnCall ||
+        _sip.callState == CallState.onCall ||
+        _sip.isAnswering ||
+        _sip.shouldAutoAnswerNextCall ||
+        CallKitService().isCallKitAnswering;
+
     return Scaffold(
       appBar: AppBar(
-        title: Text(_isOnCall ? 'On Call' : 'Samvaad'),
+        title: Row(
+          children: [
+            Text(isOnActiveCall ? 'On Call' : 'Samvaad'),
+            const SizedBox(width: 10),
+            Container(
+              width: 10,
+              height: 10,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: _sip.isRegistered
+                    ? const Color(0xFF00C853)
+                    : (_sip.isConnected ? Colors.orange : Colors.red),
+              ),
+            ),
+          ],
+        ),
         titleSpacing: 16,
         centerTitle: false,
         automaticallyImplyLeading: false,
         actions: [
-          if (!_isOnCall)
+          if (!isOnActiveCall)
             Builder(
               builder: (context) => IconButton(
                 icon: const Icon(Icons.menu_rounded),
@@ -375,9 +432,9 @@ class _DialpadScreenState extends State<DialpadScreen>
             ),
         ],
       ),
-      drawer: _isOnCall ? null : _buildDrawer(),
+      drawer: isOnActiveCall ? null : _buildDrawer(),
       body: SafeArea(
-        child: _isOnCall ? _buildOnCallUI() : _buildIdleUI(),
+        child: isOnActiveCall ? _buildOnCallUI() : _buildIdleUI(),
       ),
     );
   }
@@ -396,9 +453,18 @@ class _DialpadScreenState extends State<DialpadScreen>
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   CircleAvatar(
-                    radius: 32,
+                    radius: 30,
                     backgroundColor: cs.primary,
-                    child: const Icon(Icons.person, size: 32, color: Colors.white),
+                    child: Text(
+                      (_username != null && _username!.isNotEmpty)
+                          ? _username![0].toUpperCase()
+                          : 'U',
+                      style: const TextStyle(
+                        fontSize: 24,
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                   ),
                   const SizedBox(height: 16),
                   Text(
@@ -413,9 +479,37 @@ class _DialpadScreenState extends State<DialpadScreen>
               ),
             ),
             ListTile(
-              leading: Icon(Icons.info_outline, color: _sip.isRegistered ? cs.secondary : Colors.orange),
+              leading: Icon(
+                _sip.isRegistered
+                    ? Icons.check_circle_rounded
+                    : (_sip.isConnected
+                        ? Icons.sync_rounded
+                        : Icons.error_outline_rounded),
+                color: _sip.isRegistered
+                    ? cs.secondary
+                    : (_sip.isConnected ? Colors.orange : cs.error),
+              ),
               title: const Text('SIP Status'),
-              subtitle: Text(_sip.isRegistered ? 'Registered' : (_sip.isConnected ? 'Registering...' : 'Disconnected')),
+              subtitle: Text(
+                _sip.isRegistered
+                    ? 'Registered'
+                    : (_sip.isConnected
+                        ? 'Registering...'
+                        : 'Disconnected — Tap to reconnect'),
+              ),
+              trailing: IconButton(
+                icon: const Icon(Icons.refresh_rounded),
+                onPressed: () async {
+                  setState(() {});
+                  await _sip.connect();
+                  if (mounted) setState(() {});
+                },
+              ),
+              onTap: () async {
+                setState(() {});
+                await _sip.connect();
+                if (mounted) setState(() {});
+              },
             ),
             const Divider(),
 
@@ -745,16 +839,36 @@ class _DialpadScreenState extends State<DialpadScreen>
 
   Widget _buildVideoView() {
     if (!_sip.isVideoCall) return const SizedBox.shrink();
+
+    try {
+      if (_remoteRenderer.textureId != null &&
+          _remoteRenderer.srcObject != _sip.remoteStream &&
+          _sip.remoteStream != null) {
+        _remoteRenderer.srcObject = _sip.remoteStream as MediaStream?;
+      }
+      if (_localRenderer.textureId != null &&
+          _localRenderer.srcObject != _sip.localStream &&
+          _sip.localStream != null) {
+        _localRenderer.srcObject = _sip.localStream as MediaStream?;
+      }
+    } catch (e) {
+      debugPrint('[DIALPAD] Error setting renderer srcObject: $e');
+    }
+
     return Stack(
       children: [
         Positioned.fill(
           child: Container(
             color: Colors.black,
-            child: RTCVideoView(
-              _remoteRenderer,
-              objectFit:
-                  RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-            ),
+            child: _remoteRenderer.textureId != null
+                ? RTCVideoView(
+                    _remoteRenderer,
+                    objectFit:
+                        RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                  )
+                : const Center(
+                    child: CircularProgressIndicator(color: Colors.white),
+                  ),
           ),
         ),
         if (!_sip.isLocalVideoMuted)
