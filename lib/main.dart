@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'services/fcm_service.dart';
 
@@ -68,6 +69,25 @@ class _WebViewScreenState extends State<WebViewScreen> {
       },
     )
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..addJavaScriptChannel(
+        'FlutterFCMBridge',
+        onMessageReceived: (JavaScriptMessage message) async {
+          debugPrint('[FCM_BRIDGE] Received message from Webview: ${message.message}');
+          try {
+            final data = jsonDecode(message.message);
+            final username = (data['username'] ?? data['user'] ?? data['extension'] ?? '').toString();
+            final adminuser = (data['adminuser'] ?? data['domain'] ?? data['tenant'] ?? 'devapp').toString();
+            if (username.isNotEmpty) {
+              await FcmService().saveCredentialsAndSendToken(
+                username: username,
+                adminuser: adminuser,
+              );
+            }
+          } catch (e) {
+            debugPrint('[FCM_BRIDGE] Error parsing credentials from JS: $e');
+          }
+        },
+      )
       ..setNavigationDelegate(
         NavigationDelegate(
           onPageStarted: (url) {
@@ -76,6 +96,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
           onPageFinished: (_) async {
             setState(() {});
             await _injectPendingFcmCall();
+            await _injectFcmTokenAndAutoDetectUser();
           },
         ),
       )
@@ -104,6 +125,89 @@ class _WebViewScreenState extends State<WebViewScreen> {
       debugPrint('[FCM_BRIDGE] Injected incoming call: $number');
     } catch (e) {
       debugPrint('[FCM_BRIDGE] Error: $e');
+    }
+  }
+
+  Future<void> _injectFcmTokenAndAutoDetectUser() async {
+    try {
+      final token = await FirebaseMessaging.instance.getToken();
+      if (token != null) {
+        debugPrint('[FCM_BRIDGE] [STEP A] Injecting global FCM token into Webview window.fcmToken: $token');
+        await _controller.runJavaScript('''
+(function() {
+  window.fcmToken = "$token";
+  window.mobileToken = "$token";
+  console.log("[FCM_WEBVIEW] [STEP A] window.fcmToken globally set: " + window.fcmToken.substring(0, 15) + "...");
+  if (window.onFcmTokenReceived) {
+    try { window.onFcmTokenReceived("$token"); } catch(_) {}
+  }
+})();
+''');
+      }
+
+      const autoDetectJs = '''
+(function() {
+  function extractUserAndBridge() {
+    try {
+      var savedUsername = localStorage.getItem('savedUsername');
+      var tokenStr = localStorage.getItem('token');
+      var adminuser = 'devapp';
+      var username = savedUsername;
+
+      if (tokenStr) {
+        try {
+          var tokenObj = JSON.parse(tokenStr);
+          if (tokenObj) {
+            if (!username) {
+              username = tokenObj.username ||
+                         (tokenObj.userData && (tokenObj.userData.username || tokenObj.userData.extension || tokenObj.userData.user)) ||
+                         (tokenObj.user && tokenObj.user.username);
+            }
+            adminuser = tokenObj.adminuser ||
+                        (tokenObj.userData && (tokenObj.userData.adminuser || tokenObj.userData.tenant || tokenObj.userData.domain)) ||
+                        tokenObj.tenant ||
+                        'devapp';
+          }
+        } catch(e) {}
+      }
+
+      if (!username) {
+        username = localStorage.getItem('user') ||
+                   localStorage.getItem('username') ||
+                   localStorage.getItem('extension') ||
+                   localStorage.getItem('agent');
+      }
+
+      if (username) {
+        if (!window._fcmSentUser || window._fcmSentUser !== username) {
+          window._fcmSentUser = username;
+          console.log('[FCM_WEBVIEW] [STEP C] Found webphone credentials: username=' + username + ', adminuser=' + adminuser);
+          if (window.FlutterFCMBridge) {
+            window.FlutterFCMBridge.postMessage(JSON.stringify({
+              username: username,
+              adminuser: adminuser
+            }));
+          } else {
+            console.warn('[FCM_WEBVIEW] [STEP C WARNING] window.FlutterFCMBridge is undefined');
+          }
+        }
+      }
+    } catch(e) {
+      console.error('[FCM_WEBVIEW] [ERROR] Exception during extractUserAndBridge:', e);
+    }
+  }
+
+  extractUserAndBridge();
+  if (!window._fcmBridgeInterval) {
+    window._fcmBridgeInterval = setInterval(extractUserAndBridge, 2000);
+  }
+})();
+''';
+
+      await _controller.runJavaScript(autoDetectJs);
+      debugPrint('[FCM_BRIDGE] [STEP B] Auto-detector script injected successfully into Webview.');
+    } catch (e) {
+      debugPrint('[FCM_BRIDGE] [ERROR] Error injecting FCM token auto-detector: $e');
     }
   }
 

@@ -57,12 +57,41 @@ class FcmService with WidgetsBindingObserver {
     };
   }
 
+  Future<void> saveCredentialsAndSendToken({
+    required String username,
+    required String adminuser,
+  }) async {
+    try {
+      log("[FCM_SERVICE] [STEP 1] Received credentials from Webview bridge: username='$username', adminuser='$adminuser'");
+      final prefs = await SharedPreferences.getInstance();
+      final creds = {
+        'username': username,
+        'extension': username,
+        'adminuser': adminuser,
+      };
+      await prefs.setString('sip_credentials', jsonEncode(creds));
+      log("[FCM_SERVICE] [STEP 2] Saved 'sip_credentials' to SharedPreferences successfully.");
+
+      log("[FCM_SERVICE] [STEP 3] Fetching FCM token from FirebaseMessaging...");
+      String? token = await _messaging.getToken();
+      if (token != null) {
+        log("[FCM_SERVICE] [STEP 4] FCM token fetched: ${token.substring(0, 20)}...");
+        await sendTokenToBackend(token);
+      } else {
+        log("[FCM_SERVICE] [STEP 4 WARNING] FirebaseMessaging.getToken() returned null!");
+      }
+    } catch (e, st) {
+      log("[FCM_SERVICE] [ERROR] Error in saveCredentialsAndSendToken: $e\n$st");
+    }
+  }
+
   Future<void> sendTokenToBackend(String token) async {
     try {
+      log("[FCM_SERVICE] [POST 1] Starting sendTokenToBackend...");
       final prefs = await SharedPreferences.getInstance();
       final credsStr = prefs.getString('sip_credentials');
       if (credsStr == null) {
-        log("[FCM_SERVICE] No SIP credentials found, skipping token registration.");
+        log("[FCM_SERVICE] [POST WARNING] No SIP credentials found in SharedPreferences, skipping token registration.");
         return;
       }
       
@@ -75,9 +104,14 @@ class FcmService with WidgetsBindingObserver {
       } else if (creds['sipUri'] != null && creds['sipUri'].contains('@')) {
         final domain = creds['sipUri'].split('@').last.split('.').first;
         if (domain != 'devapp') adminuser = domain;
+      } else if (creds['adminuser'] != null && creds['adminuser'].toString().isNotEmpty) {
+        adminuser = creds['adminuser'].toString();
       }
 
-      if (username.isEmpty) return;
+      if (username.isEmpty) {
+        log("[FCM_SERVICE] [POST WARNING] Username is empty, skipping POST request.");
+        return;
+      }
 
       final deviceInfo = await _getDeviceInfo();
 
@@ -91,7 +125,7 @@ class FcmService with WidgetsBindingObserver {
         "appSecret": "samvaad_mobile_secret_123"
       };
 
-      log("[FCM_SERVICE] Sending payload to backend: ${jsonEncode(payload)}");
+      log("[FCM_SERVICE] [POST 2] Sending FCM token payload to backend: ${jsonEncode(payload)}");
 
       final url = Uri.parse('https://devapp.iotcom.io/storeFirebaseTokenMobile');
       final response = await http.post(
@@ -100,13 +134,15 @@ class FcmService with WidgetsBindingObserver {
         body: jsonEncode(payload),
       );
 
+      log("[FCM_SERVICE] [POST 3] Backend Response Code: ${response.statusCode}, Body: ${response.body}");
+
       if (response.statusCode == 200) {
-        log("[FCM_SERVICE] Token securely stored in MongoDB!");
+        log("[FCM_SERVICE] [SUCCESS] FCM Token securely registered in MongoDB!");
       } else {
-        log("[FCM_SERVICE] Failed to store token: ${response.body}");
+        log("[FCM_SERVICE] [FAILURE] Failed to store token: ${response.body}");
       }
-    } catch (e) {
-      log("[FCM_SERVICE] Error sending token to backend: $e");
+    } catch (e, st) {
+      log("[FCM_SERVICE] [ERROR] Error sending token to backend: $e\n$st");
     }
   }
 
