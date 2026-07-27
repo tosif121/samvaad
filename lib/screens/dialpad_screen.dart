@@ -12,6 +12,8 @@ import '../services/sip_socket_service.dart';
 import '../services/ringtone_service.dart';
 import '../services/callkit_service.dart';
 
+import '../services/oem_optimization_service.dart';
+
 class DialpadScreen extends StatefulWidget {
   const DialpadScreen({super.key});
 
@@ -69,6 +71,10 @@ class _DialpadScreenState extends State<DialpadScreen>
       if (_phoneFocusNode.hasFocus) {
         _phoneFocusNode.unfocus();
       }
+    });
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      OemOptimizationService().checkAndShowOemGuidanceDialog(context);
     });
   }
 
