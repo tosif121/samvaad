@@ -1,4 +1,4 @@
-package com.samwad
+package com.iotcom.samvaad
 
 import android.app.Notification
 import android.app.NotificationChannel

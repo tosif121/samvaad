@@ -76,9 +76,9 @@ class OemOptimizationService {
 
     // 3. Check if OEM autostart guidance should be shown
     if (await shouldShowOemGuidance()) {
-      if (!context.mounted) return;
       final manufacturer = await getDeviceManufacturer();
       final brandName = _formatBrandName(manufacturer);
+      if (!context.mounted) return;
 
       await showDialog(
         context: context,
