@@ -75,6 +75,14 @@ class _WebViewScreenState extends State<WebViewScreen> {
           debugPrint('[FCM_BRIDGE] Received message from Webview: ${message.message}');
           try {
             final data = jsonDecode(message.message);
+            final action = (data['action'] ?? '').toString();
+
+            if (action == 'logout' || data['logout'] == true) {
+              debugPrint('[FCM_BRIDGE] Logout signal received from Webview! Removing FCM token from backend...');
+              await FcmService().removeTokenFromBackend();
+              return;
+            }
+
             final username = (data['username'] ?? data['user'] ?? data['extension'] ?? '').toString();
             final adminuser = (data['adminuser'] ?? data['domain'] ?? data['tenant'] ?? 'devapp').toString();
             if (username.isNotEmpty) {
@@ -82,9 +90,11 @@ class _WebViewScreenState extends State<WebViewScreen> {
                 username: username,
                 adminuser: adminuser,
               );
+            } else if (action == 'logout') {
+              await FcmService().removeTokenFromBackend();
             }
           } catch (e) {
-            debugPrint('[FCM_BRIDGE] Error parsing credentials from JS: $e');
+            debugPrint('[FCM_BRIDGE] Error parsing credentials/logout from JS: $e');
           }
         },
       )
@@ -184,6 +194,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
           console.log('[FCM_WEBVIEW] [STEP C] Found webphone credentials: username=' + username + ', adminuser=' + adminuser);
           if (window.FlutterFCMBridge) {
             window.FlutterFCMBridge.postMessage(JSON.stringify({
+              action: 'login',
               username: username,
               adminuser: adminuser
             }));
@@ -191,10 +202,43 @@ class _WebViewScreenState extends State<WebViewScreen> {
             console.warn('[FCM_WEBVIEW] [STEP C WARNING] window.FlutterFCMBridge is undefined');
           }
         }
+      } else {
+        if (window._fcmSentUser) {
+          console.log('[FCM_WEBVIEW] [LOGOUT DETECTED] User logged out! Sending logout signal for user: ' + window._fcmSentUser);
+          if (window.FlutterFCMBridge) {
+            window.FlutterFCMBridge.postMessage(JSON.stringify({
+              action: 'logout',
+              username: window._fcmSentUser
+            }));
+          }
+          window._fcmSentUser = null;
+        }
       }
     } catch(e) {
       console.error('[FCM_WEBVIEW] [ERROR] Exception during extractUserAndBridge:', e);
     }
+  }
+
+  if (!window._fcmLogoutHooked) {
+    window._fcmLogoutHooked = true;
+    var origClear = localStorage.clear;
+    localStorage.clear = function() {
+      if (window._fcmSentUser && window.FlutterFCMBridge) {
+        console.log('[FCM_WEBVIEW] localStorage.clear() invoked - sending logout signal');
+        window.FlutterFCMBridge.postMessage(JSON.stringify({ action: 'logout', username: window._fcmSentUser }));
+        window._fcmSentUser = null;
+      }
+      return origClear.apply(this, arguments);
+    };
+    var origRemoveItem = localStorage.removeItem;
+    localStorage.removeItem = function(key) {
+      if ((key === 'token' || key === 'savedUsername' || key === 'user' || key === 'username') && window._fcmSentUser && window.FlutterFCMBridge) {
+        console.log('[FCM_WEBVIEW] localStorage.removeItem(' + key + ') invoked - sending logout signal');
+        window.FlutterFCMBridge.postMessage(JSON.stringify({ action: 'logout', username: window._fcmSentUser }));
+        window._fcmSentUser = null;
+      }
+      return origRemoveItem.apply(this, arguments);
+    };
   }
 
   extractUserAndBridge();

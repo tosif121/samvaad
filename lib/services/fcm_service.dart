@@ -148,14 +148,18 @@ class FcmService with WidgetsBindingObserver {
 
   Future<void> removeTokenFromBackend() async {
     try {
+      log("[FCM_SERVICE] [LOGOUT 1] Initiating FCM token removal on logout...");
       final prefs = await SharedPreferences.getInstance();
       final credsStr = prefs.getString('sip_credentials');
-      if (credsStr == null) return;
+      if (credsStr == null) {
+        log("[FCM_SERVICE] [LOGOUT WARNING] No sip_credentials found in SharedPreferences.");
+        return;
+      }
       
       final creds = jsonDecode(credsStr);
       final username = creds['extension'] ?? creds['username'] ?? '';
       
-      String adminuser = "devapp"; 
+      String adminuser = creds['adminuser'] ?? "devapp"; 
       if (username.contains('-')) {
         adminuser = username.split('-').last;
       } else if (creds['sipUri'] != null && creds['sipUri'].contains('@')) {
@@ -163,10 +167,16 @@ class FcmService with WidgetsBindingObserver {
         if (domain != 'devapp') adminuser = domain;
       }
 
-      if (username.isEmpty) return;
+      if (username.isEmpty) {
+        log("[FCM_SERVICE] [LOGOUT WARNING] Username is empty, skipping remove token payload.");
+        return;
+      }
 
       String? token = await _messaging.getToken();
-      if (token == null) return;
+      if (token == null) {
+        log("[FCM_SERVICE] [LOGOUT WARNING] FCM Token is null!");
+        return;
+      }
 
       final payload = {
         "username": username,
@@ -175,6 +185,8 @@ class FcmService with WidgetsBindingObserver {
         "appSecret": "samvaad_mobile_secret_123"
       };
 
+      log("[FCM_SERVICE] [LOGOUT 2] Sending remove token payload to backend: ${jsonEncode(payload)}");
+
       final url = Uri.parse('https://devapp.iotcom.io/removeFirebaseTokenMobile');
       final response = await http.post(
         url,
@@ -182,13 +194,16 @@ class FcmService with WidgetsBindingObserver {
         body: jsonEncode(payload),
       );
 
+      log("[FCM_SERVICE] [LOGOUT 3] Backend Response Code: ${response.statusCode}, Body: ${response.body}");
+
       if (response.statusCode == 200) {
-        log("[FCM_SERVICE] Token removed from backend successfully!");
+        log("[FCM_SERVICE] [SUCCESS] Token removed from backend successfully on logout!");
+        await prefs.remove('sip_credentials');
       } else {
-        log("[FCM_SERVICE] Failed to remove token: ${response.body}");
+        log("[FCM_SERVICE] [FAILURE] Failed to remove token from backend: ${response.body}");
       }
-    } catch (e) {
-      log("[FCM_SERVICE] Error removing token from backend: $e");
+    } catch (e, st) {
+      log("[FCM_SERVICE] [ERROR] Error removing token from backend: $e\n$st");
     }
   }
 
