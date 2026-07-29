@@ -25,8 +25,8 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
     }
 
     private fun handleIncomingCall(message: RemoteMessage) {
-        val callerName = message.data["callerName"] ?: message.data["title"] ?: "Unknown Caller"
-        val callerNumber = message.data["callerNumber"] ?: message.data["body"] ?: ""
+        val callerName = message.data["callerName"] ?: message.data["caller"] ?: message.data["title"] ?: "Incoming Call"
+        val callerNumber = message.data["callerNumber"] ?: message.data["caller"] ?: message.data["body"] ?: ""
 
         // Start foreground service (works on stricter OEMs with persistent state)
         IncomingCallService.start(this, callerName, callerNumber)
