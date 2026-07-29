@@ -9,6 +9,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:device_info_plus/device_info_plus.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
@@ -230,14 +231,36 @@ class FcmService with WidgetsBindingObserver {
     // Clear notifications on startup
     await _localNotificationsPlugin.cancelAll();
 
-    // Request notification permissions (iOS + Android 13+)
-    final settings = await _messaging.requestPermission(
-      alert: true,
-      badge: true,
-      sound: true,
-      provisional: false,
-    );
-    log('[FCM_SERVICE] Notification permission: ${settings.authorizationStatus}');
+    // Request permissions ONLY ONCE on initial launch/login
+    final prefs = await SharedPreferences.getInstance();
+    final hasRequestedAll = prefs.getBool('has_requested_all_permissions') ?? false;
+
+    if (!hasRequestedAll) {
+      await prefs.setBool('has_requested_all_permissions', true);
+
+      // Request Firebase Messaging notification permission
+      NotificationSettings settings = await _messaging.requestPermission(
+        alert: true,
+        badge: true,
+        sound: true,
+        provisional: false,
+      );
+      log('[FCM_SERVICE] Notification permission status: ${settings.authorizationStatus}');
+
+      if (Platform.isAndroid) {
+        // Request Microphone, Camera & Notification permissions in one prompt batch
+        await [
+          Permission.microphone,
+          Permission.camera,
+          Permission.notification,
+        ].request();
+
+        // Request Display over other apps (System Alert Window) once
+        if (!await Permission.systemAlertWindow.isGranted) {
+          await Permission.systemAlertWindow.request();
+        }
+      }
+    }
 
     try {
       String? token = await _messaging.getToken();
