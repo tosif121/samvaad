@@ -9,16 +9,18 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
 
     override fun onMessageReceived(message: RemoteMessage) {
         super.onMessageReceived(message)
-        Log.d(TAG, "Message received: ${message.messageId}")
+        Log.d(TAG, "Message received: ${message.messageId}, data: ${message.data}")
 
-        val type = message.data["type"]
-        if (type == "incomingCall" || type == "incoming_call") {
+        val type = message.data["type"] ?: message.data["notification_type"] ?: message.data["event"] ?: ""
+        if (type == "incomingCall" || type == "incoming_call" || type == "call" || message.data.containsKey("callerNumber") || message.data.containsKey("callerName")) {
             if (MainActivity.isInForeground) {
                 Log.d(TAG, "App is in foreground, skipping native handling")
                 return
             }
             Log.d(TAG, "App is not in foreground, handling incoming call natively")
             handleIncomingCall(message)
+        } else {
+            Log.d(TAG, "Non-call message received or type unhandled: type=$type")
         }
     }
 
