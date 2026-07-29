@@ -5,7 +5,6 @@ import 'package:webview_flutter/webview_flutter.dart';
 import 'package:webview_flutter_android/webview_flutter_android.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'services/fcm_service.dart';
 
 Future<void> main() async {
@@ -14,11 +13,6 @@ Future<void> main() async {
   await Firebase.initializeApp();
   await FcmService().init();
   await AndroidWebViewController.enableDebugging(true);
-
-  await [
-    Permission.microphone,
-    Permission.camera,
-  ].request();
 
   runApp(const SamvaadApp());
 }
