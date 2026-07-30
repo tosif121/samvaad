@@ -104,8 +104,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
           },
         ),
       )
-      ..loadRequest(Uri.parse('https://devapp.iotcom.io/webphone/v1/'));
-
+      ..loadRequest(Uri.parse('https://devapp.iotcom.io/webphone/mobile/'));
     _configureAndroidSettings();
   }
 
