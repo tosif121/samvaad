@@ -86,8 +86,25 @@ class MainActivity : FlutterActivity() {
                     pendingIncomingCallData = null
                     result.success(data)
                 }
+                "setSpeakerphone" -> {
+                    val on = call.argument<Boolean>("on") ?: false
+                    setSpeakerphone(on)
+                    result.success(true)
+                }
                 else -> result.notImplemented()
             }
+        }
+    }
+
+    private fun setSpeakerphone(on: Boolean) {
+        try {
+            val audioManager =
+                getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
+            audioManager.mode = android.media.AudioManager.MODE_IN_COMMUNICATION
+            audioManager.isSpeakerphoneOn = on
+            Log.d(TAG, "setSpeakerphone: on=$on")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error setting speakerphone", e)
         }
     }
 

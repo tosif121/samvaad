@@ -77,6 +77,17 @@ class _WebViewScreenState extends State<WebViewScreen> {
               return;
             }
 
+            if (action == 'speakerphone') {
+              final on = data['on'] == true;
+              debugPrint('[FCM_BRIDGE] Speakerphone toggle: on=$on');
+              try {
+                await _channel.invokeMethod('setSpeakerphone', {'on': on});
+              } catch (e) {
+                debugPrint('[FCM_BRIDGE] Error setting speakerphone: $e');
+              }
+              return;
+            }
+
             final username = (data['username'] ?? data['user'] ?? data['extension'] ?? '').toString();
             final adminuser = (data['adminuser'] ?? data['domain'] ?? data['tenant'] ?? 'devapp').toString();
             if (username.isNotEmpty) {
