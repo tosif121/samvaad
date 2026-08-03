@@ -291,6 +291,26 @@ class FcmService with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) {
       // Clear notifications when app opens
       _localNotificationsPlugin.cancelAll();
+      // Re-register the current FCM token so the backend always has the
+      // latest token (covers reinstall/new-token/refresh cases). No-op if
+      // no credentials are stored yet (first-ever login).
+      _reRegisterTokenIfPossible();
+    }
+  }
+
+  /// Re-sends the current FCM token to the backend if we already hold
+  /// credentials. Safe to call repeatedly; no-op when not ready.
+  Future<void> _reRegisterTokenIfPossible() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (prefs.getString('sip_credentials') == null) return;
+      String? token = await _messaging.getToken();
+      if (token != null) {
+        log('[FCM_SERVICE] Re-registering token on foreground: ${token.substring(0, 20)}...');
+        await sendTokenToBackend(token);
+      }
+    } catch (e) {
+      log('[FCM_SERVICE] Error re-registering token: $e');
     }
   }
 }
