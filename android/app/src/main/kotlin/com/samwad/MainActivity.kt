@@ -1,6 +1,8 @@
 package com.samwad
 
+import android.content.Context
 import android.content.Intent
+import android.media.AudioManager
 import android.media.MediaPlayer
 import android.media.RingtoneManager
 import android.os.Build
@@ -86,6 +88,11 @@ class MainActivity : FlutterActivity() {
                     pendingIncomingCallData = null
                     result.success(data)
                 }
+                "setSpeakerphone" -> {
+                    val on = call.argument<Boolean>("on") ?: false
+                    setSpeakerphone(on)
+                    result.success(true)
+                }
                 else -> result.notImplemented()
             }
         }
@@ -138,6 +145,19 @@ class MainActivity : FlutterActivity() {
             release()
         }
         mediaPlayer = null
+    }
+
+    private fun setSpeakerphone(on: Boolean) {
+        try {
+            val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            audioManager.isSpeakerphoneOn = on
+            if (on) {
+                audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+            }
+            Log.d(TAG, "Speakerphone set to $on")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error setting speakerphone: $e")
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
