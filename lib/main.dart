@@ -37,12 +37,13 @@ class WebViewScreen extends StatefulWidget {
   State<WebViewScreen> createState() => _WebViewScreenState();
 }
 
-class _WebViewScreenState extends State<WebViewScreen> {
+class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserver {
   late final WebViewController _controller;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
 
     const notificationJs = '''
 (function() {
@@ -88,6 +89,26 @@ class _WebViewScreenState extends State<WebViewScreen> {
               return;
             }
 
+            if (action == 'callStarted') {
+              debugPrint('[FCM_BRIDGE] Call started — setting earpiece mode');
+              try {
+                await _channel.invokeMethod('setCallMode');
+              } catch (e) {
+                debugPrint('[FCM_BRIDGE] Error setting call mode: $e');
+              }
+              return;
+            }
+
+            if (action == 'callEnded') {
+              debugPrint('[FCM_BRIDGE] Call ended — resetting audio mode');
+              try {
+                await _channel.invokeMethod('resetCallMode');
+              } catch (e) {
+                debugPrint('[FCM_BRIDGE] Error resetting call mode: $e');
+              }
+              return;
+            }
+
             final username = (data['username'] ?? data['user'] ?? data['extension'] ?? '').toString();
             final adminuser = (data['adminuser'] ?? data['domain'] ?? data['tenant'] ?? 'devapp').toString();
             if (username.isNotEmpty) {
@@ -115,8 +136,29 @@ class _WebViewScreenState extends State<WebViewScreen> {
           },
         ),
       )
-      ..loadRequest(Uri.parse('https://devapp.iotcom.io/webphone/mobile/'));
+      ..loadRequest(Uri.parse('https://bc2d-103-170-69-25.ngrok-free.app/webphone/mobile/'));
     _configureAndroidSettings();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  /// When the app resumes from background (minimized), check if there's a
+  /// pending incoming call from FCM and inject it into the WebView.
+  /// This is critical because onPageFinished does NOT fire again when
+  /// the page is already loaded — only onNewIntent stores the data.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      debugPrint('[LIFECYCLE] App resumed from background — checking for pending FCM call');
+      // Small delay to let onNewIntent / handleIncomingCallIntent finish first
+      Future.delayed(const Duration(milliseconds: 300), () {
+        _injectPendingFcmCall();
+      });
+    }
   }
 
   static const _channel = MethodChannel('com.example.samvaad/ringtone');
