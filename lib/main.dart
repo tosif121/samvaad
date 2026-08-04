@@ -136,7 +136,7 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
           },
         ),
       )
-      ..loadRequest(Uri.parse('https://devapp.iotcom.io/webphone/mobile/'));
+      ..loadRequest(Uri.parse('https://bc2d-103-170-69-25.ngrok-free.app/webphone/mobile/'));
     _configureAndroidSettings();
   }
 
@@ -157,7 +157,23 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
       // Small delay to let onNewIntent / handleIncomingCallIntent finish first
       Future.delayed(const Duration(milliseconds: 300), () {
         _injectPendingFcmCall();
+        _notifyWebViewResume();
       });
+    }
+  }
+
+  /// Tells the WebView JS that the app came back to the foreground. Android
+  /// WebViews don't always fire visibilitychange on resume, so this custom
+  /// event lets the webphone reconnect its SIP WebSocket and clear any stale
+  /// "connection lost" modal that otherwise leaves the agent stuck.
+  Future<void> _notifyWebViewResume() async {
+    try {
+      await _controller.runJavaScript(
+        "window.dispatchEvent(new Event('samvaad-resume'));",
+      );
+      debugPrint('[LIFECYCLE] Dispatched samvaad-resume event to WebView');
+    } catch (e) {
+      debugPrint('[LIFECYCLE] Error dispatching resume event to WebView: $e');
     }
   }
 
