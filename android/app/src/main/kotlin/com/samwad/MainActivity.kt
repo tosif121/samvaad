@@ -1,6 +1,8 @@
 package com.samwad
 
 import android.content.Intent
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
 import android.media.MediaPlayer
 import android.media.RingtoneManager
 import android.os.Build
@@ -92,13 +94,14 @@ class MainActivity : FlutterActivity() {
                     result.success(true)
                 }
                 "setCallMode" -> {
-                    // Called when a call starts — pre-set earpiece BEFORE WebRTC audio begins
+                    // Called when a call starts — pre-set earpiece/headset BEFORE WebRTC audio begins
                     setSpeakerphone(false)
                     result.success(true)
                 }
                 "resetCallMode" -> {
                     // Called when a call ends — reset audio mode to normal
                     audioRouteRunnable?.let { audioRouteEnforcer?.removeCallbacks(it) }
+                    unregisterCommunicationDeviceListener()
                     try {
                         val audioManager = getSystemService(android.content.Context.AUDIO_SERVICE) as android.media.AudioManager
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -117,16 +120,30 @@ class MainActivity : FlutterActivity() {
     private var audioRouteRunnable: Runnable? = null
     private var desiredSpeakerOn: Boolean = false
 
+    // Device types that count as "a headset is connected" for routing purposes
+    private val headsetTypes = setOf(
+        AudioDeviceInfo.TYPE_WIRED_HEADSET,
+        AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+        AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+        AudioDeviceInfo.TYPE_USB_HEADSET,
+    )
+
+    // Fires whenever Android's active communication device changes — including
+    // when WebRTC/Chromium grabs the route for itself after the call actually
+    // connects (which happens later than our initial setCallMode call, and
+    // later than the old fixed 3-second reinforcement window covered).
+    private var commDeviceListener: AudioManager.OnCommunicationDeviceChangedListener? = null
+
     private fun setSpeakerphone(on: Boolean) {
         desiredSpeakerOn = on
         applyAudioRoute(on)
 
-        // Stop any existing enforcer
+        // Stop any existing short-burst enforcer
         audioRouteRunnable?.let { audioRouteEnforcer?.removeCallbacks(it) }
 
-        // Re-apply the audio route several times over 3 seconds to defeat
-        // WebRTC's internal audio routing resets in WebView
         if (!on) {
+            // Re-apply the audio route several times over 3 seconds to defeat
+            // WebRTC's *initial* audio routing resets in WebView
             audioRouteEnforcer = audioRouteEnforcer ?: android.os.Handler(mainLooper)
             var count = 0
             audioRouteRunnable = object : Runnable {
@@ -139,6 +156,60 @@ class MainActivity : FlutterActivity() {
                 }
             }
             audioRouteEnforcer?.postDelayed(audioRouteRunnable!!, 500)
+
+            // Also keep watching for the rest of the call, in case WebRTC
+            // claims the route again later (e.g. once the callee answers and
+            // the actual media track starts, which can happen well after the
+            // initial burst above has finished).
+            registerCommunicationDeviceListener()
+        } else {
+            unregisterCommunicationDeviceListener()
+        }
+    }
+
+    /**
+     * When not on speaker, prefer a connected headset (wired, USB, or
+     * Bluetooth) over the phone's built-in earpiece. Falls back to the
+     * built-in earpiece only if no headset is connected.
+     */
+    private fun preferredNonSpeakerDevice(devices: List<AudioDeviceInfo>): AudioDeviceInfo? {
+        return devices.firstOrNull { it.type in headsetTypes }
+            ?: devices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE }
+    }
+
+    private fun registerCommunicationDeviceListener() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+        if (commDeviceListener != null) return // already registered
+        try {
+            val audioManager =
+                getSystemService(android.content.Context.AUDIO_SERVICE) as AudioManager
+            val listener = AudioManager.OnCommunicationDeviceChangedListener { device ->
+                val isOnDesiredRoute =
+                    device != null &&
+                        (device.type == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE || device.type in headsetTypes)
+                if (!desiredSpeakerOn && !isOnDesiredRoute) {
+                    Log.d(TAG, "Communication device changed unexpectedly to type=${device?.type}; re-applying earpiece/headset route")
+                    applyAudioRoute(false)
+                }
+            }
+            audioManager.addOnCommunicationDeviceChangedListener(mainExecutor, listener)
+            commDeviceListener = listener
+        } catch (e: Exception) {
+            Log.e(TAG, "Error registering communication device listener", e)
+        }
+    }
+
+    private fun unregisterCommunicationDeviceListener() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+        val listener = commDeviceListener ?: return
+        try {
+            val audioManager =
+                getSystemService(android.content.Context.AUDIO_SERVICE) as AudioManager
+            audioManager.removeOnCommunicationDeviceChangedListener(listener)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error unregistering communication device listener", e)
+        } finally {
+            commDeviceListener = null
         }
     }
 
@@ -153,15 +224,15 @@ class MainActivity : FlutterActivity() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 // Android 12+ : use setCommunicationDevice for reliable routing
                 val devices = audioManager.availableCommunicationDevices
-                val targetType = if (speakerOn) {
-                    android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+                val device = if (speakerOn) {
+                    devices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
                 } else {
-                    android.media.AudioDeviceInfo.TYPE_BUILTIN_EARPIECE
+                    // Prefer a connected headset over the built-in earpiece
+                    preferredNonSpeakerDevice(devices)
                 }
-                val device = devices.firstOrNull { it.type == targetType }
                 if (device != null) {
                     val success = audioManager.setCommunicationDevice(device)
-                    Log.d(TAG, "setCommunicationDevice(${if (speakerOn) "SPEAKER" else "EARPIECE"}): success=$success")
+                    Log.d(TAG, "setCommunicationDevice(type=${device.type}, speakerOn=$speakerOn): success=$success")
                 } else {
                     // Fallback if device not found
                     @Suppress("DEPRECATION")
@@ -169,7 +240,11 @@ class MainActivity : FlutterActivity() {
                     Log.d(TAG, "setCommunicationDevice: target device not found, fallback isSpeakerphoneOn=$speakerOn")
                 }
             } else {
-                // Legacy path for Android < 12
+                // Legacy path for Android < 12.
+                // Note: the platform audio framework automatically routes to a
+                // connected wired/Bluetooth headset over the earpiece whenever
+                // isSpeakerphoneOn is false, so no extra device selection is
+                // needed here.
                 @Suppress("DEPRECATION")
                 audioManager.requestAudioFocus(
                     null,
@@ -269,5 +344,7 @@ class MainActivity : FlutterActivity() {
         super.onDestroy()
         isAlive = false
         stopRingtone()
+        audioRouteRunnable?.let { audioRouteEnforcer?.removeCallbacks(it) }
+        unregisterCommunicationDeviceListener()
     }
 }

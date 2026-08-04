@@ -136,7 +136,7 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
           },
         ),
       )
-      ..loadRequest(Uri.parse('https://bc2d-103-170-69-25.ngrok-free.app/webphone/mobile/'));
+      ..loadRequest(Uri.parse('https://devapp.iotcom.io/webphone/mobile/'));
     _configureAndroidSettings();
   }
 
