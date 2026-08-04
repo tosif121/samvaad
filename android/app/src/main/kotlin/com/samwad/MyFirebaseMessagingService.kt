@@ -28,6 +28,11 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
         val callerName = message.data["callerName"] ?: message.data["caller"] ?: message.data["title"] ?: "Incoming Call"
         val callerNumber = message.data["callerNumber"] ?: message.data["caller"] ?: message.data["body"] ?: ""
 
+        // Store the call immediately so it survives no matter how/when the user
+        // opens the app (notification tap, recents, etc.) — injected into the
+        // WebView on the next resume.
+        MainActivity.storePendingIncomingCall(callerNumber, callerName)
+
         // Start foreground service (works on stricter OEMs with persistent state)
         IncomingCallService.start(this, callerName, callerNumber)
 

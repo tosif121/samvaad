@@ -22,6 +22,16 @@ class MainActivity : FlutterActivity() {
         var isAlive = false
         var isInForeground = false
         var pendingIncomingCallData: Map<String, String?>? = null
+
+        /**
+         * Store the incoming call so it can be injected into the WebView on the
+         * next resume. Called directly from the FCM service so we don't depend
+         * on the OS delivering a background startActivity to this activity
+         * (which OEMs often defer/drop).
+         */
+        fun storePendingIncomingCall(number: String, name: String) {
+            pendingIncomingCallData = mapOf("number" to number, "name" to name)
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
