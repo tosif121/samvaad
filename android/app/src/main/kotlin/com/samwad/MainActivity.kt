@@ -103,6 +103,10 @@ class MainActivity : FlutterActivity() {
                     setSpeakerphone(on)
                     result.success(true)
                 }
+                "clearPendingCall" -> {
+                    pendingIncomingCallData = null
+                    result.success(true)
+                }
                 "setCallMode" -> {
                     // Called when a call starts — pre-set earpiece/headset BEFORE WebRTC audio begins
                     setSpeakerphone(false)

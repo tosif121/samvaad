@@ -109,6 +109,18 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
               return;
             }
 
+            if (action == 'stopRingtone' || action == 'clearNotification' || action == 'callRejected') {
+              debugPrint('[FCM_BRIDGE] Stop ringtone / clear notification action received');
+              try {
+                await _channel.invokeMethod('stopRingtone');
+                await _channel.invokeMethod('clearNotification');
+                await _channel.invokeMethod('clearPendingCall');
+              } catch (e) {
+                debugPrint('[FCM_BRIDGE] Error clearing native ringtone/notification: $e');
+              }
+              return;
+            }
+
             final username = (data['username'] ?? data['user'] ?? data['extension'] ?? '').toString();
             final adminuser = (data['adminuser'] ?? data['domain'] ?? data['tenant'] ?? 'devapp').toString();
             if (username.isNotEmpty) {
@@ -136,7 +148,7 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
           },
         ),
       )
-      ..loadRequest(Uri.parse('https://bc2d-103-170-69-25.ngrok-free.app/webphone/mobile/'));
+      ..loadRequest(Uri.parse('https://devapp.iotcom.io/webphone/mobile/'));
     _configureAndroidSettings();
   }
 
