@@ -6,6 +6,7 @@ import 'package:webview_flutter_android/webview_flutter_android.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'services/fcm_service.dart';
+import 'services/oem_optimization_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();

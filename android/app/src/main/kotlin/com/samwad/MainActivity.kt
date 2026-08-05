@@ -1,6 +1,9 @@
 package com.samwad
 
+import android.content.ComponentName
 import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.media.MediaPlayer
@@ -106,6 +109,16 @@ class MainActivity : FlutterActivity() {
                 "clearPendingCall" -> {
                     pendingIncomingCallData = null
                     result.success(true)
+                }
+                "getOverlayPermissionStatus" -> {
+                    result.success(Settings.canDrawOverlays(this))
+                }
+                "openOverlayPermission" -> {
+                    openOverlayPermission()
+                    result.success(Settings.canDrawOverlays(this))
+                }
+                "openFullScreenPermission" -> {
+                    result.success(openFullScreenPermission())
                 }
                 "setCallMode" -> {
                     // Called when a call starts — pre-set earpiece/headset BEFORE WebRTC audio begins
@@ -321,6 +334,134 @@ class MainActivity : FlutterActivity() {
             release()
         }
         mediaPlayer = null
+    }
+
+    /**
+     * Opens the "Display over other apps / Appear on top" settings screen for
+     * the current device's OEM. Falls back to the stock Android overlay
+     * permission screen, then to general app settings.
+     */
+    private fun openOverlayPermission() {
+        if (Settings.canDrawOverlays(this)) return
+
+        val manufacturer = Build.MANUFACTURER?.lowercase() ?: ""
+        val oemIntent = buildOemOverlayIntent(manufacturer)
+        if (oemIntent != null && resolveActivitySafe(oemIntent)) {
+            try {
+                startActivity(oemIntent)
+                return
+            } catch (e: Exception) {
+                Log.w(TAG, "OEM overlay intent failed, falling back", e)
+            }
+        }
+
+        try {
+            val stockIntent = Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:$packageName")
+            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            if (resolveActivitySafe(stockIntent)) {
+                startActivity(stockIntent)
+                return
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Stock overlay intent failed, falling back", e)
+        }
+
+        openAppSettings()
+    }
+
+    private fun buildOemOverlayIntent(manufacturer: String): Intent? {
+        return when {
+            manufacturer.contains("xiaomi") ||
+                manufacturer.contains("redmi") ||
+                manufacturer.contains("poco") -> Intent().apply {
+                component = ComponentName(
+                    "com.miui.securitycenter",
+                    "com.miui.permcenter.permissions.AppPermissionsEditorActivity"
+                )
+                putExtra("extra_pkgname", packageName)
+            }
+
+            manufacturer.contains("oppo") ||
+                manufacturer.contains("realme") ||
+                manufacturer.contains("oneplus") -> Intent().apply {
+                component = ComponentName(
+                    "com.coloros.safecenter",
+                    "com.coloros.safecenter.permission.floatwindow.FloatWindowListActivity"
+                )
+            }
+
+            manufacturer.contains("vivo") ||
+                manufacturer.contains("iqoo") -> Intent().apply {
+                component = ComponentName(
+                    "com.vivo.permissionmanager",
+                    "com.vivo.permissionmanager.activity.AppPermissionActivity"
+                )
+            }
+
+            manufacturer.contains("huawei") ||
+                manufacturer.contains("honor") -> Intent().apply {
+                component = ComponentName(
+                    "com.huawei.systemmanager",
+                    "com.huawei.permissionmanager.ui.MainActivity"
+                )
+            }
+
+            else -> null
+        }
+    }
+
+    private fun resolveActivitySafe(intent: Intent): Boolean {
+        return intent.resolveActivity(packageManager) != null
+    }
+
+    /**
+     * Opens the "Full screen" (allow full-screen notifications / show while
+     * locked) settings screen for this device. Prefers the Android 14+ per-app
+     * full-screen toggle, then falls back to the per-app notification settings.
+     */
+    private fun openFullScreenPermission(): Boolean {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            val intent = Intent(
+                Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,
+                Uri.parse("package:$packageName")
+            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            if (resolveActivitySafe(intent)) {
+                try {
+                    startActivity(intent)
+                    return true
+                } catch (e: Exception) {
+                    Log.w(TAG, "Full screen intent failed, falling back", e)
+                }
+            }
+        }
+
+        try {
+            val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            if (resolveActivitySafe(intent)) {
+                startActivity(intent)
+                return true
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Notification settings intent failed", e)
+        }
+
+        return false
+    }
+
+    private fun openAppSettings() {
+        try {
+            val intent = Intent(
+                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.fromParts("package", packageName, null)
+            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(intent)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error opening app settings", e)
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
