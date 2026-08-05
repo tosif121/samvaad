@@ -47,7 +47,7 @@ class MainActivity : FlutterActivity() {
             try {
                 val km = getSystemService(android.content.Context.KEYGUARD_SERVICE) as? android.app.KeyguardManager
                 km?.requestDismissKeyguard(this, null)
-            } catch (_) {}
+            } catch (e: Exception) {}
         }
         
         @Suppress("DEPRECATION")
@@ -476,7 +476,7 @@ class MainActivity : FlutterActivity() {
             try {
                 val km = getSystemService(android.content.Context.KEYGUARD_SERVICE) as? android.app.KeyguardManager
                 km?.requestDismissKeyguard(this, null)
-            } catch (_) {}
+            } catch (e: Exception) {}
         }
         @Suppress("DEPRECATION")
         window.addFlags(
