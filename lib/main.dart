@@ -6,7 +6,6 @@ import 'package:webview_flutter_android/webview_flutter_android.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'services/fcm_service.dart';
-import 'services/oem_optimization_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -167,11 +166,8 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       debugPrint('[LIFECYCLE] App resumed from background — checking for pending FCM call');
-      // Small delay to let onNewIntent / handleIncomingCallIntent finish first
-      Future.delayed(const Duration(milliseconds: 300), () {
-        _injectPendingFcmCall();
-        _notifyWebViewResume();
-      });
+      _injectPendingFcmCall();
+      _notifyWebViewResume();
     }
   }
 

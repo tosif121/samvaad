@@ -27,14 +27,15 @@ class IncomingCallService : Service() {
         // 1. Show persistent foreground notification (required within ~5s of service start)
         startForeground(NOTIFICATION_ID, createForegroundNotification())
 
-        // 2. Open the app FIRST while FCM whitelist/foreground privilege is active
-        openApp(callerNumber, callerName)
+        // 2. Show high-priority incoming call notification with fullScreenIntent FIRST
+        // (gives background activity launch privilege on Android 10+)
+        showIncomingCallNotification(callerName, callerNumber)
 
         // 3. Wake device (turn screen on)
         wakeDevice()
 
-        // 4. Show incoming call notification with fullScreenIntent for lock screen
-        showIncomingCallNotification(callerName, callerNumber)
+        // 4. Open the activity directly into foreground
+        openApp(callerNumber, callerName)
 
         stopSelf()
 

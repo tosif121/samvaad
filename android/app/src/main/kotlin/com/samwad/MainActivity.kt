@@ -44,6 +44,10 @@ class MainActivity : FlutterActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
             setTurnScreenOn(true)
+            try {
+                val km = getSystemService(android.content.Context.KEYGUARD_SERVICE) as? android.app.KeyguardManager
+                km?.requestDismissKeyguard(this, null)
+            } catch (_) {}
         }
         
         @Suppress("DEPRECATION")
@@ -469,6 +473,10 @@ class MainActivity : FlutterActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
             setTurnScreenOn(true)
+            try {
+                val km = getSystemService(android.content.Context.KEYGUARD_SERVICE) as? android.app.KeyguardManager
+                km?.requestDismissKeyguard(this, null)
+            } catch (_) {}
         }
         @Suppress("DEPRECATION")
         window.addFlags(
