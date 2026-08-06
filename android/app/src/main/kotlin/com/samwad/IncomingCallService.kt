@@ -25,7 +25,11 @@ class IncomingCallService : Service() {
         Log.d(TAG, "IncomingCallService started for $callerName")
 
         // 1. Show persistent foreground notification (required within ~5s of service start)
-        startForeground(NOTIFICATION_ID, createForegroundNotification())
+        try {
+            startForeground(NOTIFICATION_ID, createForegroundNotification())
+        } catch (e: Exception) {
+            Log.e(TAG, "Error starting foreground service: $e")
+        }
 
         // 2. Show high-priority incoming call notification with fullScreenIntent FIRST
         // (gives background activity launch privilege on Android 10+)
