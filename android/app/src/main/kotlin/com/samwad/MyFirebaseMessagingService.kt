@@ -9,10 +9,16 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
 
     override fun onMessageReceived(message: RemoteMessage) {
         super.onMessageReceived(message)
-        Log.d(TAG, "Message received: ${message.messageId}, data: ${message.data}")
+        Log.d(TAG, "Message received: ${message.messageId}, data: ${message.data}, notif: ${message.notification?.title}")
 
-        val type = message.data["type"] ?: message.data["notification_type"] ?: message.data["event"] ?: ""
-        if (type == "incomingCall" || type == "incoming_call" || type == "call" || message.data.containsKey("callerNumber") || message.data.containsKey("callerName")) {
+        val type = (message.data["type"] ?: message.data["Type"] ?: message.data["notification_type"] ?: message.data["event"] ?: "").lowercase()
+        val isCallPayload = type.contains("incoming") || type.contains("call") ||
+                message.data.containsKey("callerNumber") || message.data.containsKey("callerName") ||
+                message.data.containsKey("caller") || message.data.containsKey("Caller") ||
+                message.data.containsKey("dialNumber") || message.data.containsKey("didNumber") ||
+                message.data.containsKey("number") || message.notification != null
+
+        if (isCallPayload) {
             if (MainActivity.isInForeground) {
                 Log.d(TAG, "App is in foreground, skipping native handling")
                 return
@@ -20,13 +26,29 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
             Log.d(TAG, "App is not in foreground, handling incoming call natively")
             handleIncomingCall(message)
         } else {
-            Log.d(TAG, "Non-call message received or type unhandled: type=$type")
+            Log.d(TAG, "Non-call message received or type unhandled: type=$type, data=${message.data}")
         }
     }
 
     private fun handleIncomingCall(message: RemoteMessage) {
-        val callerName = message.data["callerName"] ?: message.data["caller"] ?: message.data["title"] ?: "Incoming Call"
-        val callerNumber = message.data["callerNumber"] ?: message.data["caller"] ?: message.data["body"] ?: ""
+        val callerName = message.data["callerName"]
+            ?: message.data["Caller"]
+            ?: message.data["caller"]
+            ?: message.data["title"]
+            ?: message.notification?.title
+            ?: "Incoming Call"
+
+        val callerNumber = message.data["callerNumber"]
+            ?: message.data["Caller"]
+            ?: message.data["caller"]
+            ?: message.data["dialNumber"]
+            ?: message.data["didNumber"]
+            ?: message.data["number"]
+            ?: message.data["body"]
+            ?: message.notification?.body
+            ?: ""
+
+        Log.d(TAG, "handleIncomingCall parsed — name=$callerName, number=$callerNumber")
 
         // Store the call immediately so it survives no matter how/when the user
         // opens the app (notification tap, recents, etc.) — injected into the
