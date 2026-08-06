@@ -65,15 +65,18 @@ class OemOptimizationService {
     }
   }
 
-  /// Checks whether autostart guidance should be shown to the user.
+  /// Checks whether autostart guidance or overlay prompt should be shown to the user.
   Future<bool> shouldShowOemGuidance() async {
     if (!Platform.isAndroid) return false;
     final prefs = await SharedPreferences.getInstance();
     final alreadyPrompted = prefs.getBool('oem_autostart_prompted') ?? false;
+
+    final overlayGranted = await isOverlayPermissionGranted();
+    if (!overlayGranted) return true;
     if (alreadyPrompted) return false;
 
     final manufacturer = await getDeviceManufacturer();
-    final oemBrands = ['xiaomi', 'redmi', 'poco', 'oppo', 'realme', 'vivo', 'iqoo', 'oneplus', 'huawei', 'honor', 'motorola'];
+    final oemBrands = ['xiaomi', 'redmi', 'poco', 'oppo', 'realme', 'vivo', 'iqoo', 'oneplus', 'huawei', 'honor', 'motorola', 'samsung', 'google'];
     return oemBrands.any((brand) => manufacturer.contains(brand));
   }
 

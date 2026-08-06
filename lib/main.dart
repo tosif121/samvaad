@@ -6,6 +6,7 @@ import 'package:webview_flutter_android/webview_flutter_android.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'services/fcm_service.dart';
+import 'services/oem_optimization_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -44,6 +45,10 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      OemOptimizationService().checkAndShowOemGuidanceDialog(context);
+    });
 
     const notificationJs = '''
 (function() {
@@ -148,7 +153,7 @@ class _WebViewScreenState extends State<WebViewScreen> with WidgetsBindingObserv
           },
         ),
       )
-      ..loadRequest(Uri.parse('https://bc2d-103-170-69-25.ngrok-free.app/webphone/mobile/'));
+      ..loadRequest(Uri.parse('https://devapp.iotcom.io/webphone/mobile/'));
     _configureAndroidSettings();
   }
 
