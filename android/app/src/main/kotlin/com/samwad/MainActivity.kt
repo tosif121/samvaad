@@ -129,6 +129,38 @@ class MainActivity : FlutterActivity() {
     override fun onPause() {
         super.onPause()
         isInForeground = false
+        acquireWakeLock() // Keep CPU & Wifi active when backgrounded so WebSocket stays alive
+        keepWebViewAlive()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        keepWebViewAlive()
+    }
+
+    private fun keepWebViewAlive() {
+        try {
+            val rootView = window.decorView.findViewById<android.view.ViewGroup>(android.R.id.content)
+            findAndResumeWebViews(rootView)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error keeping WebView alive: $e")
+        }
+    }
+
+    private fun findAndResumeWebViews(view: android.view.View?) {
+        if (view is android.webkit.WebView) {
+            try {
+                view.onResume()
+                view.resumeTimers()
+                Log.d(TAG, "Resumed Chromium WebView timers in background")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error resuming WebView in background: $e")
+            }
+        } else if (view is android.view.ViewGroup) {
+            for (i in 0 until view.childCount) {
+                findAndResumeWebViews(view.getChildAt(i))
+            }
+        }
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -138,8 +170,11 @@ class MainActivity : FlutterActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
                 "playRingtone" -> {
+                    val number = call.argument<String>("number") ?: ""
+                    val name = call.argument<String>("name") ?: "Incoming Call"
                     acquireWakeLock()
                     playDefaultRingtone()
+                    IncomingCallService.start(this, name, number)
                     result.success(true)
                 }
                 "stopRingtone" -> {

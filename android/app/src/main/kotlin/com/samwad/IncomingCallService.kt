@@ -16,6 +16,8 @@ import androidx.core.content.ContextCompat
 
 class IncomingCallService : Service() {
 
+    private var ringtonePlayer: android.media.Ringtone? = null
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -24,26 +26,30 @@ class IncomingCallService : Service() {
 
         Log.d(TAG, "IncomingCallService started for $callerName")
 
-        // 1. Show persistent foreground notification (required within ~5s of service start)
+        // 1. Start native ringtone sound immediately
+        startRingtone()
+
+        // 2. Show persistent foreground notification (required within ~5s of service start)
         try {
             startForeground(NOTIFICATION_ID, createForegroundNotification())
         } catch (e: Exception) {
             Log.e(TAG, "Error starting foreground service: $e")
         }
 
-        // 2. Show high-priority incoming call notification with fullScreenIntent FIRST
+        // 3. Show high-priority incoming call notification with fullScreenIntent FIRST
         // (gives background activity launch privilege on Android 10+)
         showIncomingCallNotification(callerName, callerNumber)
 
-        // 3. Wake device (turn screen on)
+        // 4. Wake device (turn screen on)
         wakeDevice()
 
-        // 4. Open the activity directly into foreground
+        // 5. Open the activity directly into foreground
         openApp(callerNumber, callerName)
 
-        // 5. Keep Foreground Service active for up to 30s while phone rings (prevents WebSocket drop)
+        // 6. Keep Foreground Service active for up to 30s while phone rings (prevents WebSocket drop)
         android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
             try {
+                stopRingtone()
                 stopSelf()
             } catch (e: Exception) {
                 Log.e(TAG, "Error stopping service after delay: $e")
@@ -53,12 +59,42 @@ class IncomingCallService : Service() {
         return START_STICKY
     }
 
+    private fun startRingtone() {
+        try {
+            if (ringtonePlayer == null) {
+                val ringtoneUri = android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_RINGTONE)
+                ringtonePlayer = android.media.RingtoneManager.getRingtone(applicationContext, ringtoneUri)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    ringtonePlayer?.isLooping = true
+                }
+            }
+            if (ringtonePlayer?.isPlaying == false) {
+                ringtonePlayer?.play()
+                Log.d(TAG, "Native ringtone started in IncomingCallService")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error playing native ringtone in service: $e")
+        }
+    }
+
+    private fun stopRingtone() {
+        try {
+            if (ringtonePlayer?.isPlaying == true) {
+                ringtonePlayer?.stop()
+                Log.d(TAG, "Native ringtone stopped in IncomingCallService")
+            }
+            ringtonePlayer = null
+        } catch (e: Exception) {
+            Log.e(TAG, "Error stopping native ringtone in service: $e")
+        }
+    }
+
     @Suppress("DEPRECATION")
     private fun wakeDevice() {
         try {
             val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
             val wakeLock = powerManager.newWakeLock(
-                PowerManager.SCREEN_BRIGHT_WAKE_LOCK or
+                PowerManager.FULL_WAKE_LOCK or
                         PowerManager.ACQUIRE_CAUSES_WAKEUP or
                         PowerManager.ON_AFTER_RELEASE,
                 "Samvaad:CallServiceWakeLock"
@@ -162,6 +198,7 @@ class IncomingCallService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        stopRingtone()
         Log.d(TAG, "IncomingCallService destroyed")
     }
 

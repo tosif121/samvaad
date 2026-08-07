@@ -19,11 +19,7 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
                 message.data.containsKey("number") || message.notification != null
 
         if (isCallPayload) {
-            if (MainActivity.isInForeground) {
-                Log.d(TAG, "App is in foreground, skipping native handling")
-                return
-            }
-            Log.d(TAG, "App is not in foreground, handling incoming call natively")
+            Log.d(TAG, "Incoming call payload received — starting native IncomingCallService")
             handleIncomingCall(message)
         } else {
             Log.d(TAG, "Non-call message received or type unhandled: type=$type, data=${message.data}")
