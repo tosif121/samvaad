@@ -41,9 +41,16 @@ class IncomingCallService : Service() {
         // 4. Open the activity directly into foreground
         openApp(callerNumber, callerName)
 
-        stopSelf()
+        // 5. Keep Foreground Service active for up to 30s while phone rings (prevents WebSocket drop)
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            try {
+                stopSelf()
+            } catch (e: Exception) {
+                Log.e(TAG, "Error stopping service after delay: $e")
+            }
+        }, 30000L)
 
-        return START_NOT_STICKY
+        return START_STICKY
     }
 
     @Suppress("DEPRECATION")
@@ -56,8 +63,7 @@ class IncomingCallService : Service() {
                         PowerManager.ON_AFTER_RELEASE,
                 "Samvaad:CallServiceWakeLock"
             )
-            wakeLock.acquire(10000)
-            wakeLock.release()
+            wakeLock.acquire(30000) // Keep CPU & network awake for up to 30s while phone rings
         } catch (e: Exception) {
             Log.e(TAG, "Error waking device: $e")
         }

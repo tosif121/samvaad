@@ -19,6 +19,63 @@ import io.flutter.plugin.common.MethodChannel
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "com.example.samvaad/ringtone"
     private var mediaPlayer: MediaPlayer? = null
+    private var wakeLock: android.os.PowerManager.WakeLock? = null
+    private var wifiLock: android.net.wifi.WifiManager.WifiLock? = null
+
+    private fun acquireWakeLock() {
+        try {
+            if (wakeLock == null) {
+                val powerManager = getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager
+                wakeLock = powerManager.newWakeLock(
+                    android.os.PowerManager.PARTIAL_WAKE_LOCK,
+                    "Samvaad:KeepWebSocketAlive"
+                )
+            }
+            if (wakeLock?.isHeld == false) {
+                wakeLock?.acquire(5 * 60 * 1000L)
+                Log.d(TAG, "CPU WakeLock ACQUIRED")
+            }
+            if (wifiLock == null) {
+                val wifiManager = applicationContext.getSystemService(android.content.Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+                val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    android.net.wifi.WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+                } else {
+                    @Suppress("DEPRECATION")
+                    android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF
+                }
+                wifiLock = wifiManager.createWifiLock(mode, "Samvaad:KeepWifiAlive")
+            }
+            if (wifiLock?.isHeld == false) {
+                wifiLock?.acquire()
+                Log.d(TAG, "WifiLock ACQUIRED")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error acquiring WakeLock/WifiLock: $e")
+        }
+    }
+
+    private fun releaseWakeLock() {
+        try {
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+                Log.d(TAG, "CPU WakeLock RELEASED")
+            }
+            if (wifiLock?.isHeld == true) {
+                wifiLock?.release()
+                Log.d(TAG, "WifiLock RELEASED")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error releasing WakeLock/WifiLock: $e")
+        }
+    }
+
+    private fun stopIncomingCallService() {
+        try {
+            stopService(android.content.Intent(this, IncomingCallService::class.java))
+        } catch (e: Exception) {
+            Log.e(TAG, "Error stopping IncomingCallService: $e")
+        }
+    }
 
     companion object {
         private const val TAG = "MainActivity"
@@ -81,11 +138,14 @@ class MainActivity : FlutterActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
                 "playRingtone" -> {
+                    acquireWakeLock()
                     playDefaultRingtone()
                     result.success(true)
                 }
                 "stopRingtone" -> {
+                    releaseWakeLock()
                     stopRingtone()
+                    stopIncomingCallService()
                     result.success(true)
                 }
                 "bringAppToForeground" -> {
@@ -95,9 +155,12 @@ class MainActivity : FlutterActivity() {
                 "clearNotification" -> {
                     val manager = getSystemService(android.content.Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
                     manager.cancelAll()
+                    stopIncomingCallService()
                     result.success(true)
                 }
                 "cleanupForeground" -> {
+                    releaseWakeLock()
+                    stopIncomingCallService()
                     result.success(true)
                 }
                 "getPendingIncomingCall" -> {
@@ -111,6 +174,8 @@ class MainActivity : FlutterActivity() {
                     result.success(true)
                 }
                 "clearPendingCall" -> {
+                    releaseWakeLock()
+                    stopIncomingCallService()
                     pendingIncomingCallData = null
                     result.success(true)
                 }
@@ -125,12 +190,12 @@ class MainActivity : FlutterActivity() {
                     result.success(openFullScreenPermission())
                 }
                 "setCallMode" -> {
-                    // Called when a call starts — pre-set earpiece/headset BEFORE WebRTC audio begins
+                    acquireWakeLock()
                     setSpeakerphone(false)
                     result.success(true)
                 }
                 "resetCallMode" -> {
-                    // Called when a call ends — reset audio mode to normal
+                    releaseWakeLock()
                     audioRouteRunnable?.let { audioRouteEnforcer?.removeCallbacks(it) }
                     unregisterCommunicationDeviceListener()
                     try {
@@ -507,6 +572,7 @@ class MainActivity : FlutterActivity() {
         super.onDestroy()
         isAlive = false
         stopRingtone()
+        releaseWakeLock()
         audioRouteRunnable?.let { audioRouteEnforcer?.removeCallbacks(it) }
         unregisterCommunicationDeviceListener()
     }
