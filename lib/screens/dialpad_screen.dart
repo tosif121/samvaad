@@ -333,6 +333,7 @@ class _DialpadScreenState extends State<DialpadScreen>
     setState(() {});
   }
 
+  /*
   Future<void> _onVideoCallPressed() async {
     final number = _phoneController.text.trim();
     if (number.isEmpty) return;
@@ -349,9 +350,10 @@ class _DialpadScreenState extends State<DialpadScreen>
     _activeCallNumber = number;
     _isOnCall = true;
     _phoneController.clear();
-    _sip.makeVideoCall(number);
+    _sip.makeCall(number, video: true);
     setState(() {});
   }
+  */
 
   Future<void> _endCall() async {
     await _sip.endCall();
@@ -611,11 +613,13 @@ class _DialpadScreenState extends State<DialpadScreen>
               ],
             ),
           ),
+          /*
           _buildCallButton(
             icon: Icons.videocam_rounded,
             color: cs.primary,
             onTap: _onVideoCallPressed,
           ),
+          */
         ],
       ),
     );
