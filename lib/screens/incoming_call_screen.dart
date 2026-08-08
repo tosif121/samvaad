@@ -96,6 +96,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
     }
   }
 
+  /*
   Future<void> _acceptVideoCall() async {
     _dismissed = true;
     _sipSubscription?.cancel();
@@ -113,6 +114,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
       debugPrintStack(stackTrace: st);
     }
   }
+  */
 
   @override
   Widget build(BuildContext context) {
@@ -195,16 +197,14 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
                     color: cs.error,
                     onTap: _decline,
                   ),
-                  Visibility(
-                    visible: false, // Hidden for VC-only mode
-                    child: _buildActionButton(
-                      context,
-                      icon: Icons.call_rounded,
-                      label: 'Audio',
-                      color: cs.secondary,
-                      onTap: _acceptCall,
-                    ),
+                  _buildActionButton(
+                    context,
+                    icon: Icons.call_rounded,
+                    label: 'Audio',
+                    color: Colors.green,
+                    onTap: _acceptCall,
                   ),
+                  /*
                   _buildActionButton(
                     context,
                     icon: Icons.videocam_rounded,
@@ -212,6 +212,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
                     color: cs.primary,
                     onTap: _acceptVideoCall,
                   ),
+                  */
                 ],
               ),
             ),
