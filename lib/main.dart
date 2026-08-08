@@ -4,6 +4,7 @@ import 'screens/login_screen.dart';
 import 'screens/dialpad_screen.dart';
 import 'services/call_lifecycle_service.dart';
 import 'services/sip_socket_service.dart';
+import 'services/user_data.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'services/fcm_service.dart';
 import 'ui/theme.dart';
@@ -29,6 +30,7 @@ Future<void> main() async {
   await _acquireSingleInstanceLock();
 
   await Firebase.initializeApp();
+  await UserData.init();
   await FcmService().init();
 
   CallLifecycleService().init();

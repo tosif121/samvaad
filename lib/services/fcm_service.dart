@@ -11,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'ringtone_service.dart';
+import 'user_data.dart';
 
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
@@ -32,7 +33,8 @@ class FcmService with WidgetsBindingObserver {
   FcmService._internal();
 
   final FirebaseMessaging _messaging = FirebaseMessaging.instance;
-  final FlutterLocalNotificationsPlugin _localNotificationsPlugin = FlutterLocalNotificationsPlugin();
+  final FlutterLocalNotificationsPlugin _localNotificationsPlugin =
+      FlutterLocalNotificationsPlugin();
 
   Future<Map<String, String>> _getDeviceInfo() async {
     final DeviceInfoPlugin deviceInfo = DeviceInfoPlugin();
@@ -41,22 +43,19 @@ class FcmService with WidgetsBindingObserver {
         final AndroidDeviceInfo androidInfo = await deviceInfo.androidInfo;
         return {
           "deviceId": androidInfo.id,
-          "deviceName": "${androidInfo.brand} ${androidInfo.model}"
+          "deviceName": "${androidInfo.brand} ${androidInfo.model}",
         };
       } else if (Platform.isIOS) {
         final IosDeviceInfo iosInfo = await deviceInfo.iosInfo;
         return {
           "deviceId": iosInfo.identifierForVendor ?? "unknown_ios_device",
-          "deviceName": iosInfo.name
+          "deviceName": iosInfo.name,
         };
       }
     } catch (e) {
       log('[FCM_SERVICE] Error getting device info: $e');
     }
-    return {
-      "deviceId": "unknown_device",
-      "deviceName": "Unknown Device"
-    };
+    return {"deviceId": "unknown_device", "deviceName": "Unknown Device"};
   }
 
   Future<void> sendTokenToBackend(String token) async {
@@ -64,15 +63,23 @@ class FcmService with WidgetsBindingObserver {
       final prefs = await SharedPreferences.getInstance();
       final credsStr = prefs.getString('sip_credentials');
       if (credsStr == null) {
-        log("[FCM_SERVICE] No SIP credentials found, skipping token registration.");
+        log(
+          "[FCM_SERVICE] No SIP credentials found, skipping token registration.",
+        );
         return;
       }
-      
+
       final creds = jsonDecode(credsStr);
-      final username = creds['extension'] ?? creds['username'] ?? '';
-      
-      String adminuser = "v2-matrix";
-      if (username.isEmpty) return;
+      final username = UserData.username().isNotEmpty
+          ? UserData.username()
+          : (creds['extension'] ?? creds['username'] ?? '');
+
+      String adminuser = UserData.adminUser();
+      if (adminuser.isEmpty) {
+        await UserData.init();
+        adminuser = UserData.adminUser();
+      }
+      if (username.isEmpty || adminuser.isEmpty) return;
 
       final deviceInfo = await _getDeviceInfo();
 
@@ -81,14 +88,16 @@ class FcmService with WidgetsBindingObserver {
         "adminuser": adminuser,
         "token": token,
         "platform": Platform.isAndroid ? "android" : "ios",
-        "deviceId": deviceInfo["deviceId"], 
+        "deviceId": deviceInfo["deviceId"],
         "deviceName": deviceInfo["deviceName"],
-        "appSecret": "samvaad_mobile_secret_123"
+        "appSecret": "samvaad_mobile_secret_123",
       };
 
       log("[FCM_SERVICE] Sending payload to backend: ${jsonEncode(payload)}");
 
-      final url = Uri.parse('https://devapp.iotcom.io/storeFirebaseTokenMobile');
+      final url = Uri.parse(
+        'https://devapp.iotcom.io/storeFirebaseTokenMobile',
+      );
       final response = await http.post(
         url,
         headers: {"Content-Type": "application/json"},
@@ -110,12 +119,18 @@ class FcmService with WidgetsBindingObserver {
       final prefs = await SharedPreferences.getInstance();
       final credsStr = prefs.getString('sip_credentials');
       if (credsStr == null) return;
-      
+
       final creds = jsonDecode(credsStr);
-      final username = creds['extension'] ?? creds['username'] ?? '';
-      
-      String adminuser = "matrix";
-      if (username.isEmpty) return;
+      final username = UserData.username().isNotEmpty
+          ? UserData.username()
+          : (creds['extension'] ?? creds['username'] ?? '');
+
+      String adminuser = UserData.adminUser();
+      if (adminuser.isEmpty) {
+        await UserData.init();
+        adminuser = UserData.adminUser();
+      }
+      if (username.isEmpty || adminuser.isEmpty) return;
 
       String? token = await _messaging.getToken();
       if (token == null) return;
@@ -124,10 +139,12 @@ class FcmService with WidgetsBindingObserver {
         "username": username,
         "adminuser": adminuser,
         "token": token,
-        "appSecret": "samvaad_mobile_secret_123"
+        "appSecret": "samvaad_mobile_secret_123",
       };
 
-      final url = Uri.parse('https://devapp.iotcom.io/removeFirebaseTokenMobile');
+      final url = Uri.parse(
+        'https://devapp.iotcom.io/removeFirebaseTokenMobile',
+      );
       final response = await http.post(
         url,
         headers: {"Content-Type": "application/json"},
@@ -150,10 +167,14 @@ class FcmService with WidgetsBindingObserver {
     // Initialize local notifications
     const AndroidInitializationSettings initializationSettingsAndroid =
         AndroidInitializationSettings('@mipmap/ic_launcher');
-    const DarwinInitializationSettings initializationSettingsIOS = DarwinInitializationSettings();
-    const InitializationSettings initializationSettings = InitializationSettings(
-        android: initializationSettingsAndroid, iOS: initializationSettingsIOS);
-    
+    const DarwinInitializationSettings initializationSettingsIOS =
+        DarwinInitializationSettings();
+    const InitializationSettings initializationSettings =
+        InitializationSettings(
+          android: initializationSettingsAndroid,
+          iOS: initializationSettingsIOS,
+        );
+
     await _localNotificationsPlugin.initialize(
       initializationSettings,
       onDidReceiveNotificationResponse: (details) {
@@ -163,13 +184,14 @@ class FcmService with WidgetsBindingObserver {
         _localNotificationsPlugin.cancelAll();
       },
     );
-    
+
     // Clear notifications on startup
     await _localNotificationsPlugin.cancelAll();
 
     // Request permissions ONLY ONCE on initial launch/login
     final prefs = await SharedPreferences.getInstance();
-    final hasRequestedAll = prefs.getBool('has_requested_all_permissions') ?? false;
+    final hasRequestedAll =
+        prefs.getBool('has_requested_all_permissions') ?? false;
 
     if (!hasRequestedAll) {
       await prefs.setBool('has_requested_all_permissions', true);
@@ -181,7 +203,9 @@ class FcmService with WidgetsBindingObserver {
         sound: true,
         provisional: false,
       );
-      log('[FCM_SERVICE] Notification permission status: ${settings.authorizationStatus}');
+      log(
+        '[FCM_SERVICE] Notification permission status: ${settings.authorizationStatus}',
+      );
 
       if (Platform.isAndroid) {
         // Request Microphone, Camera & Notification permissions in one prompt batch
@@ -215,7 +239,9 @@ class FcmService with WidgetsBindingObserver {
 
     // Foreground messages (app is already open)
     FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-      log('[FCM_SERVICE] Foreground message received: ${message.messageId}, data: ${message.data}');
+      log(
+        '[FCM_SERVICE] Foreground message received: ${message.messageId}, data: ${message.data}',
+      );
       final type = message.data['type'];
       if (type == 'incomingCall' || type == 'incoming_call' || type == 'call') {
         log('[FCM_SERVICE] Ringing on foreground notification...');
