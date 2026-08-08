@@ -200,7 +200,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
                   _buildActionButton(
                     context,
                     icon: Icons.call_rounded,
-                    label: 'Audio',
+                    label: 'Answer',
                     color: Colors.green,
                     onTap: _acceptCall,
                   ),

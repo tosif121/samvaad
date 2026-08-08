@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -61,7 +60,6 @@ class _DialpadScreenState extends State<DialpadScreen>
 
   final Set<String> _callBackingCallers = {};
   final Set<String> _completingCallbacks = {};
-  final ValueNotifier<bool> _permissionRefresher = ValueNotifier(false);
 
   Future<void> _initRenderers() async {
     await _localRenderer.initialize();
@@ -1452,12 +1450,6 @@ class _DialpadScreenState extends State<DialpadScreen>
         const SizedBox(height: AppSpacing.lg),
         const SectionHeader('Break'),
         _buildBreakCard(cs),
-        const SizedBox(height: AppSpacing.lg),
-        const SectionHeader('Permissions'),
-        _buildPermissionsCard(cs),
-        const SizedBox(height: AppSpacing.lg),
-        const SectionHeader('Data'),
-        _buildHistoryCard(cs),
         const SizedBox(height: AppSpacing.xl),
         _buildLogoutCard(cs),
         const SizedBox(height: AppSpacing.md),
@@ -1732,32 +1724,6 @@ class _DialpadScreenState extends State<DialpadScreen>
     }
   }
 
-  Widget _buildHistoryCard(ColorScheme cs) {
-    return SettingsCard(
-      children: [
-        SettingsRow(
-          icon: Icons.delete_sweep_rounded,
-          iconColor: cs.error,
-          title: 'Call History',
-          value: '${_callLog.entries.value.length} saved',
-        ),
-        const SizedBox(height: AppSpacing.xs),
-        SizedBox(
-          width: double.infinity,
-          child: OutlinedButton.icon(
-            style: OutlinedButton.styleFrom(
-              foregroundColor: cs.error,
-              side: BorderSide(color: cs.error.withValues(alpha: 0.5)),
-            ),
-            onPressed: _confirmClearHistory,
-            icon: const Icon(Icons.delete_outline_rounded),
-            label: const Text('Clear Call History'),
-          ),
-        ),
-      ],
-    );
-  }
-
   Future<void> _confirmClearHistory() async {
     if (!mounted) return;
     final ok = await showDialog<bool>(
@@ -1856,97 +1822,6 @@ class _DialpadScreenState extends State<DialpadScreen>
     );
   }
 
-  // ---------------------------------------------------------------------
-  // Permissions
-  // ---------------------------------------------------------------------
-
-  Future<bool> _ensurePermission(Permission permission) async {
-    final status = await permission.status;
-    if (status.isGranted) return true;
-    final result = await permission.request();
-    if (result.isGranted) return true;
-    if (!kIsWeb && result.isPermanentlyDenied) {
-      await openAppSettings();
-    }
-    return false;
-  }
-
-  Future<void> _togglePermission(Permission permission) async {
-    final status = await permission.status;
-    if (status.isGranted) {
-      await openAppSettings();
-      return;
-    }
-    final granted = await _ensurePermission(permission);
-    _permissionRefresher.value = !_permissionRefresher.value;
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            granted
-                ? 'Permission granted'
-                : 'Permission denied — check app settings',
-          ),
-          duration: const Duration(seconds: 2),
-        ),
-      );
-    }
-  }
-
-  Widget _permissionRow({
-    required IconData icon,
-    required String title,
-    required Permission permission,
-    required ColorScheme cs,
-  }) {
-    return ValueListenableBuilder<bool>(
-      valueListenable: _permissionRefresher,
-      builder: (context, _, child) {
-        return FutureBuilder<PermissionStatus>(
-          future: permission.status,
-          builder: (context, snapshot) {
-            final granted = snapshot.data?.isGranted ?? false;
-            return SettingsRow(
-              icon: icon,
-              iconColor: granted ? cs.secondary : _warnColor(cs),
-              title: title,
-              value: granted ? 'Granted' : 'Denied',
-              trailing: Switch(
-                value: granted,
-                onChanged: (_) => _togglePermission(permission),
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
-
-  Widget _buildPermissionsCard(ColorScheme cs) {
-    return SettingsCard(
-      children: [
-        _permissionRow(
-          icon: Icons.mic_rounded,
-          title: 'Microphone',
-          permission: Permission.microphone,
-          cs: cs,
-        ),
-        _permissionRow(
-          icon: Icons.videocam_rounded,
-          title: 'Camera',
-          permission: Permission.camera,
-          cs: cs,
-        ),
-        _permissionRow(
-          icon: Icons.notifications_rounded,
-          title: 'Notifications',
-          permission: Permission.notification,
-          cs: cs,
-        ),
-      ],
-    );
-  }
-
   Widget _buildVideoView() {
     if (!_sip.isVideoCall) return const SizedBox.shrink();
     return Stack(
@@ -2040,7 +1915,9 @@ class _DialpadScreenState extends State<DialpadScreen>
         ),
         const SizedBox(height: 24),
         Text(
-          _activeCallNumber.isEmpty ? 'Unknown' : _activeCallNumber,
+          _activeCallNumber.isEmpty
+              ? 'Unknown'
+              : _stripCountryCode(_activeCallNumber),
           style: TextStyle(
             fontSize: 28,
             fontWeight: FontWeight.w700,
@@ -2219,8 +2096,85 @@ class _DialpadScreenState extends State<DialpadScreen>
     required ColorScheme cs,
     required bool isLandscape,
   }) {
-    final buttons = <Widget>[
-      if (isVideo) ...[
+    final hSpacing = isLandscape ? 10.0 : 8.0;
+    final vSpacing = isLandscape ? 16.0 : 22.0;
+
+    Widget mute() => _CallControlButton(
+      icon: _sip.isMuted ? Icons.mic_off_rounded : Icons.mic_rounded,
+      label: _sip.isMuted ? 'Unmute' : 'Mute',
+      isActive: _sip.isMuted,
+      isOnDark: isVideo,
+      onPressed: () {
+        setState(() {
+          _sip.mute(!_sip.isMuted);
+        });
+      },
+    );
+
+    Widget transfer() => _CallControlButton(
+      icon: Icons.call_made_rounded,
+      label: 'Transfer',
+      disabled: _sip.bridgeID.isEmpty,
+      isOnDark: isVideo,
+      onPressed: () async {
+        final ok = await _sip.requestTransfer();
+        if (mounted && !ok) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Transfer request failed')),
+          );
+        }
+      },
+    );
+
+    Widget speaker() => _CallControlButton(
+      icon: _sip.isSpeakerOn
+          ? Icons.volume_up_rounded
+          : Icons.volume_down_rounded,
+      label: 'Speaker',
+      isActive: _sip.isSpeakerOn,
+      isOnDark: isVideo,
+      onPressed: () {
+        _sip.toggleSpeaker(!_sip.isSpeakerOn);
+        setState(() {});
+      },
+    );
+
+    Widget hold() => _CallControlButton(
+      icon: _sip.isHeld ? Icons.play_arrow_rounded : Icons.pause_rounded,
+      label: _sip.isHeld ? 'Resume' : 'Hold',
+      isActive: _sip.isHeld,
+      isOnDark: isVideo,
+      onPressed: () {
+        setState(() {
+          _sip.toggleHold(!_sip.isHeld);
+        });
+      },
+    );
+
+    Widget keypad() => _CallControlButton(
+      icon: _isShowingKeypad ? Icons.grid_view_rounded : Icons.dialpad_rounded,
+      label: _isShowingKeypad ? 'Close' : 'Keypad',
+      isActive: _isShowingKeypad,
+      isOnDark: isVideo,
+      onPressed: () {
+        setState(() {
+          _isShowingKeypad = !_isShowingKeypad;
+        });
+      },
+    );
+
+    Widget record() => _CallControlButton(
+      icon: Icons.fiber_manual_record_rounded,
+      label: 'Record',
+      disabled: true,
+      isOnDark: isVideo,
+      onPressed: null,
+    );
+
+    final List<Widget> row1;
+    final List<Widget> row2;
+    if (isVideo) {
+      row1 = [
         _CallControlButton(
           icon: Icons.flip_camera_android_rounded,
           label: 'Flip',
@@ -2240,105 +2194,35 @@ class _DialpadScreenState extends State<DialpadScreen>
             });
           },
         ),
-      ],
-      _CallControlButton(
-        icon: _sip.isMuted ? Icons.mic_off_rounded : Icons.mic_rounded,
-        label: _sip.isMuted ? 'Unmute' : 'Mute',
-        isActive: _sip.isMuted,
-        isOnDark: isVideo,
-        onPressed: () {
-          setState(() {
-            _sip.mute(!_sip.isMuted);
-          });
-        },
-      ),
-      if (!isVideo)
-        _CallControlButton(
-          icon: _sip.isSpeakerOn
-              ? Icons.volume_up_rounded
-              : Icons.volume_down_rounded,
-          label: 'Speaker',
-          isActive: _sip.isSpeakerOn,
-          isOnDark: isVideo,
-          onPressed: () {
-            _sip.toggleSpeaker(!_sip.isSpeakerOn);
-            setState(() {});
-          },
-        ),
-      if (!isVideo)
-        _CallControlButton(
-          icon: _sip.isHeld ? Icons.play_arrow_rounded : Icons.pause_rounded,
-          label: _sip.isHeld ? 'Resume' : 'Hold',
-          isActive: _sip.isHeld,
-          isOnDark: isVideo,
-          onPressed: () {
-            setState(() {
-              _sip.toggleHold(!_sip.isHeld);
-            });
-          },
-        ),
-      if (!isVideo)
-        _CallControlButton(
-          icon: _isShowingKeypad
-              ? Icons.grid_view_rounded
-              : Icons.dialpad_rounded,
-          label: _isShowingKeypad ? 'Close' : 'Keypad',
-          isActive: _isShowingKeypad,
-          isOnDark: isVideo,
-          onPressed: () {
-            setState(() {
-              _isShowingKeypad = !_isShowingKeypad;
-            });
-          },
-        ),
-      if (!isVideo)
-        _CallControlButton(
-          icon: Icons.call_made_rounded,
-          label: 'Transfer',
-          disabled: _sip.bridgeID.isEmpty,
-          isOnDark: isVideo,
-          onPressed: () async {
-            final ok = await _sip.requestTransfer();
-            if (mounted && !ok) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Transfer request failed')),
-              );
-            }
-          },
-        ),
-      _CallControlButton(
-        icon: Icons.fiber_manual_record_rounded,
-        label: 'Record',
-        disabled: true,
-        isOnDark: isVideo,
-        onPressed: null,
-      ),
-    ];
-
-    final spacing = isLandscape ? 12.0 : 16.0;
-    final mid = (buttons.length / 2).ceil();
+        mute(),
+        speaker(),
+      ];
+      row2 = [hold(), keypad(), transfer(), record()];
+    } else {
+      row1 = [mute(), transfer(), speaker()];
+      row2 = [hold(), record(), keypad()];
+    }
 
     Widget row(List<Widget> items) {
       return Row(
-        mainAxisSize: MainAxisSize.min,
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           for (var i = 0; i < items.length; i++) ...[
-            if (i > 0) SizedBox(width: spacing),
-            items[i],
+            if (i > 0) SizedBox(width: hSpacing),
+            Expanded(child: items[i]),
           ],
         ],
       );
     }
 
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
+      padding: const EdgeInsets.symmetric(horizontal: 8),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          row(buttons.take(mid).toList()),
-          SizedBox(height: spacing),
-          row(buttons.skip(mid).toList()),
+          row(row1),
+          SizedBox(height: vSpacing),
+          row(row2),
         ],
       ),
     );
@@ -2438,7 +2322,7 @@ class _CallControlButtonState extends State<_CallControlButton> {
         ? cs.primary
         : isOnDark
         ? Colors.white.withValues(alpha: 0.15)
-        : Colors.grey.shade100;
+        : cs.surfaceContainerHighest;
     final fgColor = isActive
         ? Colors.white
         : (isOnDark ? Colors.white : cs.onSurface);
@@ -2456,8 +2340,8 @@ class _CallControlButtonState extends State<_CallControlButton> {
           mainAxisSize: MainAxisSize.min,
           children: [
             Container(
-              width: 52,
-              height: 52,
+              width: 58,
+              height: 58,
               decoration: BoxDecoration(
                 color: bgColor,
                 shape: BoxShape.circle,
@@ -2481,7 +2365,7 @@ class _CallControlButtonState extends State<_CallControlButton> {
                       padding: EdgeInsets.all(14),
                       child: CircularProgressIndicator(strokeWidth: 2.5),
                     )
-                  : Icon(widget.icon, size: 24, color: fgColor),
+                  : Icon(widget.icon, size: 28, color: fgColor),
             ),
             const SizedBox(height: 6),
             Text(
@@ -2497,6 +2381,13 @@ class _CallControlButtonState extends State<_CallControlButton> {
       ),
     );
   }
+}
+
+String _stripCountryCode(String number) {
+  var n = number.trim();
+  if (n.startsWith('+91')) n = n.substring(3);
+  if (n.startsWith('0091')) n = n.substring(4);
+  return n;
 }
 
 const _dispositionOptions = [
