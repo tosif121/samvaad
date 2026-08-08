@@ -1025,22 +1025,32 @@ class SipSocketService implements sip.SipUaHelperListener {
         if (decoded is Map) {
           final userData = decoded['userData'];
           if (userData is Map) {
-            final u = userData['username'];
-            if (u != null && u.toString().isNotEmpty) {
-              return _normalizeToApiFormat(u.toString());
+            final u = userData['username']?.toString() ?? '';
+            if (u.isNotEmpty && (u.contains('@') || u.contains('-'))) {
+              return _normalizeToApiFormat(u);
             }
           }
-          final u = decoded['username'];
-          if (u != null && u.toString().isNotEmpty) {
-            return _normalizeToApiFormat(u.toString());
+          final u = decoded['username']?.toString() ?? '';
+          if (u.isNotEmpty && (u.contains('@') || u.contains('-'))) {
+            return _normalizeToApiFormat(u);
           }
         }
       } catch (_) {}
     }
+
     final saved = prefs.getString('savedUsername') ?? '';
-    if (saved.isNotEmpty) return _normalizeToApiFormat(saved);
+    if (saved.isNotEmpty && (saved.contains('@') || saved.contains('-'))) {
+      return _normalizeToApiFormat(saved);
+    }
+
     final cred = _credentials?.displayName ?? _credentials?.username ?? '';
-    return _normalizeToApiFormat(cred);
+    if (cred.isNotEmpty && (cred.contains('@') || cred.contains('-'))) {
+      return _normalizeToApiFormat(cred);
+    }
+
+    if (saved.isNotEmpty) return _normalizeToApiFormat(saved);
+    if (cred.isNotEmpty) return _normalizeToApiFormat(cred);
+    return '';
   }
 
   Future<void> clearRejectedCallFromAgent(String callerNumber) async {

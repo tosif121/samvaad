@@ -6,11 +6,7 @@ import 'services/call_lifecycle_service.dart';
 import 'services/sip_socket_service.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'services/fcm_service.dart';
-
-const _primaryColor = Color(0xFF4299EB);
-const _secondaryColor = Color(0xFF00C853);
-const _errorColor = Color(0xFFFF5252);
-const _darkText = Color(0xFF1a1a1a);
+import 'ui/theme.dart';
 
 const _singleInstancePort = 56321;
 ServerSocket? _instanceLock;
@@ -40,6 +36,8 @@ Future<void> main() async {
   final sip = SipSocketService();
   await sip.loadCredentials();
 
+  await ThemeController.instance.init();
+
   runApp(SamvaadApp(hasCredentials: sip.hasCredentials));
 }
 
@@ -50,171 +48,18 @@ class SamvaadApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Samvaad',
-      debugShowCheckedModeBanner: false,
-      theme: _buildTheme(),
-      home: hasCredentials ? const DialpadScreen() : const LoginScreen(),
-    );
-  }
-
-  ThemeData _buildTheme() {
-    final colorScheme = ColorScheme.light(
-      primary: _primaryColor,
-      onPrimary: Colors.white,
-      secondary: _secondaryColor,
-      onSecondary: Colors.white,
-      error: _errorColor,
-      onError: Colors.white,
-      surface: Colors.white,
-      onSurface: _darkText,
-      outline: Colors.grey.shade300,
-    );
-
-    return ThemeData(
-      useMaterial3: true,
-      colorScheme: colorScheme,
-      scaffoldBackgroundColor: const Color(0xFFF5F6FA),
-      appBarTheme: AppBarTheme(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        centerTitle: true,
-        iconTheme: IconThemeData(color: colorScheme.primary),
-        titleTextStyle: TextStyle(
-          color: _darkText,
-          fontSize: 22,
-          fontWeight: FontWeight.w700,
-          letterSpacing: 0.5,
-        ),
-      ),
-      cardTheme: CardThemeData(
-        color: Colors.white,
-        elevation: 0,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(20),
-          side: BorderSide(color: Colors.grey.shade200, width: 1),
-        ),
-      ),
-      elevatedButtonTheme: ElevatedButtonThemeData(
-        style: ElevatedButton.styleFrom(
-          backgroundColor: colorScheme.primary,
-          foregroundColor: Colors.white,
-          elevation: 0,
-          padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 18),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
-          ),
-          textStyle: const TextStyle(
-            fontSize: 16,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 0.5,
-          ),
-        ),
-      ),
-      filledButtonTheme: FilledButtonThemeData(
-        style: FilledButton.styleFrom(
-          backgroundColor: colorScheme.primary,
-          foregroundColor: Colors.white,
-          elevation: 0,
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(14),
-          ),
-          textStyle: const TextStyle(
-            fontSize: 15,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 0.3,
-          ),
-        ),
-      ),
-      outlinedButtonTheme: OutlinedButtonThemeData(
-        style: OutlinedButton.styleFrom(
-          foregroundColor: colorScheme.primary,
-          elevation: 0,
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(14),
-          ),
-          side: BorderSide(color: colorScheme.primary.withValues(alpha: 0.4)),
-          textStyle: const TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-      ),
-      chipTheme: ChipThemeData(
-        backgroundColor: Colors.white,
-        selectedColor: colorScheme.primary.withValues(alpha: 0.12),
-        side: BorderSide(color: Colors.grey.shade200),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(14),
-        ),
-        labelStyle: const TextStyle(
-          fontSize: 13,
-          fontWeight: FontWeight.w600,
-        ),
-      ),
-      navigationBarTheme: NavigationBarThemeData(
-        backgroundColor: Colors.white,
-        elevation: 0,
-        height: 68,
-        indicatorColor: colorScheme.primary.withValues(alpha: 0.12),
-        labelTextStyle: WidgetStateProperty.resolveWith(
-          (states) => TextStyle(
-            fontSize: 12,
-            fontWeight: states.contains(WidgetState.selected)
-                ? FontWeight.w700
-                : FontWeight.w500,
-            color: states.contains(WidgetState.selected)
-                ? colorScheme.primary
-                : Colors.grey.shade600,
-          ),
-        ),
-        iconTheme: WidgetStateProperty.resolveWith(
-          (states) => IconThemeData(
-            color: states.contains(WidgetState.selected)
-                ? colorScheme.primary
-                : Colors.grey.shade600,
-            size: 26,
-          ),
-        ),
-      ),
-      inputDecorationTheme: InputDecorationTheme(
-        filled: true,
-        fillColor: const Color(0xFFF8F9FA),
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: BorderSide(color: Colors.grey.shade200, width: 1.5),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: BorderSide(color: Colors.grey.shade200, width: 1.5),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: const BorderSide(color: _primaryColor, width: 2),
-        ),
-        errorBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
-          borderSide: const BorderSide(color: _errorColor, width: 1.5),
-        ),
-        contentPadding: const EdgeInsets.symmetric(
-          horizontal: 24,
-          vertical: 18,
-        ),
-        labelStyle: TextStyle(color: Colors.grey.shade600, fontSize: 15),
-      ),
-      dividerTheme: DividerThemeData(
-        color: Colors.grey.shade200,
-        thickness: 1,
-        space: 1,
-      ),
-      snackBarTheme: SnackBarThemeData(
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-        ),
-      ),
+    return ValueListenableBuilder<ThemeMode>(
+      valueListenable: ThemeController.instance.mode,
+      builder: (context, mode, _) {
+        return MaterialApp(
+          title: 'Samvaad',
+          debugShowCheckedModeBanner: false,
+          theme: SamvaadTheme.light(),
+          darkTheme: SamvaadTheme.dark(),
+          themeMode: mode,
+          home: hasCredentials ? const DialpadScreen() : const LoginScreen(),
+        );
+      },
     );
   }
 }
