@@ -168,7 +168,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
             ),
             const SizedBox(height: 32),
             Text(
-              widget.phoneNumber,
+              _stripCountryCode(widget.phoneNumber),
               style: TextStyle(
                 fontSize: 28,
                 fontWeight: FontWeight.w800,
@@ -264,4 +264,11 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
       ),
     );
   }
+}
+
+String _stripCountryCode(String number) {
+  var n = number.trim();
+  if (n.startsWith('+91')) n = n.substring(3);
+  if (n.startsWith('0091')) n = n.substring(4);
+  return n;
 }

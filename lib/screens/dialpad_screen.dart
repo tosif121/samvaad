@@ -2348,27 +2348,22 @@ class _DialpadScreenState extends State<DialpadScreen>
             height: 260,
             child: Padding(
               padding: EdgeInsets.symmetric(horizontal: isWide ? 120 : 32),
-              child: Column(
-                children: [
-                  _buildDtmfRow(['1', '2', '3']),
-                  _buildDtmfRow(['4', '5', '6']),
-                  _buildDtmfRow(['7', '8', '9']),
-                  _buildDtmfRow(['*', '0', '#']),
-                ],
-              ),
+              child: _buildDtmfKeypad(),
             ),
           ),
+          const Spacer(flex: 2),
         ] else
           const Spacer(flex: 2),
-        Center(
-          child: _buildCallControls(
-            isVideo: false,
-            cs: cs,
-            isLandscape: isLandscape,
+        if (!_showConferenceKeypad && !_isShowingKeypad)
+          Center(
+            child: _buildCallControls(
+              isVideo: false,
+              cs: cs,
+              isLandscape: isLandscape,
+            ),
           ),
-        ),
         const SizedBox(height: 16),
-        if (!_showConferenceKeypad)
+        if (!_showConferenceKeypad && !_isShowingKeypad)
           Center(
             child: GestureDetector(
               onTap: _endCall,
@@ -2435,51 +2430,47 @@ class _DialpadScreenState extends State<DialpadScreen>
             height: 260,
             child: Padding(
               padding: EdgeInsets.symmetric(horizontal: isWide ? 120 : 32),
-              child: Column(
-                children: [
-                  _buildDtmfRow(['1', '2', '3']),
-                  _buildDtmfRow(['4', '5', '6']),
-                  _buildDtmfRow(['7', '8', '9']),
-                  _buildDtmfRow(['*', '0', '#']),
-                ],
-              ),
+              child: _buildDtmfKeypad(),
             ),
           ),
-          const SizedBox(height: 16),
-        ],
-        Center(
-          child: _buildCallControls(
-            isVideo: true,
-            cs: cs,
-            isLandscape: isLandscape,
+          const Spacer(),
+        ] else
+          const Spacer(),
+        if (!_isShowingKeypad)
+          Center(
+            child: _buildCallControls(
+              isVideo: true,
+              cs: cs,
+              isLandscape: isLandscape,
+            ),
           ),
-        ),
         const SizedBox(height: 16),
-        Center(
-          child: GestureDetector(
-            onTap: _endCall,
-            child: Container(
-              width: 72,
-              height: 72,
-              decoration: BoxDecoration(
-                color: cs.error,
-                shape: BoxShape.circle,
-                boxShadow: [
-                  BoxShadow(
-                    color: cs.error.withValues(alpha: 0.35),
-                    blurRadius: 20,
-                    offset: const Offset(0, 6),
-                  ),
-                ],
-              ),
-              child: const Icon(
-                Icons.call_end_rounded,
-                color: Colors.white,
-                size: 32,
+        if (!_isShowingKeypad)
+          Center(
+            child: GestureDetector(
+              onTap: _endCall,
+              child: Container(
+                width: 72,
+                height: 72,
+                decoration: BoxDecoration(
+                  color: cs.error,
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: cs.error.withValues(alpha: 0.35),
+                      blurRadius: 20,
+                      offset: const Offset(0, 6),
+                    ),
+                  ],
+                ),
+                child: const Icon(
+                  Icons.call_end_rounded,
+                  color: Colors.white,
+                  size: 32,
+                ),
               ),
             ),
           ),
-        ),
         const SizedBox(height: 32),
       ],
     );
@@ -2653,41 +2644,21 @@ class _DialpadScreenState extends State<DialpadScreen>
     );
   }
 
-  Widget _buildDtmfKey(String key) {
-    final isVideo = _sip.isVideoCall;
-    return Expanded(
-      child: Padding(
-        padding: const EdgeInsets.all(4),
-        child: Material(
-          color: Colors.white.withValues(alpha: isVideo ? 0.1 : 0.08),
-          borderRadius: BorderRadius.circular(14),
-          child: InkWell(
-            borderRadius: BorderRadius.circular(14),
-            onTap: () => _sip.sendDTMF(key),
-            child: Container(
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
-              ),
-              child: Text(
-                key,
-                style: TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.white.withValues(alpha: 0.85),
-                ),
-              ),
-            ),
-          ),
+  Widget _buildDtmfKeypad() {
+    return FittedBox(
+      fit: BoxFit.contain,
+      child: SizedBox(
+        width: 264,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _buildDialRow(['1', '2', '3'], onDigit: _sip.sendDTMF),
+            _buildDialRow(['4', '5', '6'], onDigit: _sip.sendDTMF),
+            _buildDialRow(['7', '8', '9'], onDigit: _sip.sendDTMF),
+            _buildDialRow(['*', '0', '#'], onDigit: _sip.sendDTMF),
+          ],
         ),
       ),
-    );
-  }
-
-  Widget _buildDtmfRow(List<String> keys) {
-    return Expanded(
-      child: Row(children: keys.map((key) => _buildDtmfKey(key)).toList()),
     );
   }
 
