@@ -76,11 +76,14 @@ Future<bool> showDynamicFormSheet(
     isScrollControlled: true,
     isDismissible: false,
     enableDrag: false,
-    builder: (context) => _DynamicFormSheet(
-      formConfig: formConfig,
-      callType: callType,
-      contactNumber: contactNumber,
-      onSubmit: onSubmit,
+    builder: (context) => PopScope(
+      canPop: false,
+      child: _DynamicFormSheet(
+        formConfig: formConfig,
+        callType: callType,
+        contactNumber: contactNumber,
+        onSubmit: onSubmit,
+      ),
     ),
   ).then((v) => v ?? false);
 }
@@ -352,26 +355,13 @@ class _DynamicFormSheetState extends State<_DynamicFormSheet> {
               ),
             ),
             const SizedBox(height: 16),
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    title,
-                    style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.w700,
-                      color: cs.onSurface,
-                    ),
-                  ),
-                ),
-                IconButton(
-                  tooltip: 'Close',
-                  onPressed: _submitting
-                      ? null
-                      : () => Navigator.of(context).pop(false),
-                  icon: Icon(Icons.close_rounded, color: cs.onSurface),
-                ),
-              ],
+            Text(
+              title,
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.w700,
+                color: cs.onSurface,
+              ),
             ),
             const SizedBox(height: 4),
             Text(

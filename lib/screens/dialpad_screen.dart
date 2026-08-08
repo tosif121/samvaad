@@ -1084,7 +1084,7 @@ class _DialpadScreenState extends State<DialpadScreen>
     return FittedBox(
       fit: BoxFit.contain,
       child: SizedBox(
-        width: 264,
+        width: 300,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -1118,7 +1118,7 @@ class _DialpadScreenState extends State<DialpadScreen>
     final letters = _dialLetters[key] ?? '';
     return Expanded(
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
         child: PressableScale(
           onTap: () => onDigit(key),
           child: AspectRatio(
@@ -1136,8 +1136,8 @@ class _DialpadScreenState extends State<DialpadScreen>
                   Text(
                     key,
                     style: TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.w600,
+                      fontSize: 30,
+                      fontWeight: FontWeight.w700,
                       color: cs.onSurface,
                       height: 1,
                     ),
@@ -1146,10 +1146,10 @@ class _DialpadScreenState extends State<DialpadScreen>
                     Text(
                       letters,
                       style: TextStyle(
-                        fontSize: 8,
-                        fontWeight: FontWeight.w600,
-                        letterSpacing: 1,
-                        color: cs.onSurface.withValues(alpha: 0.35),
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 1.2,
+                        color: cs.onSurface.withValues(alpha: 0.4),
                       ),
                     ),
                 ],
@@ -2270,12 +2270,13 @@ class _DialpadScreenState extends State<DialpadScreen>
 
   Widget _buildAudioCallContent(bool isLandscape, bool isWide) {
     final cs = Theme.of(context).colorScheme;
+    final keypadOpen = _showConferenceKeypad || _isShowingKeypad;
     return Column(
       children: [
         const Spacer(flex: 2),
         Container(
-          width: 120,
-          height: 120,
+          width: keypadOpen ? 84 : 120,
+          height: keypadOpen ? 84 : 120,
           decoration: BoxDecoration(
             color: cs.primary.withValues(alpha: 0.08),
             shape: BoxShape.circle,
@@ -2284,23 +2285,23 @@ class _DialpadScreenState extends State<DialpadScreen>
               width: 3,
             ),
           ),
-          child: Icon(Icons.person, size: 60, color: cs.primary),
+          child: Icon(Icons.person, size: keypadOpen ? 44 : 60, color: cs.primary),
         ),
-        const SizedBox(height: 24),
+        const SizedBox(height: 16),
         Text(
           _activeCallNumber.isEmpty
               ? 'Unknown'
               : UserData.maskNumber(_stripCountryCode(_activeCallNumber)),
           style: TextStyle(
-            fontSize: 28,
+            fontSize: 24,
             fontWeight: FontWeight.w700,
             color: cs.onSurface,
             letterSpacing: 1,
           ),
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 10),
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
           decoration: BoxDecoration(
             color: cs.secondary.withValues(alpha: 0.1),
             borderRadius: BorderRadius.circular(20),
@@ -2308,12 +2309,12 @@ class _DialpadScreenState extends State<DialpadScreen>
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.access_time_rounded, size: 18, color: cs.secondary),
+              Icon(Icons.access_time_rounded, size: 16, color: cs.secondary),
               const SizedBox(width: 8),
               Text(
                 _sip.isHeld ? 'On Hold' : _formattedTime,
                 style: TextStyle(
-                  fontSize: 18,
+                  fontSize: 16,
                   color: cs.secondary,
                   fontWeight: FontWeight.w700,
                   fontFamily: 'monospace',
@@ -2323,7 +2324,7 @@ class _DialpadScreenState extends State<DialpadScreen>
           ),
         ),
         if (_conferenceStatus) ...[
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
             decoration: BoxDecoration(
@@ -2340,23 +2341,18 @@ class _DialpadScreenState extends State<DialpadScreen>
             ),
           ),
         ],
-        if (_showConferenceKeypad) ...[
-          const SizedBox(height: 16),
-          _buildConferenceKeypad(isWide: isWide),
-          const Spacer(flex: 2),
-        ] else if (_isShowingKeypad) ...[
-          const SizedBox(height: 16),
-          SizedBox(
-            height: 340,
+        if (keypadOpen) ...[
+          Expanded(
             child: Padding(
               padding: EdgeInsets.symmetric(horizontal: isWide ? 120 : 32),
-              child: _buildDtmfKeypad(),
+              child: _showConferenceKeypad
+                  ? _buildConferenceKeypad(isWide: isWide)
+                  : _buildDtmfKeypad(),
             ),
           ),
+          const Spacer(),
+        ] else ...[
           const Spacer(flex: 2),
-        ] else
-          const Spacer(flex: 2),
-        if (!_showConferenceKeypad && !_isShowingKeypad)
           Center(
             child: _buildCallControls(
               isVideo: false,
@@ -2364,8 +2360,7 @@ class _DialpadScreenState extends State<DialpadScreen>
               isLandscape: isLandscape,
             ),
           ),
-        const SizedBox(height: 16),
-        if (!_showConferenceKeypad && !_isShowingKeypad)
+          const SizedBox(height: 16),
           Center(
             child: GestureDetector(
               onTap: _endCall,
@@ -2391,7 +2386,8 @@ class _DialpadScreenState extends State<DialpadScreen>
               ),
             ),
           ),
-        const SizedBox(height: 32),
+          const SizedBox(height: 32),
+        ],
       ],
     );
   }
@@ -2649,7 +2645,7 @@ class _DialpadScreenState extends State<DialpadScreen>
   Widget _buildDtmfKeypad() {
     final cs = Theme.of(context).colorScheme;
     return Column(
-      mainAxisSize: MainAxisSize.min,
+      mainAxisSize: MainAxisSize.max,
       children: [
         Align(
           alignment: Alignment.centerRight,
@@ -2712,7 +2708,7 @@ class _DialpadScreenState extends State<DialpadScreen>
           child: FittedBox(
             fit: BoxFit.contain,
             child: SizedBox(
-              width: 264,
+              width: 300,
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -2738,69 +2734,68 @@ class _DialpadScreenState extends State<DialpadScreen>
 
   Widget _buildConferenceKeypad({required bool isWide}) {
     final cs = Theme.of(context).colorScheme;
-    return Padding(
-      padding: EdgeInsets.symmetric(horizontal: isWide ? 120 : 32),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Align(
-            alignment: Alignment.centerRight,
-            child: IconButton(
-              icon: const Icon(Icons.close_rounded),
-              onPressed: () {
-                setState(() => _showConferenceKeypad = false);
-              },
-              color: cs.onSurface.withValues(alpha: 0.6),
-            ),
+    return Column(
+      mainAxisSize: MainAxisSize.max,
+      children: [
+        Align(
+          alignment: Alignment.centerRight,
+          child: IconButton(
+            icon: const Icon(Icons.close_rounded),
+            onPressed: () {
+              setState(() => _showConferenceKeypad = false);
+            },
+            color: cs.onSurface.withValues(alpha: 0.6),
           ),
-          Container(
-            margin: const EdgeInsets.only(bottom: 12),
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-            decoration: BoxDecoration(
-              color: cs.surfaceContainerLow,
-              borderRadius: BorderRadius.circular(AppRadii.xl),
-              border: Border.all(color: cs.outline.withValues(alpha: 0.5)),
-            ),
-            constraints: const BoxConstraints(minHeight: 56),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Expanded(
-                  child: Center(
-                    child: Text(
-                      _conferenceNumber.isEmpty
-                          ? 'Enter number'
-                          : _conferenceNumber,
-                      style: TextStyle(
-                        fontSize: 26,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 3,
-                        color: _conferenceNumber.isEmpty
-                            ? cs.onSurface.withValues(alpha: 0.25)
-                            : cs.onSurface,
-                      ),
-                      textAlign: TextAlign.center,
+        ),
+        Container(
+          margin: const EdgeInsets.only(bottom: 12),
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+          decoration: BoxDecoration(
+            color: cs.surfaceContainerLow,
+            borderRadius: BorderRadius.circular(AppRadii.xl),
+            border: Border.all(color: cs.outline.withValues(alpha: 0.5)),
+          ),
+          constraints: const BoxConstraints(minHeight: 56),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: Center(
+                  child: Text(
+                    _conferenceNumber.isEmpty
+                        ? 'Enter number'
+                        : _conferenceNumber,
+                    style: TextStyle(
+                      fontSize: 26,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 3,
+                      color: _conferenceNumber.isEmpty
+                          ? cs.onSurface.withValues(alpha: 0.25)
+                          : cs.onSurface,
                     ),
+                    textAlign: TextAlign.center,
                   ),
                 ),
-                if (_conferenceNumber.isNotEmpty)
-                  IconButton(
-                    icon: const Icon(Icons.backspace_outlined),
-                    onPressed: () => setState(
-                      () => _conferenceNumber = _conferenceNumber.substring(
-                        0,
-                        _conferenceNumber.length - 1,
-                      ),
+              ),
+              if (_conferenceNumber.isNotEmpty)
+                IconButton(
+                  icon: const Icon(Icons.backspace_outlined),
+                  onPressed: () => setState(
+                    () => _conferenceNumber = _conferenceNumber.substring(
+                      0,
+                      _conferenceNumber.length - 1,
                     ),
-                    color: cs.onSurface.withValues(alpha: 0.5),
                   ),
-              ],
-            ),
+                  color: cs.onSurface.withValues(alpha: 0.5),
+                ),
+            ],
           ),
-          FittedBox(
+        ),
+        Expanded(
+          child: FittedBox(
             fit: BoxFit.contain,
             child: SizedBox(
-              width: 264,
+              width: 300,
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -2816,9 +2811,10 @@ class _DialpadScreenState extends State<DialpadScreen>
               ),
             ),
           ),
-          const SizedBox(height: 16),
-          GestureDetector(
-            onTap: _conferenceNumber.isNotEmpty ? _startConferenceCall : null,
+        ),
+        const SizedBox(height: 16),
+        GestureDetector(
+          onTap: _conferenceNumber.isNotEmpty ? _startConferenceCall : null,
             child: Container(
               width: 56,
               height: 56,
@@ -2841,7 +2837,6 @@ class _DialpadScreenState extends State<DialpadScreen>
             ),
           ),
         ],
-      ),
     );
   }
 
