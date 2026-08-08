@@ -1,4 +1,4 @@
-package com.iotcom.samvaad
+package com.samvaad
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -24,15 +24,17 @@ class IncomingCallService : Service() {
         val callerName = intent?.getStringExtra("caller_name") ?: "Unknown Caller"
         val callerNumber = intent?.getStringExtra("fcm_number") ?: ""
 
-        Log.d(TAG, "IncomingCallService started for $callerName")
+        Log.d(TAG, "IncomingCallService started for $callerName ($callerNumber)")
 
-        // 1. Show persistent foreground notification (required within ~5s of service start)
+        // 1. MUST call startForeground() first, within the system's ~5s deadline.
+        //    Without it the app crashes with ForegroundServiceDidNotStartInTimeException.
         startForeground(NOTIFICATION_ID, createForegroundNotification())
 
-        // 2. Wake device screen if needed
-        wakeDevice()
+        // 2. Show high-priority heads-up incoming call notification banner
+        showIncomingCallNotification(callerName, callerNumber)
 
-        stopSelf()
+        // 3. Wake device screen if locked
+        wakeDevice()
 
         return START_NOT_STICKY
     }

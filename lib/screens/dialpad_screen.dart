@@ -137,6 +137,10 @@ class _DialpadScreenState extends State<DialpadScreen>
     if (state == AppLifecycleState.resumed) {
       RingtoneService().clearNotification();
 
+      if (!_sip.isRegistered) {
+        _sip.connect();
+      }
+
       final recentlyHandledSameNumber =
           _lastHandledNumber != null &&
           _lastHandledNumber == _sip.incomingNumber &&
@@ -155,6 +159,12 @@ class _DialpadScreenState extends State<DialpadScreen>
   }
 
   Future<bool> _requestPermissions({bool isVideo = false}) async {
+    if (isVideo) {
+      final statuses =
+          await [Permission.microphone, Permission.camera].request();
+      return (statuses[Permission.microphone]?.isGranted ?? false) &&
+          (statuses[Permission.camera]?.isGranted ?? false);
+    }
     final status = await Permission.microphone.request();
     return status.isGranted;
   }
@@ -205,6 +215,13 @@ class _DialpadScreenState extends State<DialpadScreen>
           if (_isShowingIncomingDialog) break;
 
           final isQueueFallback = event['fromQueue'] == true;
+
+          // Never surface the incoming call screen while on break: reject any
+          // real SIP session (so it stops ringing) and ignore queue fallbacks.
+          if (_currentBreak != null) {
+            await _sip.rejectCall();
+            break;
+          }
 
           // Only the synthetic queue-fallback ring (fired by the 5s poll before
           // the real INVITE lands) is suppressed for a recently declined caller.
@@ -392,6 +409,10 @@ class _DialpadScreenState extends State<DialpadScreen>
       return;
     }
     if (_isOnCall) {
+      return;
+    }
+    if (_currentBreak != null) {
+      await _sip.rejectCall();
       return;
     }
     _isShowingIncomingDialog = true;
@@ -988,12 +1009,129 @@ class _DialpadScreenState extends State<DialpadScreen>
     final count = _sip.queueCount;
     if (count <= 0) return const SizedBox.shrink();
     final cs = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: InfoChip(
-        icon: Icons.queue_rounded,
-        label: 'Call Queue: ($count)',
-        color: cs.primary,
+    return GestureDetector(
+      onTap: _showQueueSheet,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        child: InfoChip(
+          icon: Icons.queue_rounded,
+          label: 'Call Queue: ($count)',
+          color: cs.primary,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showQueueSheet() async {
+    final cs = Theme.of(context).colorScheme;
+    final queue = List<dynamic>.from(_sip.currentCallqueue);
+    if (queue.isEmpty) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (context) => DraggableScrollableSheet(
+        initialChildSize: 0.6,
+        minChildSize: 0.4,
+        maxChildSize: 0.9,
+        expand: false,
+        builder: (context, scrollController) => Container(
+          decoration: BoxDecoration(
+            color: cs.surface,
+            borderRadius: const BorderRadius.vertical(
+              top: Radius.circular(AppRadii.xl),
+            ),
+          ),
+          padding: const EdgeInsets.fromLTRB(
+            AppSpacing.md,
+            AppSpacing.sm,
+            AppSpacing.md,
+            AppSpacing.md,
+          ),
+          child: Column(
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: cs.outlineVariant,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              Row(
+                children: [
+                  Icon(Icons.queue_rounded, size: 20, color: cs.primary),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Call Queue (${queue.length})',
+                    style: TextStyle(
+                      fontSize: AppType.heading,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.3,
+                      color: cs.onSurface,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: AppSpacing.sm),
+              Divider(color: cs.outlineVariant),
+              const SizedBox(height: AppSpacing.xs),
+              Expanded(
+                child: ListView.separated(
+                  controller: scrollController,
+                  itemCount: queue.length,
+                  separatorBuilder: (_, _) => Divider(
+                    height: 1,
+                    color: cs.outlineVariant,
+                  ),
+                  itemBuilder: (context, index) {
+                    final call =
+                        queue[index] is Map ? queue[index] as Map : null;
+                    final caller = (call?['Caller'] ?? 'Unknown').toString();
+                    final stickyAgent =
+                        (call?['stickyAgent'] ?? '').toString();
+                    final isSticky = call?['isSticky'] == true;
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      child: Row(
+                        children: [
+                          AvatarBubble(
+                            name: _stripCountryCode(caller),
+                            size: AppSizes.avatarMd,
+                            iconColor: cs.primary,
+                          ),
+                          const SizedBox(width: AppSpacing.sm),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  _stripCountryCode(caller),
+                                  style: TextStyle(
+                                    fontSize: AppType.body,
+                                    fontWeight: FontWeight.w700,
+                                    color: cs.onSurface,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          if (isSticky && stickyAgent.isNotEmpty)
+                            InfoChip(
+                              icon: Icons.push_pin_rounded,
+                              label: stickyAgent,
+                              color: cs.tertiary,
+                            ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

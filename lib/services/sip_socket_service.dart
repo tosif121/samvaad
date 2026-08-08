@@ -10,6 +10,7 @@ import '../models/sip_credentials.dart';
 import '../models/call_log_entry.dart';
 import 'remote_audio_stub.dart' if (dart.library.html) 'remote_audio_web.dart';
 import 'call_lifecycle_service.dart';
+import 'fcm_service.dart';
 import 'user_data.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
@@ -242,6 +243,12 @@ class SipSocketService implements sip.SipUaHelperListener {
       settings.register = true;
       settings.sessionTimers = false;
 
+      if (_wasStarted) {
+        try {
+          _helper.stop();
+        } catch (_) {}
+      }
+
       await _helper.start(settings);
       _wasStarted = true;
 
@@ -356,6 +363,7 @@ class SipSocketService implements sip.SipUaHelperListener {
         _log('SIP REGISTERED');
         _emit(SipEvent.registered);
         unawaited(sendUserReady());
+        unawaited(FcmService().sendTokenToBackend());
         _startHeartbeatTimer();
         unawaited(fetchMissedCalls());
         unawaited(fetchRecentCalls());

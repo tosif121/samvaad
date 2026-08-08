@@ -1,4 +1,4 @@
-package com.iotcom.samvaad
+package com.samvaad
 
 import android.content.Intent
 import android.media.MediaPlayer

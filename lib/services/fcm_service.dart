@@ -11,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'ringtone_service.dart';
+import 'sip_socket_service.dart';
 import 'user_data.dart';
 
 @pragma('vm:entry-point')
@@ -22,8 +23,26 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   final callerName = message.data['callerName'] ?? message.data['title'] ?? 'Incoming Call';
   final callerNumber = message.data['callerNumber'] ?? message.data['body'] ?? '';
 
-  if (type == 'incomingCall' || type == 'incoming_call' || type == 'call') {
-    log('[FCM_SERVICE] Displaying incoming call notification for $callerName...');
+  final isVideo = message.data['isVideo'] == 'true' ||
+      message.data['mediaType'] == 'video' ||
+      type == 'video_call';
+  final titleText = isVideo ? 'Incoming Video Call' : callerName;
+  final bodyText = callerNumber.isNotEmpty
+      ? '${isVideo ? "Video call" : "Call"} from $callerNumber'
+      : (isVideo ? 'Incoming video call' : 'Incoming call');
+
+  if (type == 'incomingCall' ||
+      type == 'incoming_call' ||
+      type == 'call' ||
+      type == 'video_call') {
+    log('[FCM_SERVICE] Displaying incoming call notification ($titleText)...');
+
+    try {
+      SipSocketService().connect();
+    } catch (e) {
+      log('[FCM_SERVICE] Error connecting SIP socket in background: $e');
+    }
+
     final flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
     const androidDetails = AndroidNotificationDetails(
       'incoming_calls_channel',
@@ -38,8 +57,8 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     const notificationDetails = NotificationDetails(android: androidDetails);
     await flutterLocalNotificationsPlugin.show(
       0,
-      callerName,
-      callerNumber.isNotEmpty ? 'Incoming call from $callerNumber' : 'Incoming call',
+      titleText,
+      bodyText,
       notificationDetails,
       payload: jsonEncode(message.data),
     );
@@ -77,8 +96,15 @@ class FcmService with WidgetsBindingObserver {
     return {"deviceId": "unknown_device", "deviceName": "Unknown Device"};
   }
 
-  Future<void> sendTokenToBackend(String token) async {
+  Future<void> sendTokenToBackend([String? token]) async {
     try {
+      if (token == null || token.isEmpty) {
+        token = await _messaging.getToken();
+      }
+      if (token == null || token.isEmpty) {
+        log("[FCM_SERVICE] FCM token is null, cannot send to backend.");
+        return;
+      }
       final prefs = await SharedPreferences.getInstance();
       final credsStr = prefs.getString('sip_credentials');
       if (credsStr == null) {
@@ -131,9 +157,9 @@ class FcmService with WidgetsBindingObserver {
       );
 
       if (response.statusCode == 200) {
-        log("[FCM_SERVICE] Token securely stored in MongoDB!");
+        log("[FCM_SERVICE] Token securely stored in MongoDB! Response: ${response.body}");
       } else {
-        log("[FCM_SERVICE] Failed to store token: ${response.body}");
+        log("[FCM_SERVICE] Failed to store token: ${response.statusCode} - ${response.body}");
       }
     } catch (e) {
       log("[FCM_SERVICE] Error sending token to backend: $e");

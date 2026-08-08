@@ -1,4 +1,4 @@
-package com.iotcom.samvaad
+package com.samvaad
 
 import android.content.Intent
 import android.util.Log
@@ -12,7 +12,10 @@ class MyFirebaseMessagingService : FirebaseMessagingService() {
         Log.d(TAG, "Message received: ${message.messageId}")
 
         val type = message.data["type"]
-        if (type == "incomingCall" || type == "incoming_call" || type == "call") {
+        val notificationType = message.data["notification_type"]
+        val isCallMessage = type == "incomingCall" || type == "incoming_call" || type == "call" || notificationType == "call" || message.notification != null
+
+        if (isCallMessage) {
             if (MainActivity.isInForeground) {
                 Log.d(TAG, "App is in foreground, skipping native handling")
                 return

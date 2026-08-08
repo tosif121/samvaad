@@ -1,4 +1,4 @@
--keep class com.iotcom.samvaad.** { *; }
+-keep class com.samvaad.** { *; }
 -keep class com.hiennv.flutter_callkit_incoming.** { *; }
 -keep class org.webrtc.** { *; }
 -keep class com.cloudwebrtc.** { *; }
