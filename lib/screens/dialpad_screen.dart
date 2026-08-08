@@ -2353,7 +2353,6 @@ class _DialpadScreenState extends State<DialpadScreen>
                   : _buildDtmfKeypad(),
             ),
           ),
-          const Spacer(),
         ] else ...[
           const Spacer(flex: 2),
           Center(
