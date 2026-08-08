@@ -254,10 +254,9 @@ class FcmService with WidgetsBindingObserver {
       );
 
       if (Platform.isAndroid) {
-        // Request Microphone, Camera & Notification permissions in one prompt batch
+        // Request Microphone & Notification permissions in one prompt batch
         await [
           Permission.microphone,
-          Permission.camera,
           Permission.notification,
         ].request();
 

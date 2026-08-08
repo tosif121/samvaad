@@ -68,6 +68,7 @@ class _DialpadScreenState extends State<DialpadScreen>
 
   String? _lastHandledNumber;
   DateTime? _lastHandledAt;
+  final Map<String, DateTime> _recentlyRejected = {};
 
   CallLogDirection? _lastCallDirection;
 
@@ -153,13 +154,9 @@ class _DialpadScreenState extends State<DialpadScreen>
     }
   }
 
-  Future<bool> _requestPermissions({required bool isVideo}) async {
-    final statuses = await [Permission.microphone, Permission.camera].request();
-    final micStatus = statuses[Permission.microphone]!;
-    final camStatus = statuses[Permission.camera]!;
-
-    if (isVideo && !camStatus.isGranted) return false;
-    return micStatus.isGranted;
+  Future<bool> _requestPermissions({bool isVideo = false}) async {
+    final status = await Permission.microphone.request();
+    return status.isGranted;
   }
 
   @override
@@ -207,14 +204,28 @@ class _DialpadScreenState extends State<DialpadScreen>
           if (_isOnCall) break;
           if (_isShowingIncomingDialog) break;
 
-          final recentlyHandledSameNumber =
-              _lastHandledNumber == number &&
-              _lastHandledAt != null &&
-              DateTime.now().difference(_lastHandledAt!) <
-                  const Duration(seconds: 3);
-          if (recentlyHandledSameNumber) {
-            await _sip.rejectCall();
-            break;
+          final isQueueFallback = event['fromQueue'] == true;
+
+          // Only the synthetic queue-fallback ring (fired by the 5s poll before
+          // the real INVITE lands) is suppressed for a recently declined caller.
+          // A real SIP INVITE is a genuine (re)call attempt and must always ring.
+          if (isQueueFallback) {
+            final recentlyHandledSameNumber =
+                _lastHandledNumber == number &&
+                _lastHandledAt != null &&
+                DateTime.now().difference(_lastHandledAt!) <
+                    const Duration(seconds: 3);
+            final recentlyRejected = _recentlyRejected.entries.any(
+              (e) =>
+                  (e.key == number ||
+                      e.key == number.replaceAll('+', '')) &&
+                  DateTime.now().difference(e.value) <
+                      const Duration(seconds: 15),
+            );
+            if (recentlyHandledSameNumber || recentlyRejected) {
+              await _sip.rejectCall();
+              break;
+            }
           }
 
           RingtoneService().stopRinging();
@@ -342,6 +353,10 @@ class _DialpadScreenState extends State<DialpadScreen>
           if (mounted) setState(() {});
           break;
 
+        case 'queueUpdated':
+          if (mounted) setState(() {});
+          break;
+
         case 'registrationFailed':
           if (mounted) setState(() {});
           break;
@@ -446,6 +461,9 @@ class _DialpadScreenState extends State<DialpadScreen>
       _startCallTimer();
       if (mounted) setState(() {});
     } else {
+      // Declined/dismissed: remember the caller so the queue fallback ring
+      // and SIP retries for the same caller are auto-rejected for 15s.
+      _recentlyRejected[number] = DateTime.now();
       RingtoneService().clearNotification();
     }
   }
@@ -1351,7 +1369,7 @@ class _DialpadScreenState extends State<DialpadScreen>
     for (final call in missed) {
       final caller = (call is Map ? (call['Caller'] ?? 'Unknown') : 'Unknown')
           .toString();
-      groups.putIfAbsent(caller, () => []).add(call);
+      groups.putIfAbsent(_stripCountryCode(caller), () => []).add(call);
     }
     final sorted = groups.entries.toList()
       ..sort(

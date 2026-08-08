@@ -64,6 +64,10 @@ class SipSocketService implements sip.SipUaHelperListener {
   String _lastQueueCallers = '';
   String _lastFollowUpsJson = '';
   String _bridgeID = '';
+  String _incomingChannelId = '';
+
+  bool _agentAvailableInFlight = false;
+  DateTime _agentAvailableLastCalled = DateTime.fromMillisecondsSinceEpoch(0);
 
   List<dynamic> _missedCalls = [];
   List<dynamic> _followUps = [];
@@ -74,6 +78,7 @@ class SipSocketService implements sip.SipUaHelperListener {
   List<dynamic> get currentCallqueue => _currentCallqueue;
   String get agentStatus => _agentStatus;
   String get bridgeID => _bridgeID;
+  String get incomingChannelId => _incomingChannelId;
   List<dynamic> get missedCalls => _missedCalls;
   List<dynamic> get followUps => _followUps;
   List<dynamic> get breakOptions => _breakOptions;
@@ -421,8 +426,7 @@ class SipSocketService implements sip.SipUaHelperListener {
           final remoteNumber = call.remote_identity ?? 'Unknown';
           _log('INCOMING CALL from: $remoteNumber');
           _incomingNumber = remoteNumber;
-          _callState = CallState.ringing;
-          isVideoCall = call.remote_has_video;
+          _callState = CallState.ringing;          isVideoCall = call.remote_has_video;
           try {
             final sdp = call.session.request?.body as String? ?? '';
             if (sdp.contains('m=video')) {
@@ -642,6 +646,7 @@ class SipSocketService implements sip.SipUaHelperListener {
     _notifyNative('callEnded', {'callId': _pendingPushCallId ?? ''});
 
     _incomingNumber = '';
+    _incomingChannelId = '';
     _isMuted = false;
     _isLocalVideoMuted = false;
     _isSpeakerOn = false;
@@ -1155,18 +1160,35 @@ class SipSocketService implements sip.SipUaHelperListener {
 
   Future<void> clearRejectedCallFromAgent(String callerNumber) async {
     try {
-      final cleanNum = callerNumber.replaceAll('+', '').trim();
-      if (cleanNum.isEmpty) return;
-      _log('Requesting clearRejectedCallFromAgent for $cleanNum...');
-      final headers = await _getAuthHeaders();
-      final response = await http
-          .post(
-            Uri.parse('https://devapp.iotcom.io/clearRejectedCallFromAgent'),
-            headers: headers,
-            body: jsonEncode({'caller': cleanNum}),
-          )
-          .timeout(const Duration(seconds: 5));
-      _log('clearRejectedCallFromAgent response: ${response.body}');
+      // Mirror the webphone: try every number variant because the backend
+      // matches the queue `Caller` field exactly (raw, +91, or with +91).
+      final rawNumber = callerNumber
+          .replaceAll(RegExp(r'^\+91'), '')
+          .replaceAll(RegExp(r'^\+'), '')
+          .trim();
+      if (rawNumber.isEmpty) return;
+      final variants = <String>{
+        callerNumber,
+        rawNumber,
+        '+91$rawNumber',
+      }.toList();
+
+      for (final num in variants) {
+        _log('Requesting clearRejectedCallFromAgent for $num...');
+        final headers = await _getAuthHeaders();
+        final response = await http
+            .post(
+              Uri.parse('https://devapp.iotcom.io/clearRejectedCallFromAgent'),
+              headers: headers,
+              body: jsonEncode({'caller': num}),
+            )
+            .timeout(const Duration(seconds: 5));
+        _log('clearRejectedCallFromAgent response: ${response.body}');
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body);
+          if (data is Map && data['success'] == true) break;
+        }
+      }
     } catch (e) {
       _log('Error calling clearRejectedCallFromAgent: $e');
     }
@@ -1435,6 +1457,8 @@ class SipSocketService implements sip.SipUaHelperListener {
         final first = queue.first;
         final caller = first is Map ? (first['Caller'] ?? '').toString() : '';
         if (caller.isNotEmpty) {
+          _incomingChannelId =
+              first is Map ? (first['channelID'] ?? '').toString() : '';
           _log('Queue fallback ring for caller $caller');
           _emit(
             SipEvent.incomingCall,
@@ -1442,6 +1466,70 @@ class SipSocketService implements sip.SipUaHelperListener {
           );
         }
       }
+    }
+
+    checkUserAvailability();
+  }
+
+  /// Mirrors the webphone's `checkUserAvailability` in Dashboard.jsx: when the
+  /// agent is genuinely available (not in a call, not on break, status
+  /// NOT_INUSE) and a queued call is waiting for this agent's campaign, ask the
+  /// backend to dispatch the next queued call via `/user/agentAvailable`.
+  Future<void> checkUserAvailability() async {
+    if (_callState != CallState.idle || _activeCall != null) {
+      return;
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    final selectedBreak = prefs.getString('selectedBreak');
+    final isOnBreak =
+        selectedBreak != null && selectedBreak.isNotEmpty && selectedBreak != 'Break';
+    if (isOnBreak) {
+      return;
+    }
+
+    if (_agentAvailableInFlight) return;
+    final now = DateTime.now();
+    if (now.difference(_agentAvailableLastCalled) <
+        const Duration(seconds: 10)) {
+      return;
+    }
+
+    final queue = _currentCallqueue;
+    if (queue.isEmpty) return;
+
+    final first = queue.first is Map ? queue.first as Map : null;
+    if (first == null) return;
+
+    final queueCampaign = (first['campaign'] ?? '').toString();
+    final userCampaign = UserData.campaign();
+    if (userCampaign.isNotEmpty &&
+        queueCampaign.isNotEmpty &&
+        userCampaign != queueCampaign) {
+      return;
+    }
+
+    if (_agentStatus != 'NOT_INUSE') return;
+
+    _agentAvailableInFlight = true;
+    _agentAvailableLastCalled = now;
+    try {
+      final username = await _resolveApiUsername();
+      if (username.isEmpty) return;
+      _log('Sending /user/agentAvailable for $username...');
+      final headers = await _getAuthHeaders();
+      final response = await http
+          .post(
+            Uri.parse('https://devapp.iotcom.io/user/agentAvailable/$username'),
+            headers: headers,
+            body: jsonEncode({}),
+          )
+          .timeout(const Duration(seconds: 5));
+      _log('agentAvailable response (${response.statusCode}): ${response.body}');
+    } catch (e) {
+      _log('Error calling agentAvailable: $e');
+    } finally {
+      _agentAvailableInFlight = false;
     }
   }
 
@@ -1855,7 +1943,12 @@ class SipSocketService implements sip.SipUaHelperListener {
 
     if (call != null) {
       try {
-        final channelId = call.id;
+        // Prefer the real Asterisk channel ID captured from the queue data;
+        // the SIP session `call.id` is NOT the ARI channel ID the backend
+        // /hangupChannel route expects.
+        final channelId = _incomingChannelId.isNotEmpty
+            ? _incomingChannelId
+            : call.id;
         if (channelId != null && channelId.isNotEmpty) {
           unawaited(hangupChannel(channelId));
         }
@@ -1869,6 +1962,7 @@ class SipSocketService implements sip.SipUaHelperListener {
       unawaited(clearRejectedCallFromAgent(numToClear));
     }
 
+    _incomingChannelId = '';
     _finishCall(emitFailedReason: 'rejected');
   }
 

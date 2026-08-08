@@ -27,6 +27,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
 
   @override
   void initState() {
+    debugPrint('[SCREEN] IncomingCallScreen ACTIVE for ${widget.phoneNumber}');
     super.initState();
     _pulseController = AnimationController(
       vsync: this,
@@ -70,6 +71,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
   }
 
   Future<void> _decline() async {
+    debugPrint('[INCOMING_CALL] Decline button pressed for ${widget.phoneNumber}');
     _dismissed = true;
     _sipSubscription?.cancel();
     RingtoneService().stopRinging();
@@ -77,11 +79,13 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
 
     await _sip.rejectCall();
 
+    debugPrint('[INCOMING_CALL] Call rejected successfully');
     _onDismiss();
     if (mounted) Navigator.of(context).pop(false);
   }
 
   Future<void> _acceptCall() async {
+    debugPrint('[INCOMING_CALL] Answer button pressed for ${widget.phoneNumber}');
     _dismissed = true;
     _sipSubscription?.cancel();
     RingtoneService().stopRinging();
@@ -92,7 +96,9 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
       if (mounted) {
         Navigator.of(context).pop('answer');
       }
+      debugPrint('[INCOMING_CALL] Call answered successfully');
     } catch (e, st) {
+      debugPrint('[INCOMING_CALL] Answer failed: $e');
       debugPrintStack(stackTrace: st);
     }
   }

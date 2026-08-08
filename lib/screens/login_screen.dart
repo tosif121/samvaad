@@ -55,7 +55,7 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _requestPermissions() async {
-    await [Permission.microphone, Permission.camera].request();
+    await Permission.microphone.request();
   }
 
   @override
