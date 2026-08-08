@@ -82,7 +82,6 @@ class _DialpadScreenState extends State<DialpadScreen>
 
   @override
   void initState() {
-    debugPrint('[SCREEN] DialpadScreen ACTIVE');
     super.initState();
     _initRenderers();
     WidgetsBinding.instance.addObserver(this);
@@ -159,9 +158,6 @@ class _DialpadScreenState extends State<DialpadScreen>
     final micStatus = statuses[Permission.microphone]!;
     final camStatus = statuses[Permission.camera]!;
 
-    debugPrint(
-      '[PERMISSION] mic: ${micStatus.isGranted}, cam: ${camStatus.isGranted}',
-    );
     if (isVideo && !camStatus.isGranted) return false;
     return micStatus.isGranted;
   }
@@ -183,19 +179,12 @@ class _DialpadScreenState extends State<DialpadScreen>
     _sipSubscription = _sip.events.listen((event) async {
       if (!mounted) return;
       final type = event['event'] as String;
-      debugPrint('[DIALPAD] Received SIP Event: $type');
 
       switch (type) {
         case 'incomingCall':
           final number = event['number'] as String? ?? 'Unknown';
-          debugPrint(
-            '[DIALPAD] Incoming call event received for $number | shouldAutoAnswer=${_sip.shouldAutoAnswerNextCall} | isOnCall=$_isOnCall',
-          );
 
           if (_sip.shouldAutoAnswerNextCall) {
-            debugPrint(
-              '[AUTO_ANSWER] AUTO-ANSWERING incoming call from Asterisk PSTN for $number...',
-            );
             _sip.shouldAutoAnswerNextCall = false;
             RingtoneService().stopRinging();
             if (_activeCallNumber.isEmpty) {
@@ -212,9 +201,6 @@ class _DialpadScreenState extends State<DialpadScreen>
             _isOnCall = true;
             _startCallTimer();
             setState(() {});
-            debugPrint(
-              '[AUTO_ANSWER] Auto-answer complete. Active call connected.',
-            );
             break;
           }
 
@@ -320,9 +306,6 @@ class _DialpadScreenState extends State<DialpadScreen>
         case 'messageReceived':
           final message = event['message'] as String? ?? '';
           if (message.contains('customer host channel connected')) {
-            debugPrint(
-              '[CONFERENCE] Participant CONNECTED — enabling merge',
-            );
             setState(() {
               _conferenceStatus = true;
               _conferenceConnected = true;
@@ -330,7 +313,6 @@ class _DialpadScreenState extends State<DialpadScreen>
             });
           } else if (message.contains('customer host channel diconnected') ||
               message.contains('customer host channel disconnected')) {
-            debugPrint('[CONFERENCE] Participant DISCONNECTED');
             final wasMerged = _isMerged;
             setState(() {
               _conferenceStatus = false;
@@ -391,20 +373,10 @@ class _DialpadScreenState extends State<DialpadScreen>
   }
 
   Future<void> _showIncomingCall(String number) async {
-    final callId = _sip.activeCallId ?? 'unknown_id';
-    final callState = _sip.callState.name;
-    debugPrint(
-      '[DIALPAD] _showIncomingCall invoked for $number. Call ID: $callId, State: $callState',
-    );
-
     if (_isShowingIncomingDialog) {
-      debugPrint(
-        '[DIALPAD] _showIncomingCall aborted: _isShowingIncomingDialog is true',
-      );
       return;
     }
     if (_isOnCall) {
-      debugPrint('[DIALPAD] _showIncomingCall aborted: _isOnCall is true');
       return;
     }
     _isShowingIncomingDialog = true;
@@ -525,18 +497,11 @@ class _DialpadScreenState extends State<DialpadScreen>
     _phoneController.clear();
     setState(() {});
 
-    debugPrint(
-      '[DIALPAD_CALL] Triggering dialNumber for $number (source: $source)...',
-    );
     final ok = await _sip.dialNumber(number, dialSource: source);
-    debugPrint('[DIALPAD_CALL] dialNumber result for $number: $ok');
     if (ok && _callBridgeId.isEmpty) {
       _callBridgeId = _sip.bridgeID;
     }
     if (!ok) {
-      debugPrint(
-        '[DIALPAD_CALL] REST /dialnumber returned false — falling back to direct SIP INVITE',
-      );
       await _sip.makeCall(number);
     }
   }
@@ -724,6 +689,7 @@ class _DialpadScreenState extends State<DialpadScreen>
   Future<void> _endCall() async {
     if (_conferenceStatus) {
       await _disconnectConference();
+      return;
     }
     await _sip.endCall();
   }
@@ -2291,16 +2257,39 @@ class _DialpadScreenState extends State<DialpadScreen>
           child: Icon(Icons.person, size: keypadOpen ? 44 : 60, color: cs.primary),
         ),
         const SizedBox(height: 16),
-        Text(
-          _activeCallNumber.isEmpty
-              ? 'Unknown'
-              : UserData.maskNumber(_stripCountryCode(_activeCallNumber)),
-          style: TextStyle(
-            fontSize: 24,
-            fontWeight: FontWeight.w700,
-            color: cs.onSurface,
-            letterSpacing: 1,
-          ),
+        Builder(
+          builder: (context) {
+            final merged = _isMerged &&
+                _activeCallNumber.isNotEmpty &&
+                _conferenceNumber.isNotEmpty;
+            String headerText;
+            if (merged) {
+              headerText =
+                  '${UserData.maskNumber(_stripCountryCode(_activeCallNumber))} '
+                  'Conference with '
+                  '${UserData.maskNumber(_stripCountryCode(_conferenceNumber))}';
+            } else {
+              final headerNumber = _headerCallNumber(
+                _activeCallNumber,
+                _conferenceNumber,
+                conferenceActive: _conferenceStatus,
+                merged: false,
+              );
+              headerText = headerNumber.isEmpty
+                  ? 'Unknown'
+                  : UserData.maskNumber(_stripCountryCode(headerNumber));
+            }
+            return Text(
+              headerText,
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 24,
+                fontWeight: FontWeight.w700,
+                color: cs.onSurface,
+                letterSpacing: 1,
+              ),
+            );
+          },
         ),
         const SizedBox(height: 10),
         Container(
@@ -2589,7 +2578,7 @@ class _DialpadScreenState extends State<DialpadScreen>
         mute(),
         speaker(),
       ];
-      row2 = [hold(), keypad(), transfer(), addCall()];
+      row2 = [hold(), keypad(), transfer(disabled: !_isMerged), addCall()];
     } else if (_conferenceStatus) {
       // Match webphone conference controls: Hold is disabled, Transfer is
       // enabled only once merged, Merge is hidden after merging.
@@ -2611,7 +2600,7 @@ class _DialpadScreenState extends State<DialpadScreen>
         speaker(),
       ];
     } else {
-      row1 = [hold(), transfer(), keypad()];
+      row1 = [hold(), transfer(disabled: !_isMerged), keypad()];
       row2 = [
         addCall(disabled: !_sip.isConnected),
         mute(),
@@ -2970,6 +2959,17 @@ String _stripCountryCode(String number) {
   if (n.startsWith('+91')) n = n.substring(3);
   if (n.startsWith('0091')) n = n.substring(4);
   return n;
+}
+
+/// Number shown in the call header. Matches the webphone: once a conference
+/// is dialled/in progress the conference number takes over the header, and
+/// when merged the label becomes "main Conference with conference".
+String _headerCallNumber(String main, String conference, {required bool conferenceActive, required bool merged}) {
+  if (merged && main.isNotEmpty && conference.isNotEmpty) {
+    return '$main Conference with $conference';
+  }
+  if (conferenceActive && conference.isNotEmpty) return conference;
+  return main;
 }
 
 const _dispositionOptions = [

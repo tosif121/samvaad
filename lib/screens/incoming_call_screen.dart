@@ -27,7 +27,6 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
 
   @override
   void initState() {
-    debugPrint('[SCREEN] IncomingCallScreen ACTIVE');
     super.initState();
     _pulseController = AnimationController(
       vsync: this,
@@ -89,13 +88,11 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
     RingtoneService().clearNotification();
 
     try {
-      debugPrint("Accept pressed");
       _onDismiss();
       if (mounted) {
         Navigator.of(context).pop('answer');
       }
     } catch (e, st) {
-      debugPrint("Accept failed: $e");
       debugPrintStack(stackTrace: st);
     }
   }

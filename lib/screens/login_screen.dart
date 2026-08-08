@@ -90,9 +90,7 @@ class _LoginScreenState extends State<LoginScreen> {
     });
 
     try {
-      debugPrint('[LOGIN] Hitting REST login API for $rawUsername...');
       final url = Uri.parse('https://devapp.iotcom.io/userlogin/$rawUsername');
-      debugPrint('[LOGIN] URL: $url');
       final response = await http
           .post(
             url,
@@ -101,26 +99,17 @@ class _LoginScreenState extends State<LoginScreen> {
           )
           .timeout(const Duration(seconds: 10));
 
-      debugPrint('[LOGIN] Login API response status: ${response.statusCode}');
-      debugPrint('[LOGIN] Login API raw body: ${response.body}');
       final data = jsonDecode(response.body);
-      debugPrint('[LOGIN] Parsed login data: $data');
-      debugPrint(
-        '[LOGIN] success=${data['success']} message=${data['message']} token=${data['token']}',
-      );
 
       if (response.statusCode != 200 || data['success'] == false) {
         final msg =
             data['message'] ?? 'Login failed. Please check credentials.';
-        debugPrint('[LOGIN] Login rejected: $msg');
         setState(() {
           _connecting = false;
           _error = msg;
         });
         return;
       }
-
-      debugPrint('[LOGIN] Login accepted — saving credentials');
 
       final userData = data['userData'];
       if (userData is Map) {
@@ -129,9 +118,6 @@ class _LoginScreenState extends State<LoginScreen> {
           final expiry = DateTime.tryParse(expiryRaw.toString());
           if (expiry != null) {
             final daysLeft = expiry.difference(DateTime.now()).inDays;
-            debugPrint(
-              '[LOGIN] Subscription ExpiryDate=$expiryRaw daysLeft=$daysLeft',
-            );
             if (daysLeft < 0) {
               final daysExpired = -daysLeft;
               if (daysExpired > 5) {
@@ -142,9 +128,6 @@ class _LoginScreenState extends State<LoginScreen> {
                 });
                 return;
               }
-              debugPrint(
-                '[LOGIN] Subscription expired $daysExpired day(s) ago — within grace period',
-              );
             }
           }
         }
@@ -163,9 +146,6 @@ class _LoginScreenState extends State<LoginScreen> {
       await _sip.saveCredentials(creds);
       unawaited(_sip.connect(creds).then((_) {}));
     } catch (e) {
-      debugPrint(
-        '[LOGIN] Login API error or timeout: $e — proceeding with SIP registration fallback',
-      );
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('savedUsername', rawUsername);
       await prefs.setString('savedPassword', password);
