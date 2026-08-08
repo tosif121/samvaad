@@ -57,11 +57,7 @@ class AvatarBubble extends StatelessWidget {
                 letterSpacing: 0.5,
               ),
             )
-          : Icon(
-              icon ?? Icons.person_rounded,
-              size: size * 0.46,
-              color: fg,
-            ),
+          : Icon(icon ?? Icons.person_rounded, size: size * 0.46, color: fg),
     );
   }
 }

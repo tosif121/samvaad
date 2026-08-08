@@ -50,7 +50,9 @@ class DispositionOption extends StatelessWidget {
                     ? Icons.check_circle_rounded
                     : Icons.radio_button_unchecked_rounded,
                 size: 17,
-                color: selected ? cs.primary : cs.onSurface.withValues(alpha: 0.3),
+                color: selected
+                    ? cs.primary
+                    : cs.onSurface.withValues(alpha: 0.3),
               ),
               const SizedBox(width: 8),
               Expanded(

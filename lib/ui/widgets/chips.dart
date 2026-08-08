@@ -27,7 +27,8 @@ class StatusChip extends StatelessWidget {
       SipStatus.connecting => (cs.tertiary, cs.tertiary),
       SipStatus.failed => (cs.error, cs.error),
     };
-    final text = label ??
+    final text =
+        label ??
         switch (status) {
           SipStatus.connected => 'Connected',
           SipStatus.connecting => 'Connecting',
@@ -54,10 +55,7 @@ class StatusChip extends StatelessWidget {
               color: dot,
               shape: BoxShape.circle,
               boxShadow: [
-                BoxShadow(
-                  color: dot.withValues(alpha: 0.6),
-                  blurRadius: 6,
-                ),
+                BoxShadow(color: dot.withValues(alpha: 0.6), blurRadius: 6),
               ],
             ),
           ),
@@ -133,11 +131,7 @@ class _BreakTimerChipState extends State<BreakTimerChip> {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(
-                Icons.free_breakfast_rounded,
-                size: 15,
-                color: cs.tertiary,
-              ),
+              Icon(Icons.free_breakfast_rounded, size: 15, color: cs.tertiary),
               const SizedBox(width: 6),
               ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 96),
@@ -152,7 +146,11 @@ class _BreakTimerChipState extends State<BreakTimerChip> {
                 ),
               ),
               const SizedBox(width: 6),
-              Container(width: 1, height: 12, color: cs.tertiary.withValues(alpha: 0.3)),
+              Container(
+                width: 1,
+                height: 12,
+                color: cs.tertiary.withValues(alpha: 0.3),
+              ),
               const SizedBox(width: 6),
               Text(
                 _elapsed(),
@@ -189,7 +187,10 @@ class InfoChip extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     final c = color ?? cs.primary;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.sm, vertical: 5),
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.sm,
+        vertical: 5,
+      ),
       decoration: BoxDecoration(
         color: c.withValues(alpha: 0.09),
         borderRadius: BorderRadius.circular(AppRadii.pill),

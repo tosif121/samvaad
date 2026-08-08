@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../services/user_data.dart';
 import '../tokens.dart';
 import 'avatar.dart';
 import 'common.dart';
@@ -38,13 +39,15 @@ class MissedCallGroupCard extends StatelessWidget {
     final h = t.hour.toString().padLeft(2, '0');
     final m = t.minute.toString().padLeft(2, '0');
     final now = DateTime.now();
-    final sameDay = t.year == now.year && t.month == now.month && t.day == now.day;
+    final sameDay =
+        t.year == now.year && t.month == now.month && t.day == now.day;
     return sameDay ? '$h:$m' : '${t.day}/${t.month} $h:$m';
   }
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final displayCaller = UserData.maskNumber(caller);
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
       padding: const EdgeInsets.symmetric(
@@ -59,7 +62,7 @@ class MissedCallGroupCard extends StatelessWidget {
       child: Row(
         children: [
           AvatarBubble(
-            name: caller,
+            name: displayCaller,
             size: AppSizes.avatarMd,
             iconColor: cs.error,
           ),
@@ -72,7 +75,7 @@ class MissedCallGroupCard extends StatelessWidget {
                   children: [
                     Flexible(
                       child: Text(
-                        caller,
+                        displayCaller,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           fontSize: AppType.body + 1,

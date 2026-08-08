@@ -7,7 +7,11 @@ class IncomingCallScreen extends StatefulWidget {
   final String phoneNumber;
   final VoidCallback? onDismiss;
 
-  const IncomingCallScreen({super.key, required this.phoneNumber, this.onDismiss});
+  const IncomingCallScreen({
+    super.key,
+    required this.phoneNumber,
+    this.onDismiss,
+  });
 
   @override
   State<IncomingCallScreen> createState() => _IncomingCallScreenState();
@@ -146,10 +150,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
             AnimatedBuilder(
               animation: _pulseAnim,
               builder: (context, child) {
-                return Transform.scale(
-                  scale: _pulseAnim.value,
-                  child: child,
-                );
+                return Transform.scale(scale: _pulseAnim.value, child: child);
               },
               child: Container(
                 width: 120,
@@ -162,11 +163,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
                     width: 4,
                   ),
                 ),
-                child: Icon(
-                  Icons.person,
-                  size: 56,
-                  color: cs.primary,
-                ),
+                child: Icon(Icons.person, size: 56, color: cs.primary),
               ),
             ),
             const SizedBox(height: 32),
@@ -182,7 +179,10 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
             const SizedBox(height: 10),
             Text(
               'is calling you',
-              style: TextStyle(fontSize: 15, color: cs.onSurface.withValues(alpha: 0.5)),
+              style: TextStyle(
+                fontSize: 15,
+                color: cs.onSurface.withValues(alpha: 0.5),
+              ),
             ),
             const Spacer(),
             Padding(

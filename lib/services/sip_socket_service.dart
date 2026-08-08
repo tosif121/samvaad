@@ -8,9 +8,9 @@ import 'package:sip_ua/sip_ua.dart' as sip;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/sip_credentials.dart';
 import '../models/call_log_entry.dart';
-import 'remote_audio_stub.dart'
-    if (dart.library.html) 'remote_audio_web.dart';
+import 'remote_audio_stub.dart' if (dart.library.html) 'remote_audio_web.dart';
 import 'call_lifecycle_service.dart';
+import 'user_data.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 enum CallState { idle, dialing, ringing, onCall }
@@ -30,6 +30,7 @@ enum SipEvent {
   missedCallsUpdated,
   followUpsUpdated,
   recentCallsUpdated,
+  messageReceived,
 }
 
 class SipSocketService implements sip.SipUaHelperListener {
@@ -42,8 +43,7 @@ class SipSocketService implements sip.SipUaHelperListener {
   // Native <-> Dart bridge used by ConnectionService (Android) / CallKit
   // (iOS) so a push-triggered native call UI can be shown before SIP
   // registration completes, then bound to the real SIP call once it lands.
-  static const MethodChannel _platform =
-      MethodChannel('sip_native_bridge');
+  static const MethodChannel _platform = MethodChannel('sip_native_bridge');
 
   CallState _callState = CallState.idle;
   sip.Call? _activeCall;
@@ -94,7 +94,7 @@ class SipSocketService implements sip.SipUaHelperListener {
   // to the SIP call once it confirms, and to route native answer/reject/
   // end actions back into the SIP session.
   String? _pendingPushCallId;
-  
+
   SipCredentials? _credentials;
 
   final _eventController = StreamController<Map<String, dynamic>>.broadcast();
@@ -190,13 +190,17 @@ class SipSocketService implements sip.SipUaHelperListener {
     // a second call would call _helper.stop() on an already-registered
     // UA and tear the transport down seconds after it registered.
     if (_isRegistered) {
-      _log('connect() ignored — already registered',
-          data: StackTrace.current.toString());
+      _log(
+        'connect() ignored — already registered',
+        data: StackTrace.current.toString(),
+      );
       return;
     }
     if (_connecting) {
-      _log('connect() ignored — already connecting',
-          data: StackTrace.current.toString());
+      _log(
+        'connect() ignored — already connecting',
+        data: StackTrace.current.toString(),
+      );
       return;
     }
 
@@ -284,9 +288,7 @@ class SipSocketService implements sip.SipUaHelperListener {
     if (json != null) {
       try {
         _credentials = SipCredentials.fromJson(
-          Map<String, dynamic>.from(
-            const JsonDecoder().convert(json) as Map,
-          ),
+          Map<String, dynamic>.from(const JsonDecoder().convert(json) as Map),
         );
       } catch (_) {}
     }
@@ -362,8 +364,10 @@ class SipSocketService implements sip.SipUaHelperListener {
         _log('SIP REGISTRATION FAILED');
         _isRegistered = false;
         _stopHeartbeatTimer();
-        _emit(SipEvent.registrationFailed,
-            data: {'cause': state.cause?.toString()});
+        _emit(
+          SipEvent.registrationFailed,
+          data: {'cause': state.cause?.toString()},
+        );
         break;
     }
   }
@@ -396,9 +400,12 @@ class SipSocketService implements sip.SipUaHelperListener {
 
   @override
   void callStateChanged(sip.Call call, sip.CallState state) {
-    _log('callStateChanged: ${state.state} for call ID: ${call.id}'
-        ' | direction=${call.direction} | sessionState=${call.session.state}');
-    if (state.state == sip.CallStateEnum.CALL_INITIATION || _activeCall == null) {
+    _log(
+      'callStateChanged: ${state.state} for call ID: ${call.id}'
+      ' | direction=${call.direction} | sessionState=${call.session.state}',
+    );
+    if (state.state == sip.CallStateEnum.CALL_INITIATION ||
+        _activeCall == null) {
       _activeCall = call;
     }
 
@@ -441,10 +448,17 @@ class SipSocketService implements sip.SipUaHelperListener {
         if (call.peerConnection != null) {
           Future(() async {
             try {
-              final remoteSdp = await call.peerConnection!.getRemoteDescription();
+              final remoteSdp = await call.peerConnection!
+                  .getRemoteDescription();
               if (remoteSdp?.sdp != null) {
-                final mediaLines = remoteSdp!.sdp!.split('\r\n').where((l) =>
-                    l.startsWith('m=') || l.startsWith('a=rtpmap:') || l.startsWith('a=fmtp:'));
+                final mediaLines = remoteSdp!.sdp!
+                    .split('\r\n')
+                    .where(
+                      (l) =>
+                          l.startsWith('m=') ||
+                          l.startsWith('a=rtpmap:') ||
+                          l.startsWith('a=fmtp:'),
+                    );
                 _log('PROGRESS REMOTE CODECS:\n${mediaLines.join("\n")}');
               }
             } catch (_) {}
@@ -458,23 +472,36 @@ class SipSocketService implements sip.SipUaHelperListener {
         _emit(SipEvent.callAnswered);
         CallLifecycleService().onCallStarted();
         _notifyNative('callActive', {'callId': _pendingPushCallId ?? ''});
-        unawaited(Helper.setSpeakerphoneOn(isVideoCall).then((_) {
-          _isSpeakerOn = isVideoCall;
-        }).catchError((_) {}));
+        unawaited(
+          Helper.setSpeakerphoneOn(isVideoCall)
+              .then((_) {
+                _isSpeakerOn = isVideoCall;
+              })
+              .catchError((_) {}),
+        );
 
         if (call.peerConnection != null) {
           Future(() async {
             try {
-              final remoteSdp = await call.peerConnection!.getRemoteDescription();
+              final remoteSdp = await call.peerConnection!
+                  .getRemoteDescription();
               if (remoteSdp?.sdp != null) {
-                final mediaLines = remoteSdp!.sdp!.split('\r\n').where((l) =>
-                    l.startsWith('m=') || l.startsWith('a=rtpmap:') || l.startsWith('a=fmtp:'));
+                final mediaLines = remoteSdp!.sdp!
+                    .split('\r\n')
+                    .where(
+                      (l) =>
+                          l.startsWith('m=') ||
+                          l.startsWith('a=rtpmap:') ||
+                          l.startsWith('a=fmtp:'),
+                    );
                 _log('CONFIRMED REMOTE CODECS:\n${mediaLines.join("\n")}');
               }
             } catch (_) {}
           });
         }
-        if (isVideoCall && _activeCall != null && _activeCall!.direction == sip.Direction.outgoing) {
+        if (isVideoCall &&
+            _activeCall != null &&
+            _activeCall!.direction == sip.Direction.outgoing) {
           _log('Adding video via re-INVITE');
           try {
             final videoOptions = _helper.buildCallOptions(false);
@@ -491,10 +518,13 @@ class SipSocketService implements sip.SipUaHelperListener {
               },
             };
             if (videoOptions['rtcOfferConstraints'] is Map) {
-              (videoOptions['rtcOfferConstraints'] as Map)['offerModifiers'] = [_makeH264Modifier()];
+              (videoOptions['rtcOfferConstraints'] as Map)['offerModifiers'] = [
+                _makeH264Modifier(),
+              ];
             }
             if (videoOptions['rtcAnswerConstraints'] is Map) {
-              (videoOptions['rtcAnswerConstraints'] as Map)['offerModifiers'] = [_makeH264Modifier()];
+              (videoOptions['rtcAnswerConstraints'] as Map)['offerModifiers'] =
+                  [_makeH264Modifier()];
             }
             _activeCall!.renegotiate(options: videoOptions, useUpdate: false);
             _log('re-INVITE sent for video');
@@ -516,10 +546,13 @@ class SipSocketService implements sip.SipUaHelperListener {
         break;
 
       case sip.CallStateEnum.FAILED:
-        _log('Call FAILED', data: {
-          'cause': state.cause?.toString(),
-          'originator': state.originator?.toString(),
-        });
+        _log(
+          'Call FAILED',
+          data: {
+            'cause': state.cause?.toString(),
+            'originator': state.originator?.toString(),
+          },
+        );
         // Single source of truth: a FAILED call is reported as callFailed,
         // never as callEnded too.
         _finishCall(emitFailedReason: state.cause?.toString() ?? 'unknown');
@@ -539,6 +572,35 @@ class SipSocketService implements sip.SipUaHelperListener {
   void onNewMessage(sip.SIPMessageRequest request) {
     final body = request.request.body ?? '';
     _log('Received SIP MESSAGE: $body');
+    _handleAriMessage(body);
+  }
+
+  /// Parses ARI MESSAGE events from Asterisk, matching the webphone's
+  /// newMessage handler. Conference/merge events are surfaced to the UI
+  /// via [SipEvent.messageReceived].
+  void _handleAriMessage(String body) {
+    if (body.contains('customer channel answered') ||
+        body.contains('agent channel answered')) {
+      _log('Customer/Agent channel ANSWERED');
+      if (_callState != CallState.onCall) {
+        _callState = CallState.onCall;
+        _emit(SipEvent.callAnswered, data: {'message': body});
+      }
+    } else if (body.contains('customer channel disconnected')) {
+      _log('Customer channel DISCONNECTED');
+      _finishCall();
+    } else if (body.contains('force_login_request') ||
+        body.contains('Force Login Request')) {
+      _log('Force login request received');
+      _emit(SipEvent.connectionLost, data: {'reason': 'force_login'});
+    } else if (body.contains('customer host channel connected')) {
+      _log('Conference participant CONNECTED');
+      _emit(SipEvent.messageReceived, data: {'message': body});
+    } else if (body.contains('customer host channel diconnected') ||
+        body.contains('customer host channel disconnected')) {
+      _log('Conference participant DISCONNECTED');
+      _emit(SipEvent.messageReceived, data: {'message': body});
+    }
   }
 
   @override
@@ -623,8 +685,12 @@ class SipSocketService implements sip.SipUaHelperListener {
       _log('answerCall called with no active call — ignoring');
       return;
     }
-    if (_isAnswering || _callState == CallState.onCall || call.state == sip.CallStateEnum.CONFIRMED) {
-      _log('Already answering or on call — skipping duplicate answer. state: ${call.state}');
+    if (_isAnswering ||
+        _callState == CallState.onCall ||
+        call.state == sip.CallStateEnum.CONFIRMED) {
+      _log(
+        'Already answering or on call — skipping duplicate answer. state: ${call.state}',
+      );
       return;
     }
 
@@ -642,27 +708,34 @@ class SipSocketService implements sip.SipUaHelperListener {
         String remoteSdp = call.session.request!.body as String;
         if (remoteSdp.contains('m=video') && remoteSdp.contains('H264')) {
           String newSdp = remoteSdp.replaceAllMapped(
-              RegExp(r'profile-level-id=[0-9a-fA-F]+'),
-              (_) => 'profile-level-id=42e01f');
+            RegExp(r'profile-level-id=[0-9a-fA-F]+'),
+            (_) => 'profile-level-id=42e01f',
+          );
           if (newSdp != remoteSdp) {
             call.session.request!.body = newSdp;
-            _log('Munged incoming REMOTE SDP: changed profile-level-id to 42e01f so WebRTC accepts it');
+            _log(
+              'Munged incoming REMOTE SDP: changed profile-level-id to 42e01f so WebRTC accepts it',
+            );
           }
         }
       }
     } catch (e) {
       _log('Failed to munge incoming SDP: $e');
     }
-    
+
     try {
       final options = _helper.buildCallOptions(!isVideoCall);
       if (options['rtcOfferConstraints'] is Map) {
-        (options['rtcOfferConstraints'] as Map)['offerModifiers'] = [_makeH264Modifier()];
+        (options['rtcOfferConstraints'] as Map)['offerModifiers'] = [
+          _makeH264Modifier(),
+        ];
       }
       _log('Before call.answer() - options: $options');
       call.answer(options);
-      _log('After call.answer() - success'
-          ' | sessionState=${call.session.state} | call.state=${call.state}');
+      _log(
+        'After call.answer() - success'
+        ' | sessionState=${call.session.state} | call.state=${call.state}',
+      );
       _isAnswering = false;
     } catch (e) {
       _log('answerCall failed: $e');
@@ -695,7 +768,6 @@ class SipSocketService implements sip.SipUaHelperListener {
     }
   }
 
-  
   Future<void> makeVideoCall(String number) async {
     if (!_isRegistered) {
       _log('Cannot call — not registered');
@@ -707,15 +779,19 @@ class SipSocketService implements sip.SipUaHelperListener {
     _incomingNumber = number;
     isVideoCall = true;
     try {
-      await _helper.call(number, voiceOnly: false, customOptions: <String, dynamic>{
-        'rtcOfferConstraints': <String, dynamic>{
-          'mandatory': <String, dynamic>{
-            'OfferToReceiveAudio': true,
-            'OfferToReceiveVideo': true,
+      await _helper.call(
+        number,
+        voiceOnly: false,
+        customOptions: <String, dynamic>{
+          'rtcOfferConstraints': <String, dynamic>{
+            'mandatory': <String, dynamic>{
+              'OfferToReceiveAudio': true,
+              'OfferToReceiveVideo': true,
+            },
+            'offerModifiers': [_makeH264Modifier()],
           },
-          'offerModifiers': [_makeH264Modifier()],
         },
-      });
+      );
     } catch (e) {
       _log('makeVideoCall failed: $e');
       _finishCall(emitFailedReason: e.toString());
@@ -739,7 +815,7 @@ class SipSocketService implements sip.SipUaHelperListener {
   Future<void> switchCamera() async {
     final stream = _localStream as MediaStream?;
     if (stream == null) return;
-    
+
     final videoTracks = stream.getVideoTracks();
     if (videoTracks.isNotEmpty) {
       final track = videoTracks.first;
@@ -783,28 +859,35 @@ class SipSocketService implements sip.SipUaHelperListener {
     final rtxForH264 = ptCodec.entries
         .where((e) => e.value.toLowerCase().startsWith('rtx'))
         .where((e) {
-      final aptM = RegExp(r'^a=fmtp:(\d+) apt=(\d+)');
-      for (int i = videoStart; i < lines.length; i++) {
-        final l = lines[i];
-        if (l.startsWith('m=') && i > videoStart) break;
-        final m = aptM.firstMatch(l);
-        if (m != null && m.group(1) == e.key && h264Pts.contains(m.group(2))) {
-          return true;
-        }
-      }
-      return false;
-    }).map((e) => e.key).toSet();
+          final aptM = RegExp(r'^a=fmtp:(\d+) apt=(\d+)');
+          for (int i = videoStart; i < lines.length; i++) {
+            final l = lines[i];
+            if (l.startsWith('m=') && i > videoStart) break;
+            final m = aptM.firstMatch(l);
+            if (m != null &&
+                m.group(1) == e.key &&
+                h264Pts.contains(m.group(2))) {
+              return true;
+            }
+          }
+          return false;
+        })
+        .map((e) => e.key)
+        .toSet();
 
     final keepPts = {...h264Pts, ...rtxForH264};
     final newPts = allPts.where((pt) => keepPts.contains(pt)).toList();
 
     // Fallback if no H264 codecs found rather than stripping video completely
     if (newPts.isEmpty) {
-      _log('WARNING: No H264 codecs found in SDP. Falling back to original SDP.');
+      _log(
+        'WARNING: No H264 codecs found in SDP. Falling back to original SDP.',
+      );
       return sdp;
     }
 
-    lines[videoStart] = '${parts[0]} ${parts[1]} ${parts[2]} ${newPts.join(" ")}';
+    lines[videoStart] =
+        '${parts[0]} ${parts[1]} ${parts[2]} ${newPts.join(" ")}';
 
     // Find the end of the video section first to bound the backwards loop safely
     int videoEnd = lines.length;
@@ -818,7 +901,9 @@ class SipSocketService implements sip.SipUaHelperListener {
     // Process only within the bounds of the m=video section
     for (int i = videoEnd - 1; i > videoStart; i--) {
       final l = lines[i];
-      if (l.startsWith('a=rtpmap:') || l.startsWith('a=fmtp:') || l.startsWith('a=rtcp-fb:')) {
+      if (l.startsWith('a=rtpmap:') ||
+          l.startsWith('a=fmtp:') ||
+          l.startsWith('a=rtcp-fb:')) {
         final m = RegExp(r'^a=[a-zA-Z0-9-]+:(\d+)').firstMatch(l);
         if (m != null) {
           final pt = m.group(1)!;
@@ -832,7 +917,10 @@ class SipSocketService implements sip.SipUaHelperListener {
             if (!updated.contains('packetization-mode')) {
               updated = '$updated;packetization-mode=1';
             } else {
-              updated = updated.replaceAll(RegExp(r'packetization-mode=\d'), 'packetization-mode=1');
+              updated = updated.replaceAll(
+                RegExp(r'packetization-mode=\d'),
+                'packetization-mode=1',
+              );
             }
             lines[i] = updated;
           }
@@ -880,7 +968,8 @@ class SipSocketService implements sip.SipUaHelperListener {
     return lines.join('\r\n');
   }
 
-  Future<RTCSessionDescription> Function(RTCSessionDescription) _makeH264Modifier() {
+  Future<RTCSessionDescription> Function(RTCSessionDescription)
+  _makeH264Modifier() {
     return (desc) async {
       var sdp = desc.sdp;
       var type = desc.type ?? 'offer'; // Ensure type is never null!
@@ -894,18 +983,22 @@ class SipSocketService implements sip.SipUaHelperListener {
         _log('Injected m=video into answer (Asterisk stripped it)');
         sdp = _injectVideoToSdp(sdp);
       }
-      
+
       final munged = _mungeSdpForH264(sdp);
-      
+
       // Strict Verification Check!
       if (munged.isEmpty || !munged.contains('m=video')) {
-        _log('ERROR: Munged SDP is empty or lost m=video! Falling back to original SDP.');
+        _log(
+          'ERROR: Munged SDP is empty or lost m=video! Falling back to original SDP.',
+        );
         return RTCSessionDescription(sdp, type);
       }
 
-      _log('H264 munge (before setLocalDescription): orig(${sdp.length})→munged(${munged.length}) '
-           'has_m=video=${munged.contains("m=video")} has_H264=${munged.contains("H264")} type=$type');
-      
+      _log(
+        'H264 munge (before setLocalDescription): orig(${sdp.length})→munged(${munged.length}) '
+        'has_m=video=${munged.contains("m=video")} has_H264=${munged.contains("H264")} type=$type',
+      );
+
       // Properly reconstruct the RTCSessionDescription using the validated 'type'
       return RTCSessionDescription(munged, type);
     };
@@ -969,7 +1062,9 @@ class SipSocketService implements sip.SipUaHelperListener {
     }
   }
 
-  Future<Map<String, String>> _getAuthHeaders({bool includeXUserId = false}) async {
+  Future<Map<String, String>> _getAuthHeaders({
+    bool includeXUserId = false,
+  }) async {
     String token = '';
     String savedUser = '';
     try {
@@ -980,9 +1075,14 @@ class SipSocketService implements sip.SipUaHelperListener {
         try {
           final decoded = jsonDecode(tokenStr);
           if (decoded is Map) {
-            token = (decoded['token'] ?? decoded['userData']?['token'] ?? '').toString();
+            token = (decoded['token'] ?? decoded['userData']?['token'] ?? '')
+                .toString();
             if (savedUser.isEmpty) {
-              savedUser = (decoded['userData']?['username'] ?? decoded['username'] ?? '').toString();
+              savedUser =
+                  (decoded['userData']?['username'] ??
+                          decoded['username'] ??
+                          '')
+                      .toString();
             }
           } else if (tokenStr.startsWith('eyJ')) {
             token = tokenStr;
@@ -1059,11 +1159,13 @@ class SipSocketService implements sip.SipUaHelperListener {
       if (cleanNum.isEmpty) return;
       _log('Requesting clearRejectedCallFromAgent for $cleanNum...');
       final headers = await _getAuthHeaders();
-      final response = await http.post(
-        Uri.parse('https://devapp.iotcom.io/clearRejectedCallFromAgent'),
-        headers: headers,
-        body: jsonEncode({'caller': cleanNum}),
-      ).timeout(const Duration(seconds: 5));
+      final response = await http
+          .post(
+            Uri.parse('https://devapp.iotcom.io/clearRejectedCallFromAgent'),
+            headers: headers,
+            body: jsonEncode({'caller': cleanNum}),
+          )
+          .timeout(const Duration(seconds: 5));
       _log('clearRejectedCallFromAgent response: ${response.body}');
     } catch (e) {
       _log('Error calling clearRejectedCallFromAgent: $e');
@@ -1078,11 +1180,13 @@ class SipSocketService implements sip.SipUaHelperListener {
       if (username.isEmpty) return _missedCalls;
       _log('Fetching missed calls for $username...');
       final headers = await _getAuthHeaders();
-      final response = await http.post(
-        Uri.parse('https://devapp.iotcom.io/userMissedCalls/$username'),
-        headers: headers,
-        body: jsonEncode({}),
-      ).timeout(const Duration(seconds: 8));
+      final response = await http
+          .post(
+            Uri.parse('https://devapp.iotcom.io/userMissedCalls/$username'),
+            headers: headers,
+            body: jsonEncode({}),
+          )
+          .timeout(const Duration(seconds: 8));
       final data = jsonDecode(response.body);
       final result = data is Map ? data['result'] : null;
       if (result is List) {
@@ -1105,15 +1209,17 @@ class SipSocketService implements sip.SipUaHelperListener {
       final headers = await _getAuthHeaders();
       final now = DateTime.now();
       final startDate = now.subtract(const Duration(days: 30));
-      final response = await http.post(
-        Uri.parse('https://devapp.iotcom.io/reports/calls/byAgent'),
-        headers: headers,
-        body: jsonEncode({
-          'startDate': _formatDate(startDate),
-          'endDate': _formatDate(now),
-          'agentName': username,
-        }),
-      ).timeout(const Duration(seconds: 10));
+      final response = await http
+          .post(
+            Uri.parse('https://devapp.iotcom.io/reports/calls/byAgent'),
+            headers: headers,
+            body: jsonEncode({
+              'startDate': _formatDate(startDate),
+              'endDate': _formatDate(now),
+              'agentName': username,
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
       final data = jsonDecode(response.body);
       final result = data is Map ? data['result'] : null;
       if (result is List) {
@@ -1182,7 +1288,9 @@ class SipSocketService implements sip.SipUaHelperListener {
 
     final bridgeId = field('bridgeID');
     return CallLogEntry(
-      id: bridgeId.isNotEmpty ? bridgeId : '${start.millisecondsSinceEpoch}_$number',
+      id: bridgeId.isNotEmpty
+          ? bridgeId
+          : '${start.millisecondsSinceEpoch}_$number',
       number: number,
       direction: direction,
       source: field('campaign').isEmpty ? 'Server' : field('campaign'),
@@ -1200,12 +1308,16 @@ class SipSocketService implements sip.SipUaHelperListener {
       _log('Calling back missed caller $cleanNum...');
       shouldAutoAnswerNextCall = true;
       final headers = await _getAuthHeaders();
-      final response = await http.post(
-        Uri.parse('https://devapp.iotcom.io/dialmissedcall'),
-        headers: headers,
-        body: jsonEncode({'receiver': cleanNum}),
-      ).timeout(const Duration(seconds: 10));
-      _log('/dialmissedcall response (${response.statusCode}): ${response.body}');
+      final response = await http
+          .post(
+            Uri.parse('https://devapp.iotcom.io/dialmissedcall'),
+            headers: headers,
+            body: jsonEncode({'receiver': cleanNum}),
+          )
+          .timeout(const Duration(seconds: 10));
+      _log(
+        '/dialmissedcall response (${response.statusCode}): ${response.body}',
+      );
       final data = jsonDecode(response.body);
       if (data is Map && data['success'] == true) {
         final callId = data['CallID'];
@@ -1228,11 +1340,13 @@ class SipSocketService implements sip.SipUaHelperListener {
     try {
       _log('Updating callback $callbackId → $status...');
       final headers = await _getAuthHeaders();
-      await http.post(
-        Uri.parse('https://devapp.iotcom.io/callback/update-status'),
-        headers: headers,
-        body: jsonEncode({'callbackId': callbackId, 'status': status}),
-      ).timeout(const Duration(seconds: 5));
+      await http
+          .post(
+            Uri.parse('https://devapp.iotcom.io/callback/update-status'),
+            headers: headers,
+            body: jsonEncode({'callbackId': callbackId, 'status': status}),
+          )
+          .timeout(const Duration(seconds: 5));
     } catch (e) {
       _log('Error updating callback status: $e');
     }
@@ -1243,11 +1357,13 @@ class SipSocketService implements sip.SipUaHelperListener {
       if (channelId.isEmpty) return;
       _log('Requesting hangupChannel for channelId: $channelId...');
       final headers = await _getAuthHeaders();
-      final response = await http.post(
-        Uri.parse('https://devapp.iotcom.io/hangupChannel'),
-        headers: headers,
-        body: jsonEncode({'channelId': channelId}),
-      ).timeout(const Duration(seconds: 5));
+      final response = await http
+          .post(
+            Uri.parse('https://devapp.iotcom.io/hangupChannel'),
+            headers: headers,
+            body: jsonEncode({'channelId': channelId}),
+          )
+          .timeout(const Duration(seconds: 5));
       _log('hangupChannel response: ${response.body}');
     } catch (e) {
       _log('Error calling hangupChannel: $e');
@@ -1260,11 +1376,13 @@ class SipSocketService implements sip.SipUaHelperListener {
       if (username.isEmpty) return null;
       _log('Sending /userconnection check for $username...');
       final headers = await _getAuthHeaders();
-      final response = await http.post(
-        Uri.parse('https://devapp.iotcom.io/userconnection'),
-        headers: headers,
-        body: jsonEncode({'user': username}),
-      ).timeout(const Duration(seconds: 5));
+      final response = await http
+          .post(
+            Uri.parse('https://devapp.iotcom.io/userconnection'),
+            headers: headers,
+            body: jsonEncode({'user': username}),
+          )
+          .timeout(const Duration(seconds: 5));
       if (response.statusCode == 200) {
         return jsonDecode(response.body) as Map<String, dynamic>?;
       }
@@ -1318,10 +1436,10 @@ class SipSocketService implements sip.SipUaHelperListener {
         final caller = first is Map ? (first['Caller'] ?? '').toString() : '';
         if (caller.isNotEmpty) {
           _log('Queue fallback ring for caller $caller');
-          _emit(SipEvent.incomingCall, data: {
-            'number': caller,
-            'fromQueue': true,
-          });
+          _emit(
+            SipEvent.incomingCall,
+            data: {'number': caller, 'fromQueue': true},
+          );
         }
       }
     }
@@ -1336,16 +1454,18 @@ class SipSocketService implements sip.SipUaHelperListener {
       if (username.isEmpty) return null;
       _log('Sending /useroncall/$username for $phoneNumber...');
       final headers = await _getAuthHeaders();
-      final response = await http.post(
-        Uri.parse('https://devapp.iotcom.io/useroncall/$username'),
-        headers: headers,
-        body: jsonEncode({
-          'user': username,
-          'phoneNumber': phoneNumber,
-          if (leadLockToken != null && leadLockToken.isNotEmpty)
-            'leadLockToken': leadLockToken,
-        }),
-      ).timeout(const Duration(seconds: 5));
+      final response = await http
+          .post(
+            Uri.parse('https://devapp.iotcom.io/useroncall/$username'),
+            headers: headers,
+            body: jsonEncode({
+              'user': username,
+              'phoneNumber': phoneNumber,
+              if (leadLockToken != null && leadLockToken.isNotEmpty)
+                'leadLockToken': leadLockToken,
+            }),
+          )
+          .timeout(const Duration(seconds: 5));
       if (response.statusCode == 200) {
         return jsonDecode(response.body) as Map<String, dynamic>?;
       }
@@ -1365,16 +1485,18 @@ class SipSocketService implements sip.SipUaHelperListener {
       if (username.isEmpty) return;
       _log('Sending /user/callended$username...');
       final headers = await _getAuthHeaders();
-      await http.post(
-        Uri.parse('https://devapp.iotcom.io/user/callended$username'),
-        headers: headers,
-        body: jsonEncode({
-          'callType': callType,
-          'isMerged': isMerged,
-          if (leadLockToken != null && leadLockToken.isNotEmpty)
-            'leadLockToken': leadLockToken,
-        }),
-      ).timeout(const Duration(seconds: 5));
+      await http
+          .post(
+            Uri.parse('https://devapp.iotcom.io/user/callended$username'),
+            headers: headers,
+            body: jsonEncode({
+              'callType': callType,
+              'isMerged': isMerged,
+              if (leadLockToken != null && leadLockToken.isNotEmpty)
+                'leadLockToken': leadLockToken,
+            }),
+          )
+          .timeout(const Duration(seconds: 5));
     } catch (e) {
       _log('Error in /user/callended: $e');
     }
@@ -1387,28 +1509,134 @@ class SipSocketService implements sip.SipUaHelperListener {
     String? leadId,
     String? leadLockToken,
     bool autoDialDisabled = false,
+    Map<String, dynamic>? followUpDisposition,
   }) async {
     try {
       final username = await _resolveApiUsername();
       if (username.isEmpty) return;
       _log('Submitting /user/disposition$username...');
       final headers = await _getAuthHeaders();
-      await http.post(
-        Uri.parse('https://devapp.iotcom.io/user/disposition$username'),
-        headers: headers,
-        body: jsonEncode({
-          'bridgeID': bridgeId.isNotEmpty ? bridgeId : 'deadCallId',
-          'Disposition': disposition.isNotEmpty ? disposition : 'Auto Disposed',
-          'autoDialDisabled': autoDialDisabled,
-          if (contactNumber != null && contactNumber.isNotEmpty)
-            'contactNumber': contactNumber,
-          if (leadId != null && leadId.isNotEmpty) 'leadId': leadId,
-          if (leadLockToken != null && leadLockToken.isNotEmpty)
-            'leadLockToken': leadLockToken,
-        }),
-      ).timeout(const Duration(seconds: 5));
+      await http
+          .post(
+            Uri.parse('https://devapp.iotcom.io/user/disposition$username'),
+            headers: headers,
+            body: jsonEncode({
+              'bridgeID': bridgeId.isNotEmpty ? bridgeId : 'deadCallId',
+              'Disposition': disposition.isNotEmpty
+                  ? disposition
+                  : 'Auto Disposed',
+              'autoDialDisabled': autoDialDisabled,
+              if (contactNumber != null && contactNumber.isNotEmpty)
+                'contactNumber': contactNumber,
+              if (leadId != null && leadId.isNotEmpty) 'leadId': leadId,
+              if (leadLockToken != null && leadLockToken.isNotEmpty)
+                'leadLockToken': leadLockToken,
+              if (followUpDisposition != null && followUpDisposition.isNotEmpty)
+                'followUpDisposition': followUpDisposition,
+            }),
+          )
+          .timeout(const Duration(seconds: 5));
     } catch (e) {
       _log('Error in /user/disposition: $e');
+    }
+  }
+
+  /// Fetches the campaign's dynamic lead form config, mirroring the webphone's
+  /// two-step fetch: form list per campaign, then full schema by form id.
+  /// Returns the parsed form config map (`{formId, formTitle, formType,
+  /// sections}`) or null when the campaign has no web form enabled.
+  Future<Map<String, dynamic>?> fetchDynamicFormConfig({
+    required String callType, // 'outgoing' | 'incoming'
+  }) async {
+    try {
+      final campaign = UserData.campaign();
+      if (campaign.isEmpty) return null;
+      final headers = await _getAuthHeaders();
+
+      final listRes = await http
+          .get(
+            Uri.parse(
+              'https://devapp.iotcom.io/getDynamicFormDataAgent/$campaign',
+            ),
+            headers: headers,
+          )
+          .timeout(const Duration(seconds: 8));
+      if (listRes.statusCode != 200) return null;
+      final listData = jsonDecode(listRes.body) as Map<String, dynamic>?;
+      if (listData == null) return null;
+      if (listData['webformEnabled'] != true) return null;
+
+      final forms = listData['agentWebForm'];
+      if (forms is! List || forms.isEmpty) return null;
+
+      final target = callType.toLowerCase();
+      Map<String, dynamic>? match;
+      for (final f in forms) {
+        if (f is! Map) continue;
+        final type = (f['formType'] ?? f['type'] ?? f['Type'] ?? f['form_type'])
+            .toString()
+            .toLowerCase();
+        if (type == target) {
+          match = Map<String, dynamic>.from(f);
+          break;
+        }
+      }
+      match ??= forms.first is Map
+          ? Map<String, dynamic>.from(forms.first as Map)
+          : null;
+      if (match == null) return null;
+
+      final formId =
+          (match['formId'] ?? match['id'] ?? match['Id'] ?? match['form_id'])
+              .toString();
+      if (formId.isEmpty) return null;
+
+      final formRes = await http
+          .get(
+            Uri.parse('https://devapp.iotcom.io/getDynamicFormData/$formId'),
+            headers: headers,
+          )
+          .timeout(const Duration(seconds: 8));
+      if (formRes.statusCode != 200) return null;
+      final formData = jsonDecode(formRes.body) as Map<String, dynamic>?;
+      final result = formData?['result'];
+      if (result is! Map) return null;
+      final config = Map<String, dynamic>.from(result);
+      config['formId'] = formId;
+      return config;
+    } catch (e) {
+      _log('Error fetching dynamic form config: $e');
+      return null;
+    }
+  }
+
+  /// Persists a contact + conversation record from the dynamic lead form
+  /// (`POST /addModifyContact`), the same endpoint the webphone's dynamic and
+  /// static forms submit to.
+  Future<bool> addModifyContact(Map<String, dynamic> payload) async {
+    try {
+      _log('Submitting /addModifyContact...');
+      final headers = await _getAuthHeaders();
+      final response = await http
+          .post(
+            Uri.parse('https://devapp.iotcom.io/addModifyContact'),
+            headers: headers,
+            body: jsonEncode(payload),
+          )
+          .timeout(const Duration(seconds: 8));
+      final body = response.body;
+      var success = false;
+      try {
+        final decoded = jsonDecode(body);
+        success = decoded is Map && decoded['success'] == true;
+      } catch (_) {
+        success = body.contains('"success"') && body.contains('true');
+      }
+      _log('addModifyContact response: $body');
+      return success;
+    } catch (e) {
+      _log('Error in /addModifyContact: $e');
+      return false;
     }
   }
 
@@ -1418,11 +1646,13 @@ class SipSocketService implements sip.SipUaHelperListener {
       if (username.isEmpty) return;
       _log('Setting agent break $breakType for $username...');
       final headers = await _getAuthHeaders();
-      await http.post(
-        Uri.parse('https://devapp.iotcom.io/user/breakuser:$username'),
-        headers: headers,
-        body: jsonEncode({'breakType': breakType}),
-      ).timeout(const Duration(seconds: 5));
+      await http
+          .post(
+            Uri.parse('https://devapp.iotcom.io/user/breakuser:$username'),
+            headers: headers,
+            body: jsonEncode({'breakType': breakType}),
+          )
+          .timeout(const Duration(seconds: 5));
     } catch (e) {
       _log('Error in /user/breakuser: $e');
     }
@@ -1434,11 +1664,15 @@ class SipSocketService implements sip.SipUaHelperListener {
       if (username.isEmpty) return;
       _log('Removing agent break for $username...');
       final headers = await _getAuthHeaders();
-      await http.post(
-        Uri.parse('https://devapp.iotcom.io/user/removebreakuser:$username'),
-        headers: headers,
-        body: jsonEncode({}),
-      ).timeout(const Duration(seconds: 5));
+      await http
+          .post(
+            Uri.parse(
+              'https://devapp.iotcom.io/user/removebreakuser:$username',
+            ),
+            headers: headers,
+            body: jsonEncode({}),
+          )
+          .timeout(const Duration(seconds: 5));
     } catch (e) {
       _log('Error in /user/removebreakuser: $e');
     }
@@ -1478,11 +1712,13 @@ class SipSocketService implements sip.SipUaHelperListener {
 
         _log('Sending /userready/$username/Web...');
         final headers = await _getAuthHeaders();
-        final response = await http.post(
-          Uri.parse('https://devapp.iotcom.io/userready/$username/Web'),
-          headers: headers,
-          body: jsonEncode({}),
-        ).timeout(const Duration(seconds: 5));
+        final response = await http
+            .post(
+              Uri.parse('https://devapp.iotcom.io/userready/$username/Web'),
+              headers: headers,
+              body: jsonEncode({}),
+            )
+            .timeout(const Duration(seconds: 5));
         _log('/userready response (${response.statusCode}): ${response.body}');
         if (response.statusCode == 200) {
           final data = jsonDecode(response.body);
@@ -1531,11 +1767,13 @@ class SipSocketService implements sip.SipUaHelperListener {
         'autoLeadDial': ?autoLeadDial,
       };
 
-      var response = await http.post(
-        Uri.parse('https://devapp.iotcom.io/dialnumber'),
-        headers: headers,
-        body: jsonEncode(payload),
-      ).timeout(const Duration(seconds: 10));
+      var response = await http
+          .post(
+            Uri.parse('https://devapp.iotcom.io/dialnumber'),
+            headers: headers,
+            body: jsonEncode(payload),
+          )
+          .timeout(const Duration(seconds: 10));
 
       _log('/dialnumber response (${response.statusCode}): ${response.body}');
       var data = jsonDecode(response.body);
@@ -1543,15 +1781,20 @@ class SipSocketService implements sip.SipUaHelperListener {
       // If server returns "Agent is not in a ready state", auto-send userready and retry once
       if (data != null && data['success'] == false) {
         final msg = (data['message'] ?? data['cause'] ?? '').toString();
-        if (msg.contains('Agent is not in a ready state') || msg.contains('Please Login again')) {
-          _log('Agent not in ready state for dialnumber — sending /userready and retrying...');
+        if (msg.contains('Agent is not in a ready state') ||
+            msg.contains('Please Login again')) {
+          _log(
+            'Agent not in ready state for dialnumber — sending /userready and retrying...',
+          );
           await sendUserReady();
           await Future.delayed(const Duration(milliseconds: 500));
-          response = await http.post(
-            Uri.parse('https://devapp.iotcom.io/dialnumber'),
-            headers: headers,
-            body: jsonEncode(payload),
-          ).timeout(const Duration(seconds: 10));
+          response = await http
+              .post(
+                Uri.parse('https://devapp.iotcom.io/dialnumber'),
+                headers: headers,
+                body: jsonEncode(payload),
+              )
+              .timeout(const Duration(seconds: 10));
           data = jsonDecode(response.body);
           _log('Retry /dialnumber response: ${response.body}');
         }
@@ -1589,11 +1832,13 @@ class SipSocketService implements sip.SipUaHelperListener {
       if (username.isEmpty) return false;
       _log('Requesting transfer for $username with bridgeID $bridgeId...');
       final headers = await _getAuthHeaders();
-      final response = await http.post(
-        Uri.parse('https://devapp.iotcom.io/reqTransfer/$username'),
-        headers: headers,
-        body: jsonEncode({'bridgeID': bridgeId}),
-      ).timeout(const Duration(seconds: 10));
+      final response = await http
+          .post(
+            Uri.parse('https://devapp.iotcom.io/reqTransfer/$username'),
+            headers: headers,
+            body: jsonEncode({'bridgeID': bridgeId}),
+          )
+          .timeout(const Duration(seconds: 10));
       _log('/reqTransfer response: ${response.body}');
       return response.statusCode == 200;
     } catch (e) {
@@ -1625,6 +1870,86 @@ class SipSocketService implements sip.SipUaHelperListener {
     }
 
     _finishCall(emitFailedReason: 'rejected');
+  }
+
+  // ---------------------------------------------------------------------
+  // Conference / merge (mirrors the webphone's Asterisk ARI flow)
+  // ---------------------------------------------------------------------
+
+  /// Asks Asterisk to place a second call to [confNumber] and park it in the
+  /// conference room while the current call stays alive. `adminuser` comes
+  /// from the logged-in userData. Returns true when the request was accepted.
+  Future<bool> requestConference(
+    String confNumber, {
+    String bridgeID = '',
+  }) async {
+    try {
+      final username = await _resolveApiUsername();
+      if (username.isEmpty) return false;
+      _log('Requesting conference for $confNumber as $username...');
+      final headers = await _getAuthHeaders();
+      final response = await http
+          .post(
+            Uri.parse('https://devapp.iotcom.io/reqConf/$username'),
+            headers: headers,
+            body: jsonEncode({
+              'confNumber': confNumber,
+              'bridgeID': bridgeID,
+              'adminuser': UserData.adminUser(),
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
+      _log('/reqConf response: ${response.body}');
+      return response.statusCode == 200;
+    } catch (e) {
+      _log('Error calling /reqConf: $e');
+      return false;
+    }
+  }
+
+  /// Unholds the current call. Used when merging a conference participant
+  /// into the live call (the webphone always unholds before merging).
+  Future<bool> requestUnhold() async {
+    try {
+      final username = await _resolveApiUsername();
+      if (username.isEmpty) return false;
+      _log('Requesting /reqUnHold/$username...');
+      final headers = await _getAuthHeaders();
+      final response = await http
+          .post(
+            Uri.parse('https://devapp.iotcom.io/reqUnHold/$username'),
+            headers: headers,
+          )
+          .timeout(const Duration(seconds: 10));
+      _log('/reqUnHold response: ${response.body}');
+      return response.statusCode == 200;
+    } catch (e) {
+      _log('Error calling /reqUnHold: $e');
+      return false;
+    }
+  }
+
+  /// Ends the conference room for [hostNumber] without hanging up the main
+  /// call. Used by the "disconnect conference" action.
+  Future<bool> hangupConference(String hostNumber) async {
+    try {
+      final username = await _resolveApiUsername();
+      if (username.isEmpty) return false;
+      _log('Requesting /hangup/hostChannel/Conf for $hostNumber...');
+      final headers = await _getAuthHeaders();
+      final response = await http
+          .post(
+            Uri.parse('https://devapp.iotcom.io/hangup/hostChannel/Conf'),
+            headers: headers,
+            body: jsonEncode({'user': username, 'hostNumber': hostNumber}),
+          )
+          .timeout(const Duration(seconds: 10));
+      _log('/hangup/hostChannel/Conf response: ${response.body}');
+      return response.statusCode == 200;
+    } catch (e) {
+      _log('Error calling /hangup/hostChannel/Conf: $e');
+      return false;
+    }
   }
 
   void disconnect() {

@@ -5,7 +5,8 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:audio_session/audio_session.dart';
 
 class CallLifecycleService with WidgetsBindingObserver {
-  static final CallLifecycleService _instance = CallLifecycleService._internal();
+  static final CallLifecycleService _instance =
+      CallLifecycleService._internal();
   factory CallLifecycleService() => _instance;
 
   bool _isCallActive = false;
@@ -25,21 +26,23 @@ class CallLifecycleService with WidgetsBindingObserver {
 
   Future<void> _configureAudioSession() async {
     final session = await AudioSession.instance;
-    await session.configure(AudioSessionConfiguration(
-      avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
-      avAudioSessionCategoryOptions:
-          AVAudioSessionCategoryOptions.allowBluetooth,
-      avAudioSessionMode: AVAudioSessionMode.voiceChat,
-      avAudioSessionRouteSharingPolicy:
-          AVAudioSessionRouteSharingPolicy.defaultPolicy,
-      avAudioSessionSetActiveOptions: AVAudioSessionSetActiveOptions.none,
-      androidAudioAttributes: AndroidAudioAttributes(
-        contentType: AndroidAudioContentType.speech,
-        usage: AndroidAudioUsage.voiceCommunication,
+    await session.configure(
+      AudioSessionConfiguration(
+        avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
+        avAudioSessionCategoryOptions:
+            AVAudioSessionCategoryOptions.allowBluetooth,
+        avAudioSessionMode: AVAudioSessionMode.voiceChat,
+        avAudioSessionRouteSharingPolicy:
+            AVAudioSessionRouteSharingPolicy.defaultPolicy,
+        avAudioSessionSetActiveOptions: AVAudioSessionSetActiveOptions.none,
+        androidAudioAttributes: AndroidAudioAttributes(
+          contentType: AndroidAudioContentType.speech,
+          usage: AndroidAudioUsage.voiceCommunication,
+        ),
+        androidAudioFocusGainType: AndroidAudioFocusGainType.gain,
+        androidWillPauseWhenDucked: true,
       ),
-      androidAudioFocusGainType: AndroidAudioFocusGainType.gain,
-      androidWillPauseWhenDucked: true,
-    ));
+    );
     _log('Audio session configured');
   }
 

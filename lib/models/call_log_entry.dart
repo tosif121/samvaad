@@ -52,13 +52,10 @@ class CallLogEntry {
     return CallLogEntry(
       id: json['id'] as String,
       number: json['number'] as String,
-      direction: CallLogDirection.values.byName(
-        json['direction'] as String,
-      ),
+      direction: CallLogDirection.values.byName(json['direction'] as String),
       type: CallLogType.values.byName(json['type'] as String),
       source: json['source'] as String? ?? 'Manual',
-      startedAt:
-          DateTime.parse(json['startedAt'] as String).toLocal(),
+      startedAt: DateTime.parse(json['startedAt'] as String).toLocal(),
       endedAt: json['endedAt'] != null
           ? DateTime.parse(json['endedAt'] as String).toLocal()
           : null,

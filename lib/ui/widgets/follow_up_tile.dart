@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../services/user_data.dart';
 import '../tokens.dart';
 import 'avatar.dart';
 import 'common.dart';
@@ -18,6 +19,8 @@ class FollowUpTile extends StatelessWidget {
     this.onCallBack,
     this.completing = false,
     this.overdue = false,
+    this.isAlert = false,
+    this.isActive = false,
   });
 
   final String phone;
@@ -28,6 +31,8 @@ class FollowUpTile extends StatelessWidget {
   final VoidCallback? onCallBack;
   final bool completing;
   final bool overdue;
+  final bool isAlert;
+  final bool isActive;
 
   static String relativeTime(DateTime time) {
     final now = DateTime.now();
@@ -49,7 +54,9 @@ class FollowUpTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final isDone = (status ?? '').toLowerCase().contains('complete') ||
+    final displayPhone = UserData.maskNumber(phone);
+    final isDone =
+        (status ?? '').toLowerCase().contains('complete') ||
         (status ?? '').toLowerCase().contains('done');
 
     if (isDone) {
@@ -58,12 +65,12 @@ class FollowUpTile extends StatelessWidget {
         child: ListTile(
           contentPadding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
           leading: AvatarBubble(
-            name: phone,
+            name: displayPhone,
             size: AppSizes.avatarSm,
             iconColor: cs.onSurface.withValues(alpha: 0.4),
           ),
           title: Text(
-            phone,
+            displayPhone,
             style: const TextStyle(
               fontSize: AppType.body,
               fontWeight: FontWeight.w600,
@@ -81,29 +88,50 @@ class FollowUpTile extends StatelessWidget {
       );
     }
 
-    final accentColor = overdue ? cs.error : cs.primary;
+    final Color accentColor;
+    if (isAlert) {
+      accentColor = Colors.green;
+    } else if (overdue) {
+      accentColor = cs.error;
+    } else if (isActive) {
+      accentColor = cs.primary;
+    } else {
+      accentColor = cs.primary;
+    }
 
     return Container(
       margin: const EdgeInsets.symmetric(
         horizontal: AppSpacing.md,
         vertical: 3,
       ),
-      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: 10),
+      padding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.md,
+        vertical: 10,
+      ),
       decoration: BoxDecoration(
-        color: overdue
+        color: isAlert
+            ? Colors.green.withValues(alpha: 0.06)
+            : overdue
             ? cs.error.withValues(alpha: 0.06)
+            : isActive
+            ? cs.primary.withValues(alpha: 0.06)
             : cs.surfaceContainerLow,
         borderRadius: BorderRadius.circular(AppRadii.lg),
         border: Border.all(
-          color: overdue
+          color: isAlert
+              ? Colors.green.withValues(alpha: 0.5)
+              : overdue
               ? cs.error.withValues(alpha: 0.3)
+              : isActive
+              ? cs.primary.withValues(alpha: 0.4)
               : cs.outline.withValues(alpha: 0.4),
+          width: isAlert ? 1.5 : 1,
         ),
       ),
       child: Row(
         children: [
           AvatarBubble(
-            name: phone,
+            name: displayPhone,
             size: AppSizes.avatarMd,
             iconColor: accentColor,
             accent: overdue,
@@ -114,7 +142,7 @@ class FollowUpTile extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  phone,
+                  displayPhone,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     fontSize: AppType.body + 1,
@@ -138,8 +166,12 @@ class FollowUpTile extends StatelessWidget {
                 Row(
                   children: [
                     Icon(
-                      overdue
+                      isAlert
+                          ? Icons.notifications_active_rounded
+                          : overdue
                           ? Icons.warning_amber_rounded
+                          : isActive
+                          ? Icons.call_made_rounded
                           : Icons.schedule_rounded,
                       size: 13,
                       color: accentColor,
@@ -168,7 +200,7 @@ class FollowUpTile extends StatelessWidget {
               height: 46,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: cs.primary,
+                color: accentColor,
               ),
               alignment: Alignment.center,
               child: completing

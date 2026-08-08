@@ -16,7 +16,9 @@ class CallKitService {
     required String callerNumber,
     String? callId,
   }) async {
-    final String uuid = (callId != null && callId.isNotEmpty) ? callId : const Uuid().v4();
+    final String uuid = (callId != null && callId.isNotEmpty)
+        ? callId
+        : const Uuid().v4();
     _currentCallId = uuid;
 
     final CallKitParams params = CallKitParams(
@@ -62,7 +64,9 @@ class CallKitService {
       ),
     );
 
-    log('[CALLKIT_SERVICE] Triggering WhatsApp-style CallKit UI for $callerName ($uuid)');
+    log(
+      '[CALLKIT_SERVICE] Triggering WhatsApp-style CallKit UI for $callerName ($uuid)',
+    );
     await FlutterCallkitIncoming.showCallkitIncoming(params);
   }
 
@@ -88,15 +92,18 @@ class CallKitService {
         log('[CALLKIT_SERVICE] User tapped ACCEPT');
         isCallKitAnswering = true;
         final extra = event.callKitParams.extra ?? {};
-        final callerNumber = extra['callerNumber'] ?? event.callKitParams.handle ?? '';
-        final callerName = extra['callerName'] ?? event.callKitParams.nameCaller ?? '';
+        final callerNumber =
+            extra['callerNumber'] ?? event.callKitParams.handle ?? '';
+        final callerName =
+            extra['callerName'] ?? event.callKitParams.nameCaller ?? '';
         onAccept(callerNumber.toString(), callerName.toString());
       } else if (event is CallEventActionCallDecline) {
         log('[CALLKIT_SERVICE] User tapped DECLINE');
         isCallKitAnswering = false;
         onDecline();
         endCurrentCall();
-      } else if (event is CallEventActionCallEnded || event is CallEventActionCallTimeout) {
+      } else if (event is CallEventActionCallEnded ||
+          event is CallEventActionCallTimeout) {
         log('[CALLKIT_SERVICE] Call ended or timed out');
         isCallKitAnswering = false;
         endCurrentCall();
@@ -108,10 +115,16 @@ class CallKitService {
     try {
       final List<dynamic> calls = await FlutterCallkitIncoming.activeCalls();
       if (calls.isNotEmpty) {
-        final Map<String, dynamic> activeCall = Map<String, dynamic>.from(calls.first as Map);
-        final extra = Map<String, dynamic>.from(activeCall['extra'] as Map? ?? {});
-        final callerNumber = extra['callerNumber'] ?? activeCall['handle'] ?? '';
-        final callerName = extra['callerName'] ?? activeCall['nameCaller'] ?? '';
+        final Map<String, dynamic> activeCall = Map<String, dynamic>.from(
+          calls.first as Map,
+        );
+        final extra = Map<String, dynamic>.from(
+          activeCall['extra'] as Map? ?? {},
+        );
+        final callerNumber =
+            extra['callerNumber'] ?? activeCall['handle'] ?? '';
+        final callerName =
+            extra['callerName'] ?? activeCall['nameCaller'] ?? '';
         return {
           'callerNumber': callerNumber.toString(),
           'callerName': callerName.toString(),

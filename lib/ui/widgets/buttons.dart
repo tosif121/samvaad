@@ -131,18 +131,18 @@ class _CallActionButtonState extends State<CallActionButton> {
     final bg = active
         ? cs.primary
         : onDark
-            ? Colors.white.withValues(alpha: 0.16)
-            : cs.surfaceContainerHigh;
+        ? Colors.white.withValues(alpha: 0.16)
+        : cs.surfaceContainerHigh;
     final fg = active
         ? cs.onPrimary
         : onDark
-            ? Colors.white
-            : cs.onSurface.withValues(alpha: 0.85);
+        ? Colors.white
+        : cs.onSurface.withValues(alpha: 0.85);
     final labelColor = active
         ? cs.primary
         : onDark
-            ? Colors.white.withValues(alpha: 0.75)
-            : cs.onSurface.withValues(alpha: 0.6);
+        ? Colors.white.withValues(alpha: 0.75)
+        : cs.onSurface.withValues(alpha: 0.6);
 
     return Opacity(
       opacity: disabled && !_processing ? 0.4 : 1.0,

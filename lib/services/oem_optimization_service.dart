@@ -5,7 +5,8 @@ import 'package:device_info_plus/device_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class OemOptimizationService {
-  static final OemOptimizationService _instance = OemOptimizationService._internal();
+  static final OemOptimizationService _instance =
+      OemOptimizationService._internal();
   factory OemOptimizationService() => _instance;
   OemOptimizationService._internal();
 
@@ -49,7 +50,19 @@ class OemOptimizationService {
     if (alreadyPrompted) return false;
 
     final manufacturer = await getDeviceManufacturer();
-    final oemBrands = ['xiaomi', 'redmi', 'poco', 'oppo', 'realme', 'vivo', 'iqoo', 'oneplus', 'huawei', 'honor', 'motorola'];
+    final oemBrands = [
+      'xiaomi',
+      'redmi',
+      'poco',
+      'oppo',
+      'realme',
+      'vivo',
+      'iqoo',
+      'oneplus',
+      'huawei',
+      'honor',
+      'motorola',
+    ];
     return oemBrands.any((brand) => manufacturer.contains(brand));
   }
 
@@ -84,15 +97,24 @@ class OemOptimizationService {
         context: context,
         barrierDismissible: false,
         builder: (ctx) => AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
           title: Row(
             children: [
-              const Icon(Icons.notifications_active_rounded, color: Color(0xFF4299EB), size: 28),
+              const Icon(
+                Icons.notifications_active_rounded,
+                color: Color(0xFF4299EB),
+                size: 28,
+              ),
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
                   'Background Calls ($brandName)',
-                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ),
             ],
@@ -106,7 +128,9 @@ class OemOptimizationService {
                 style: TextStyle(fontSize: 14, color: Colors.grey.shade800),
               ),
               const SizedBox(height: 14),
-              _buildStepItem('1. Enable "Autostart / Background Run" in Settings.'),
+              _buildStepItem(
+                '1. Enable "Autostart / Background Run" in Settings.',
+              ),
               _buildStepItem('2. Set Battery Saver to "No Restrictions".'),
               _buildStepItem('3. Allow Display over other apps / Pop-ups.'),
             ],
@@ -123,7 +147,9 @@ class OemOptimizationService {
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF4299EB),
                 foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
               onPressed: () async {
                 await markOemGuidancePrompted();
@@ -144,7 +170,11 @@ class OemOptimizationService {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Icon(Icons.check_circle_outline_rounded, size: 16, color: Color(0xFF00C853)),
+          const Icon(
+            Icons.check_circle_outline_rounded,
+            size: 16,
+            color: Color(0xFF00C853),
+          ),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
@@ -158,9 +188,12 @@ class OemOptimizationService {
   }
 
   String _formatBrandName(String manufacturer) {
-    if (manufacturer.contains('xiaomi') || manufacturer.contains('redmi') || manufacturer.contains('poco')) {
+    if (manufacturer.contains('xiaomi') ||
+        manufacturer.contains('redmi') ||
+        manufacturer.contains('poco')) {
       return 'Xiaomi / Redmi / POCO';
-    } else if (manufacturer.contains('realme') || manufacturer.contains('oppo')) {
+    } else if (manufacturer.contains('realme') ||
+        manufacturer.contains('oppo')) {
       return 'Realme / OPPO';
     } else if (manufacturer.contains('vivo') || manufacturer.contains('iqoo')) {
       return 'Vivo / iQOO';
@@ -169,6 +202,8 @@ class OemOptimizationService {
     } else if (manufacturer.contains('motorola')) {
       return 'Motorola';
     }
-    return manufacturer.isNotEmpty ? manufacturer[0].toUpperCase() + manufacturer.substring(1) : 'Phone';
+    return manufacturer.isNotEmpty
+        ? manufacturer[0].toUpperCase() + manufacturer.substring(1)
+        : 'Phone';
   }
 }

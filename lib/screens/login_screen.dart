@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../models/sip_credentials.dart';
 import '../services/sip_socket_service.dart';
+import '../services/user_data.dart';
 import 'dialpad_screen.dart';
 import '../services/fcm_service.dart';
 
@@ -39,7 +40,8 @@ class _LoginScreenState extends State<LoginScreen> {
       final type = event['event'] as String;
       if (type == 'registered') {
         setState(() => _connecting = false);
-        FcmService().init(); // Re-initialize FCM to send token with new credentials
+        FcmService()
+            .init(); // Re-initialize FCM to send token with new credentials
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(builder: (_) => const DialpadScreen()),
         );
@@ -90,25 +92,62 @@ class _LoginScreenState extends State<LoginScreen> {
     try {
       debugPrint('[LOGIN] Hitting REST login API for $rawUsername...');
       final url = Uri.parse('https://devapp.iotcom.io/userlogin/$rawUsername');
-      final response = await http.post(
-        url,
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'username': rawUsername,
-          'password': password,
-        }),
-      ).timeout(const Duration(seconds: 10));
+      debugPrint('[LOGIN] URL: $url');
+      final response = await http
+          .post(
+            url,
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'username': rawUsername, 'password': password}),
+          )
+          .timeout(const Duration(seconds: 10));
 
       debugPrint('[LOGIN] Login API response status: ${response.statusCode}');
+      debugPrint('[LOGIN] Login API raw body: ${response.body}');
       final data = jsonDecode(response.body);
+      debugPrint('[LOGIN] Parsed login data: $data');
+      debugPrint(
+        '[LOGIN] success=${data['success']} message=${data['message']} token=${data['token']}',
+      );
 
       if (response.statusCode != 200 || data['success'] == false) {
-        final msg = data['message'] ?? 'Login failed. Please check credentials.';
+        final msg =
+            data['message'] ?? 'Login failed. Please check credentials.';
+        debugPrint('[LOGIN] Login rejected: $msg');
         setState(() {
           _connecting = false;
           _error = msg;
         });
         return;
+      }
+
+      debugPrint('[LOGIN] Login accepted — saving credentials');
+
+      final userData = data['userData'];
+      if (userData is Map) {
+        final expiryRaw = userData['ExpiryDate'];
+        if (expiryRaw != null) {
+          final expiry = DateTime.tryParse(expiryRaw.toString());
+          if (expiry != null) {
+            final daysLeft = expiry.difference(DateTime.now()).inDays;
+            debugPrint(
+              '[LOGIN] Subscription ExpiryDate=$expiryRaw daysLeft=$daysLeft',
+            );
+            if (daysLeft < 0) {
+              final daysExpired = -daysLeft;
+              if (daysExpired > 5) {
+                setState(() {
+                  _connecting = false;
+                  _error =
+                      'Your subscription has expired. Please renew to continue.';
+                });
+                return;
+              }
+              debugPrint(
+                '[LOGIN] Subscription expired $daysExpired day(s) ago — within grace period',
+              );
+            }
+          }
+        }
       }
 
       // Save token, username, password and credentials
@@ -117,12 +156,16 @@ class _LoginScreenState extends State<LoginScreen> {
       await prefs.setString('savedUsername', rawUsername);
       await prefs.setString('savedPassword', password);
 
+      await UserData.init();
+
       final creds = _buildCreds();
       await _requestPermissions();
       await _sip.saveCredentials(creds);
       unawaited(_sip.connect(creds).then((_) {}));
     } catch (e) {
-      debugPrint('[LOGIN] Login API error or timeout: $e — proceeding with SIP registration fallback');
+      debugPrint(
+        '[LOGIN] Login API error or timeout: $e — proceeding with SIP registration fallback',
+      );
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('savedUsername', rawUsername);
       await prefs.setString('savedPassword', password);
@@ -144,14 +187,9 @@ class _LoginScreenState extends State<LoginScreen> {
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(
-              horizontal: 24,
-              vertical: 32,
-            ),
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
             child: ConstrainedBox(
-              constraints: BoxConstraints(
-                maxWidth: isWide ? 440 : 420,
-              ),
+              constraints: BoxConstraints(maxWidth: isWide ? 440 : 420),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -198,12 +236,10 @@ class _LoginScreenState extends State<LoginScreen> {
                               controller: _usernameController,
                               decoration: const InputDecoration(
                                 labelText: 'Username',
-                                prefixIcon:
-                                    Icon(Icons.person_outline_rounded),
+                                prefixIcon: Icon(Icons.person_outline_rounded),
                               ),
                               textInputAction: TextInputAction.next,
-                              validator: (v) => v == null ||
-                                      v.trim().isEmpty
+                              validator: (v) => v == null || v.trim().isEmpty
                                   ? 'Required'
                                   : null,
                             ),
@@ -212,15 +248,18 @@ class _LoginScreenState extends State<LoginScreen> {
                               controller: _passwordController,
                               decoration: InputDecoration(
                                 labelText: 'Password',
-                                prefixIcon:
-                                    const Icon(Icons.lock_outline_rounded),
+                                prefixIcon: const Icon(
+                                  Icons.lock_outline_rounded,
+                                ),
                                 suffixIcon: IconButton(
-                                  icon: Icon(_obscurePassword
-                                      ? Icons.visibility_off_rounded
-                                      : Icons.visibility_rounded),
+                                  icon: Icon(
+                                    _obscurePassword
+                                        ? Icons.visibility_off_rounded
+                                        : Icons.visibility_rounded,
+                                  ),
                                   onPressed: () => setState(
-                                      () => _obscurePassword =
-                                          !_obscurePassword),
+                                    () => _obscurePassword = !_obscurePassword,
+                                  ),
                                 ),
                               ),
                               obscureText: _obscurePassword,
@@ -232,21 +271,20 @@ class _LoginScreenState extends State<LoginScreen> {
                             const SizedBox(height: 28),
                             if (_error != null)
                               Padding(
-                                padding:
-                                    const EdgeInsets.only(bottom: 16),
+                                padding: const EdgeInsets.only(bottom: 16),
                                 child: Container(
-                                  padding:
-                                      const EdgeInsets.all(12),
+                                  padding: const EdgeInsets.all(12),
                                   decoration: BoxDecoration(
-                                    color: cs.error
-                                        .withValues(alpha: 0.08),
-                                    borderRadius:
-                                        BorderRadius.circular(12),
+                                    color: cs.error.withValues(alpha: 0.08),
+                                    borderRadius: BorderRadius.circular(12),
                                   ),
                                   child: Row(
                                     children: [
-                                      Icon(Icons.error_outline_rounded,
-                                          size: 20, color: cs.error),
+                                      Icon(
+                                        Icons.error_outline_rounded,
+                                        size: 20,
+                                        color: cs.error,
+                                      ),
                                       const SizedBox(width: 8),
                                       Flexible(
                                         child: Text(
@@ -265,8 +303,7 @@ class _LoginScreenState extends State<LoginScreen> {
                               width: double.infinity,
                               height: 56,
                               child: ElevatedButton(
-                                onPressed:
-                                    _connecting ? null : _login,
+                                onPressed: _connecting ? null : _login,
                                 child: _connecting
                                     ? SizedBox(
                                         width: 24,

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../services/user_data.dart';
 import 'tokens.dart';
 
 /// App theme: custom seed palette exposed via `ColorScheme.fromSeed`,
@@ -9,33 +10,35 @@ abstract final class SamvaadTheme {
   static const Color success = Color(0xFF23C56E);
 
   static ThemeData light() {
-    final scheme = ColorScheme.fromSeed(
-      seedColor: seed,
-      brightness: Brightness.light,
-      secondary: success,
-    ).copyWith(
-      surface: const Color(0xFFFBFBFD),
-      surfaceContainerLow: const Color(0xFFF2F3F8),
-      surfaceContainer: const Color(0xFFECEDF3),
-      surfaceContainerHigh: const Color(0xFFE4E6EF),
-      onSurface: const Color(0xFF171A26),
-    );
+    final scheme =
+        ColorScheme.fromSeed(
+          seedColor: seed,
+          brightness: Brightness.light,
+          secondary: success,
+        ).copyWith(
+          surface: const Color(0xFFFBFBFD),
+          surfaceContainerLow: const Color(0xFFF2F3F8),
+          surfaceContainer: const Color(0xFFECEDF3),
+          surfaceContainerHigh: const Color(0xFFE4E6EF),
+          onSurface: const Color(0xFF171A26),
+        );
     return _build(scheme);
   }
 
   static ThemeData dark() {
-    final scheme = ColorScheme.fromSeed(
-      seedColor: seed,
-      brightness: Brightness.dark,
-      secondary: success,
-    ).copyWith(
-      surface: const Color(0xFF0F121B),
-      surfaceContainerLow: const Color(0xFF151A26),
-      surfaceContainer: const Color(0xFF1A1F2E),
-      surfaceContainerHigh: const Color(0xFF202637),
-      onSurface: const Color(0xFFE9EBF3),
-      outline: const Color(0xFF3A4053),
-    );
+    final scheme =
+        ColorScheme.fromSeed(
+          seedColor: seed,
+          brightness: Brightness.dark,
+          secondary: success,
+        ).copyWith(
+          surface: const Color(0xFF0F121B),
+          surfaceContainerLow: const Color(0xFF151A26),
+          surfaceContainer: const Color(0xFF1A1F2E),
+          surfaceContainerHigh: const Color(0xFF202637),
+          onSurface: const Color(0xFFE9EBF3),
+          outline: const Color(0xFF3A4053),
+        );
     return _build(scheme);
   }
 
@@ -203,9 +206,7 @@ abstract final class SamvaadTheme {
       ),
       snackBarTheme: SnackBarThemeData(
         behavior: SnackBarBehavior.floating,
-        backgroundColor: isDark
-            ? const Color(0xFF2A3042)
-            : cs.onSurface,
+        backgroundColor: isDark ? const Color(0xFF2A3042) : cs.onSurface,
         contentTextStyle: TextStyle(
           color: isDark ? cs.onSurface : cs.surface,
           fontWeight: FontWeight.w600,
@@ -249,6 +250,16 @@ class ThemeController {
       if (saved != null && saved != 'system') {
         mode.value = ThemeMode.values.firstWhere(
           (m) => m.name == saved,
+          orElse: () => ThemeMode.dark,
+        );
+        return;
+      }
+      // No explicit user override: honour the backend preference pushed via
+      // `userData.uiPreferences.themeMode` (webphone behaviour).
+      final remote = UserData.themeMode();
+      if (remote != null && remote != 'system') {
+        mode.value = ThemeMode.values.firstWhere(
+          (m) => m.name == remote,
           orElse: () => ThemeMode.dark,
         );
       } else {

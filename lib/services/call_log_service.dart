@@ -20,8 +20,9 @@ class CallLogService {
   static const String _missedSeenKey = 'call_log_missed_seen_at_v1';
   static const int maxEntries = 200;
 
-  final ValueNotifier<List<CallLogEntry>> entries =
-      ValueNotifier(const <CallLogEntry>[]);
+  final ValueNotifier<List<CallLogEntry>> entries = ValueNotifier(
+    const <CallLogEntry>[],
+  );
   final ValueNotifier<int> unseenMissed = ValueNotifier(0);
 
   bool _loaded = false;
@@ -41,8 +42,7 @@ class CallLogService {
       if (raw != null) {
         final decoded = jsonDecode(raw) as List;
         final list = decoded
-            .map((e) =>
-                CallLogEntry.fromJson(e as Map<String, dynamic>))
+            .map((e) => CallLogEntry.fromJson(e as Map<String, dynamic>))
             .toList();
         entries.value = list;
       }
@@ -88,8 +88,7 @@ class CallLogService {
   }
 
   Future<void> remove(String id) async {
-    entries.value =
-        entries.value.where((e) => e.id != id).toList();
+    entries.value = entries.value.where((e) => e.id != id).toList();
     _recomputeUnseen();
     await _persist();
   }

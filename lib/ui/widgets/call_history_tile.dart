@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../models/call_log_entry.dart';
+import '../../services/user_data.dart';
 import '../haptics.dart';
 import '../tokens.dart';
 import 'avatar.dart';
@@ -37,6 +38,7 @@ class CallHistoryTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final displayNumber = UserData.maskNumber(entry.number);
     final (icon, color) = switch (entry.direction) {
       CallLogDirection.incoming => (Icons.call_received_rounded, cs.secondary),
       CallLogDirection.outgoing => (Icons.call_made_rounded, cs.primary),
@@ -72,7 +74,7 @@ class CallHistoryTile extends StatelessWidget {
           clipBehavior: Clip.none,
           children: [
             AvatarBubble(
-              name: entry.number,
+              name: displayNumber,
               size: AppSizes.avatarSm,
               iconColor: color,
             ),
@@ -91,7 +93,7 @@ class CallHistoryTile extends StatelessWidget {
           ],
         ),
         title: Text(
-          entry.number,
+          displayNumber,
           style: TextStyle(
             fontSize: AppType.body,
             fontWeight: entry.isMissed ? FontWeight.w800 : FontWeight.w600,

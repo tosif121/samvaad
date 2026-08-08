@@ -11,6 +11,7 @@ import '../models/call_log_entry.dart';
 import '../services/call_log_service.dart';
 import '../services/sip_socket_service.dart';
 import '../services/ringtone_service.dart';
+import '../services/user_data.dart';
 import '../ui/theme.dart';
 import '../ui/tokens.dart';
 import '../ui/widgets/avatar.dart';
@@ -20,6 +21,8 @@ import '../ui/widgets/chips.dart';
 import '../ui/widgets/common.dart';
 import '../ui/widgets/follow_up_tile.dart';
 import '../ui/widgets/missed_call_group_card.dart';
+import '../ui/widgets/dynamic_form_sheet.dart';
+import '../ui/widgets/schedule_callback_sheet.dart';
 
 class DialpadScreen extends StatefulWidget {
   const DialpadScreen({super.key});
@@ -54,12 +57,22 @@ class _DialpadScreenState extends State<DialpadScreen>
   DateTime? _breakStartedAt;
   Timer? _breakTimer;
   bool _dispositionShowing = false;
+  bool _isBreaksEnabled = true;
+
+  bool _conferenceStatus = false;
+  bool _conferenceConnected = false;
+  bool _isMerged = false;
+  bool _showConferenceKeypad = false;
+  String _conferenceNumber = '';
 
   String? _lastHandledNumber;
   DateTime? _lastHandledAt;
 
+  CallLogDirection? _lastCallDirection;
+
   final Set<String> _callBackingCallers = {};
   final Set<String> _completingCallbacks = {};
+  final Set<String> _activeCallbackIds = {};
 
   Future<void> _initRenderers() async {
     await _localRenderer.initialize();
@@ -76,10 +89,19 @@ class _DialpadScreenState extends State<DialpadScreen>
     _callLog.load();
     _loadUsername();
     _restoreBreakState();
+    _loadUserConfig();
     _phoneFocusNode.addListener(() {
       if (_phoneFocusNode.hasFocus) {
         _phoneFocusNode.unfocus();
       }
+    });
+  }
+
+  Future<void> _loadUserConfig() async {
+    await UserData.init();
+    if (!mounted) return;
+    setState(() {
+      _isBreaksEnabled = UserData.isBreaksEnabled();
     });
   }
 
@@ -271,6 +293,11 @@ class _DialpadScreenState extends State<DialpadScreen>
           _isOnCall = false;
           _isShowingKeypad = false;
           _isShowingIncomingDialog = false;
+          _conferenceStatus = false;
+          _conferenceConnected = false;
+          _isMerged = false;
+          _showConferenceKeypad = false;
+          _conferenceNumber = '';
           _lastHandledNumber = endedNumber.isNotEmpty
               ? endedNumber
               : _activeCallNumber;
@@ -286,6 +313,33 @@ class _DialpadScreenState extends State<DialpadScreen>
               _runPostCallFlow(bridgeId: endedBridge, number: endedNumber),
             );
           }
+          break;
+
+        case 'messageReceived':
+          final message = event['message'] as String? ?? '';
+          if (message.contains('customer host channel connected')) {
+            debugPrint(
+              '[CONFERENCE] Participant CONNECTED — enabling merge',
+            );
+            setState(() {
+              _conferenceStatus = true;
+              _conferenceConnected = true;
+              _showConferenceKeypad = false;
+            });
+          } else if (message.contains('customer host channel diconnected') ||
+              message.contains('customer host channel disconnected')) {
+            debugPrint('[CONFERENCE] Participant DISCONNECTED');
+            final wasMerged = _isMerged;
+            setState(() {
+              _conferenceStatus = false;
+              _conferenceConnected = false;
+              _isMerged = false;
+            });
+            if (!wasMerged) {
+              unawaited(_sip.requestUnhold());
+            }
+          }
+          if (mounted) setState(() {});
           break;
 
         case 'registered':
@@ -507,6 +561,7 @@ class _DialpadScreenState extends State<DialpadScreen>
     _activeLogEntry = null;
     _callWasAnswered = false;
     if (entry == null) return;
+    _lastCallDirection = entry.direction;
     final shouldBeMissed =
         entry.direction == CallLogDirection.incoming && !wasAnswered;
     final direction = shouldBeMissed
@@ -527,7 +582,38 @@ class _DialpadScreenState extends State<DialpadScreen>
   }) async {
     await _sip.sendCallEnded();
     await Future.delayed(const Duration(milliseconds: 600));
+    if (_activeCallbackIds.isNotEmpty) {
+      for (final id in _activeCallbackIds.toList()) {
+        unawaited(_sip.updateCallbackStatus(id, 'completed'));
+      }
+      if (mounted) setState(() => _activeCallbackIds.clear());
+    }
     if (!mounted || _dispositionShowing) return;
+
+    final callType = _lastCallDirection == CallLogDirection.incoming
+        ? 'incoming'
+        : 'outgoing';
+    final formConfig = await _sip.fetchDynamicFormConfig(callType: callType);
+    if (formConfig != null && mounted) {
+      final submitted = await showDynamicFormSheet(
+        context,
+        formConfig: formConfig,
+        callType: callType,
+        contactNumber: number,
+        onSubmit: (payload) => _sip.addModifyContact(payload),
+      );
+      if (!mounted) return;
+      if (!submitted) return;
+    }
+
+    if (!UserData.isDispositionEnabled()) {
+      await _sip.submitDisposition(
+        bridgeId: bridgeId,
+        disposition: 'Auto Disposed',
+        contactNumber: number,
+      );
+      return;
+    }
     await _showDispositionSheet(bridgeId: bridgeId, number: number);
   }
 
@@ -537,28 +623,78 @@ class _DialpadScreenState extends State<DialpadScreen>
   }) async {
     if (!mounted) return;
     _dispositionShowing = true;
-    String? result;
     try {
-      result = await showModalBottomSheet<String>(
-        context: context,
-        backgroundColor: Colors.transparent,
-        isScrollControlled: true,
-        builder: (context) =>
-            _DispositionSheet(bridgeId: bridgeId, number: number),
-      );
+      final options = await _loadDispositionOptions();
+      if (!mounted) return;
+      // Webphone behaviour: when disposition is enabled the agent MUST
+      // submit one — the sheet cannot be dismissed (swipe/back/tap-outside)
+      // and is re-shown until a disposition is saved.
+      while (mounted) {
+        final result = await showModalBottomSheet<_DispositionResult>(
+          context: context,
+          backgroundColor: Colors.transparent,
+          isScrollControlled: true,
+          isDismissible: false,
+          enableDrag: false,
+          builder: (context) => PopScope(
+            canPop: false,
+            child: _DispositionSheet(
+              bridgeId: bridgeId,
+              number: number,
+              options: options,
+            ),
+          ),
+        );
+        if (result != null) {
+          await _sip.submitDisposition(
+            bridgeId: bridgeId,
+            disposition: result.disposition,
+            contactNumber: number,
+            followUpDisposition: result.followUpDisposition,
+          );
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Disposition saved: ${result.disposition}'),
+                duration: const Duration(seconds: 2),
+              ),
+            );
+          }
+          return;
+        }
+      }
     } finally {
       _dispositionShowing = false;
     }
-    final disposition = result ?? 'Auto Disposed';
-    await _sip.submitDisposition(bridgeId: bridgeId, disposition: disposition);
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Disposition saved: $disposition'),
-          duration: const Duration(seconds: 2),
-        ),
-      );
+  }
+
+  Future<List<String>> _loadDispositionOptions() async {
+    final prefs = await SharedPreferences.getInstance();
+    final tokenStr = prefs.getString('token');
+    if (tokenStr != null && tokenStr.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(tokenStr);
+        if (decoded is Map) {
+          final userData = decoded['userData'];
+          if (userData is Map) {
+            final opts = userData['dispostionOptions'];
+            if (opts is List && opts.isNotEmpty) {
+              final list = opts
+                  .map((o) {
+                    if (o is Map) {
+                      return (o['label'] ?? o['value']).toString();
+                    }
+                    return o.toString();
+                  })
+                  .where((s) => s.isNotEmpty)
+                  .toList();
+              if (list.isNotEmpty) return list;
+            }
+          }
+        }
+      } catch (_) {}
     }
+    return _dispositionOptions;
   }
 
   /*
@@ -584,7 +720,64 @@ class _DialpadScreenState extends State<DialpadScreen>
   */
 
   Future<void> _endCall() async {
+    if (_conferenceStatus) {
+      await _disconnectConference();
+    }
     await _sip.endCall();
+  }
+
+  Future<void> _startConferenceCall() async {
+    if (_conferenceNumber.isEmpty) return;
+    final ok = await _sip.requestConference(
+      _conferenceNumber,
+      bridgeID: _callBridgeId.isEmpty ? _sip.bridgeID : _callBridgeId,
+    );
+    if (mounted) {
+      if (ok) {
+        setState(() {
+          _conferenceStatus = true;
+          _conferenceConnected = false;
+          _showConferenceKeypad = false;
+        });
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Conference request failed')),
+        );
+      }
+    }
+  }
+
+  Future<void> _mergeConference() async {
+    final ok = await _sip.requestUnhold();
+    if (mounted && !ok) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Merge failed: could not unhold the call'),
+        ),
+      );
+      return;
+    }
+    if (mounted) {
+      setState(() => _isMerged = true);
+    }
+  }
+
+  Future<void> _disconnectConference() async {
+    final number = _conferenceNumber;
+    if (number.isEmpty) return;
+    final wasMerged = _isMerged;
+    await _sip.hangupConference(number);
+    if (mounted) {
+      setState(() {
+        _conferenceStatus = false;
+        _conferenceConnected = false;
+        _isMerged = false;
+        _showConferenceKeypad = false;
+      });
+    }
+    if (!wasMerged) {
+      await _sip.requestUnhold();
+    }
   }
 
   @override
@@ -649,7 +842,7 @@ class _DialpadScreenState extends State<DialpadScreen>
               breakLabel: _currentBreak!,
               onTap: _removeBreak,
             )
-          else
+          else if (_isBreaksEnabled)
             PressableScale(
               onTap: _showBreakQuickSheet,
               child: Container(
@@ -1251,6 +1444,9 @@ class _DialpadScreenState extends State<DialpadScreen>
   // Follow-ups tab
   // ---------------------------------------------------------------------
 
+  int _followUpTabIndex = 0;
+  static const _followUpTabs = ['Pending', 'Upcoming', 'Active'];
+
   Widget _buildFollowUpsTab() {
     final cs = Theme.of(context).colorScheme;
     final followUps = _sip.followUps;
@@ -1265,85 +1461,200 @@ class _DialpadScreenState extends State<DialpadScreen>
       );
     }
 
-    final sorted = List<dynamic>.from(followUps)
-      ..sort((a, b) {
-        final at = _followUpTime(a);
-        final bt = _followUpTime(b);
+    final now = DateTime.now();
+    final buckets = _bucketFollowUps(followUps, now);
+    final counts = {
+      for (final tab in _followUpTabs) tab: buckets[tab]?.length ?? 0,
+    };
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            AppSpacing.md,
+            AppSpacing.xs,
+            AppSpacing.md,
+            AppSpacing.sm,
+          ),
+          child: Text(
+            'Follow-up Calls',
+            style: TextStyle(
+              fontSize: AppType.heading,
+              fontWeight: FontWeight.w800,
+              letterSpacing: -0.3,
+              color: cs.onSurface,
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
+          child: _FollowUpTabBar(
+            tabs: _followUpTabs,
+            selectedIndex: _followUpTabIndex,
+            counts: counts,
+            onSelected: (i) => setState(() => _followUpTabIndex = i),
+          ),
+        ),
+        const SizedBox(height: 4),
+        Expanded(
+          child: AnimatedSwitcher(
+            duration: AppMotion.normal,
+            child: ListView(
+              key: ValueKey('followups-${buckets.length}-$_followUpTabIndex'),
+              padding: const EdgeInsets.only(bottom: AppSpacing.md),
+              children: [
+                for (final entry
+                    in buckets[_followUpTabs[_followUpTabIndex]] ??
+                        const <_FollowUpEntry>[])
+                  _followUpTile(entry, now),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Map<String, List<_FollowUpEntry>> _bucketFollowUps(
+    List<dynamic> followUps,
+    DateTime now,
+  ) {
+    final startOfToday = DateTime(now.year, now.month, now.day);
+    final endOfToday = DateTime(now.year, now.month, now.day, 23, 59, 59);
+
+    final buckets = <String, List<_FollowUpEntry>>{
+      for (final tab in _followUpTabs) tab: <_FollowUpEntry>[],
+    };
+
+    for (final item in followUps) {
+      if (item is! Map) continue;
+      final map = Map<dynamic, dynamic>.from(item);
+      String field(String key) {
+        final v = map[key];
+        return v?.toString() ?? '';
+      }
+
+      final phone = field('phoneNumber').isNotEmpty
+          ? field('phoneNumber')
+          : field('contactNumber');
+      final comment = field('comment');
+      final status = field('status').toLowerCase();
+      final callbackId = field('_id').isNotEmpty ? field('_id') : field('id');
+
+      if (status.contains('complete')) continue;
+
+      final scheduled = _resolveFollowUpTime(item);
+      if (scheduled == null) {
+        continue;
+      }
+
+      final isActive =
+          callbackId.isNotEmpty && _activeCallbackIds.contains(callbackId);
+      final tab = isActive
+          ? 'Active'
+          : scheduled.isBefore(startOfToday)
+          ? 'Pending'
+          : scheduled.isAfter(endOfToday)
+          ? 'Upcoming'
+          : 'Pending';
+
+      final isAlert =
+          !isActive &&
+          now.isAfter(scheduled.subtract(const Duration(minutes: 10))) &&
+          !now.isAfter(scheduled);
+
+      buckets[tab]!.add(
+        _FollowUpEntry(
+          item: item,
+          phone: phone,
+          comment: comment,
+          status: field('status'),
+          callbackId: callbackId,
+          scheduledAt: scheduled,
+          isAlert: isAlert,
+          isActive: isActive,
+        ),
+      );
+    }
+
+    for (final tab in _followUpTabs) {
+      buckets[tab]!.sort((a, b) {
+        final at = a.scheduledAt;
+        final bt = b.scheduledAt;
         if (at == null && bt == null) return 0;
         if (at == null) return 1;
         if (bt == null) return -1;
         return at.compareTo(bt);
       });
+    }
 
-    final now = DateTime.now();
-    return AnimatedSwitcher(
-      duration: AppMotion.normal,
-      child: ListView(
-        key: ValueKey(followUps.length),
-        padding: const EdgeInsets.only(bottom: AppSpacing.md),
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(
-              AppSpacing.md,
-              AppSpacing.xs,
-              AppSpacing.md,
-              AppSpacing.sm,
-            ),
-            child: Text(
-              'Follow-up Calls',
-              style: TextStyle(
-                fontSize: AppType.heading,
-                fontWeight: FontWeight.w800,
-                letterSpacing: -0.3,
-                color: cs.onSurface,
-              ),
-            ),
-          ),
-          for (final item in sorted) _followUpTile(item, now),
-        ],
-      ),
-    );
+    return buckets;
   }
 
-  DateTime? _followUpTime(dynamic item) {
+  DateTime? _resolveFollowUpTime(dynamic item) {
     if (item is! Map) return null;
     final raw = item['scheduledAt'] ?? item['scheduledtime'];
     final ms = int.tryParse(raw?.toString() ?? '');
-    if (ms != null) return DateTime.fromMillisecondsSinceEpoch(ms);
-    return DateTime.tryParse(raw?.toString() ?? '');
+    if (ms != null) {
+      return DateTime.fromMillisecondsSinceEpoch(
+        ms.toString().length <= 10 ? ms * 1000 : ms,
+      );
+    }
+    final parsed = DateTime.tryParse(raw?.toString() ?? '');
+    if (parsed != null) return parsed;
+
+    final date = item['date']?.toString() ?? '';
+    final time = item['time']?.toString() ?? '';
+    if (date.isNotEmpty && time.isNotEmpty) {
+      final parsedTime = _parseFollowUpTime(date, time);
+      if (parsedTime != null) return parsedTime;
+    }
+    return null;
   }
 
-  Widget _followUpTile(dynamic item, DateTime now) {
-    final map = item is Map ? Map<dynamic, dynamic>.from(item) : {};
-    String field(String key) {
-      final v = map[key];
-      return v?.toString() ?? '';
-    }
+  DateTime? _parseFollowUpTime(String date, String time) {
+    final dateParts = date.split('-');
+    if (dateParts.length != 3) return null;
+    final y = int.tryParse(dateParts[0]);
+    final m = int.tryParse(dateParts[1]);
+    final d = int.tryParse(dateParts[2]);
+    if (y == null || m == null || d == null) return null;
 
-    final phone = field('phoneNumber').isNotEmpty
-        ? field('phoneNumber')
-        : field('contactNumber');
-    final comment = field('comment');
-    final status = field('status');
-    final callbackId = field('_id').isNotEmpty ? field('_id') : field('id');
-    final scheduled = _followUpTime(item);
+    final lower = time.toLowerCase().trim();
+    final isPm = lower.contains('pm');
+    final digits = lower.replaceAll(RegExp(r'[^0-9:]'), '');
+    final parts = digits.split(':');
+    if (parts.length < 2) return null;
+    var h = int.tryParse(parts[0]);
+    final min = int.tryParse(parts[1]);
+    if (h == null || min == null) return null;
+    if (isPm && h < 12) h += 12;
+    if (!isPm && h == 12) h = 0;
+    return DateTime(y, m, d, h, min);
+  }
+
+  Widget _followUpTile(_FollowUpEntry entry, DateTime now) {
     final overdue =
-        scheduled != null &&
-        scheduled.isBefore(now) &&
-        !status.toLowerCase().contains('complete');
+        entry.scheduledAt != null &&
+        entry.scheduledAt!.isBefore(now) &&
+        !entry.isActive;
 
     return FollowUpTile(
-      phone: phone,
-      scheduledAt: scheduled,
-      comment: comment,
-      status: status,
-      callbackId: callbackId,
+      phone: entry.phone,
+      scheduledAt: entry.scheduledAt,
+      comment: entry.comment,
+      status: entry.status,
+      callbackId: entry.callbackId,
       overdue: overdue,
+      isAlert: entry.isAlert,
+      isActive: entry.isActive,
       completing:
-          callbackId.isNotEmpty && _completingCallbacks.contains(callbackId),
-      onCallBack: phone.isEmpty
+          entry.callbackId.isNotEmpty &&
+          _completingCallbacks.contains(entry.callbackId),
+      onCallBack: entry.phone.isEmpty
           ? null
-          : () => _callBackNumber(phone, callbackId: callbackId),
+          : () => _callBackNumber(entry.phone, callbackId: entry.callbackId),
     );
   }
 
@@ -1352,22 +1663,19 @@ class _DialpadScreenState extends State<DialpadScreen>
     final caller = number.trim();
     if (caller.isNotEmpty) setState(() => _callBackingCallers.add(caller));
     if (callbackId != null && callbackId.isNotEmpty) {
-      setState(() => _completingCallbacks.add(callbackId));
+      setState(() => _activeCallbackIds.add(callbackId));
     }
     final ok = await _sip.dialMissedCall(number);
     if (!mounted) return;
     if (caller.isNotEmpty) setState(() => _callBackingCallers.remove(caller));
     if (!ok) {
       if (callbackId != null && callbackId.isNotEmpty) {
-        setState(() => _completingCallbacks.remove(callbackId));
+        setState(() => _activeCallbackIds.remove(callbackId));
       }
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Could not call back the number')),
       );
       return;
-    }
-    if (callbackId != null && callbackId.isNotEmpty) {
-      unawaited(_sip.updateCallbackStatus(callbackId, 'completed'));
     }
     _activeCallNumber = number;
     _callWasAnswered = false;
@@ -1442,14 +1750,19 @@ class _DialpadScreenState extends State<DialpadScreen>
       children: [
         _buildProfileCard(cs),
         const SizedBox(height: AppSpacing.lg),
+        const SectionHeader('Account'),
+        _buildAccountCard(cs),
+        const SizedBox(height: AppSpacing.lg),
         const SectionHeader('Appearance'),
         _buildAppearanceCard(cs),
         const SizedBox(height: AppSpacing.lg),
         const SectionHeader('Agent Status'),
         _buildAgentStatusCard(cs),
-        const SizedBox(height: AppSpacing.lg),
-        const SectionHeader('Break'),
-        _buildBreakCard(cs),
+        if (_isBreaksEnabled) ...[
+          const SizedBox(height: AppSpacing.lg),
+          const SectionHeader('Break'),
+          _buildBreakCard(cs),
+        ],
         const SizedBox(height: AppSpacing.xl),
         _buildLogoutCard(cs),
         const SizedBox(height: AppSpacing.md),
@@ -1767,6 +2080,62 @@ class _DialpadScreenState extends State<DialpadScreen>
   // Appearance
   // ---------------------------------------------------------------------
 
+  Widget _buildAccountCard(ColorScheme cs) {
+    final campaign = UserData.campaignName();
+    final campaignId = UserData.campaign();
+    final userId = UserData.userId();
+    final admin = UserData.adminUser();
+    final expiry = UserData.expiryDate();
+    final masking = UserData.isNumberMasking();
+    return SettingsCard(
+      children: [
+        if (userId.isNotEmpty)
+          SettingsRow(
+            icon: Icons.badge_outlined,
+            iconColor: cs.primary,
+            title: 'User ID',
+            value: userId,
+          ),
+        if (campaign.isNotEmpty) ...[
+          const SizedBox(height: AppSpacing.sm),
+          SettingsRow(
+            icon: Icons.campaign_outlined,
+            iconColor: cs.primary,
+            title: 'Campaign',
+            value: campaignId.isNotEmpty && campaignId != campaign
+                ? '$campaign ($campaignId)'
+                : campaign,
+          ),
+        ],
+        if (admin.isNotEmpty) ...[
+          const SizedBox(height: AppSpacing.sm),
+          SettingsRow(
+            icon: Icons.admin_panel_settings_outlined,
+            iconColor: cs.primary,
+            title: 'Admin',
+            value: admin,
+          ),
+        ],
+        if (expiry != null && expiry.isNotEmpty) ...[
+          const SizedBox(height: AppSpacing.sm),
+          SettingsRow(
+            icon: Icons.event_outlined,
+            iconColor: cs.primary,
+            title: 'Plan Expiry',
+            value: expiry,
+          ),
+        ],
+        const SizedBox(height: AppSpacing.sm),
+        SettingsRow(
+          icon: Icons.security_rounded,
+          iconColor: cs.primary,
+          title: 'Number Masking',
+          value: masking ? 'On' : 'Off',
+        ),
+      ],
+    );
+  }
+
   Widget _buildAppearanceCard(ColorScheme cs) {
     return SettingsCard(
       children: [
@@ -1917,7 +2286,7 @@ class _DialpadScreenState extends State<DialpadScreen>
         Text(
           _activeCallNumber.isEmpty
               ? 'Unknown'
-              : _stripCountryCode(_activeCallNumber),
+              : UserData.maskNumber(_stripCountryCode(_activeCallNumber)),
           style: TextStyle(
             fontSize: 28,
             fontWeight: FontWeight.w700,
@@ -1949,7 +2318,29 @@ class _DialpadScreenState extends State<DialpadScreen>
             ],
           ),
         ),
-        if (_isShowingKeypad) ...[
+        if (_conferenceStatus) ...[
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+            decoration: BoxDecoration(
+              color: Colors.orange.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Text(
+              _isMerged ? 'Merged' : 'Conference',
+              style: TextStyle(
+                fontSize: 13,
+                color: Colors.orange,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+        if (_showConferenceKeypad) ...[
+          const SizedBox(height: 16),
+          _buildConferenceKeypad(isWide: isWide),
+          const Spacer(flex: 2),
+        ] else if (_isShowingKeypad) ...[
           const SizedBox(height: 16),
           SizedBox(
             height: 260,
@@ -1975,31 +2366,32 @@ class _DialpadScreenState extends State<DialpadScreen>
           ),
         ),
         const SizedBox(height: 16),
-        Center(
-          child: GestureDetector(
-            onTap: _endCall,
-            child: Container(
-              width: 72,
-              height: 72,
-              decoration: BoxDecoration(
-                color: cs.error,
-                shape: BoxShape.circle,
-                boxShadow: [
-                  BoxShadow(
-                    color: cs.error.withValues(alpha: 0.4),
-                    blurRadius: 20,
-                    offset: const Offset(0, 6),
-                  ),
-                ],
-              ),
-              child: const Icon(
-                Icons.call_end_rounded,
-                color: Colors.white,
-                size: 32,
+        if (!_showConferenceKeypad)
+          Center(
+            child: GestureDetector(
+              onTap: _endCall,
+              child: Container(
+                width: 72,
+                height: 72,
+                decoration: BoxDecoration(
+                  color: cs.error,
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: cs.error.withValues(alpha: 0.4),
+                      blurRadius: 20,
+                      offset: const Offset(0, 6),
+                    ),
+                  ],
+                ),
+                child: const Icon(
+                  Icons.call_end_rounded,
+                  color: Colors.white,
+                  size: 32,
+                ),
               ),
             ),
           ),
-        ),
         const SizedBox(height: 32),
       ],
     );
@@ -2171,6 +2563,19 @@ class _DialpadScreenState extends State<DialpadScreen>
       onPressed: null,
     );
 
+    Widget addCall() => _CallControlButton(
+      icon: Icons.person_add_alt_1_rounded,
+      label: 'Add Call',
+      isOnDark: isVideo,
+      onPressed: () {
+        setState(() {
+          _showConferenceKeypad = true;
+          _conferenceNumber = '';
+          _isShowingKeypad = false;
+        });
+      },
+    );
+
     final List<Widget> row1;
     final List<Widget> row2;
     if (isVideo) {
@@ -2197,10 +2602,36 @@ class _DialpadScreenState extends State<DialpadScreen>
         mute(),
         speaker(),
       ];
-      row2 = [hold(), keypad(), transfer(), record()];
+      row2 = [hold(), keypad(), transfer(), addCall()];
+    } else if (_conferenceStatus) {
+      // During an active conference the main-call controls are replaced by
+      // conference controls: Merge once the participant is connected, and
+      // hold/transfer stay available once merged.
+      row1 = [
+        _CallControlButton(
+          icon: Icons.call_merge_rounded,
+          label: 'Merge',
+          disabled: !_conferenceConnected || _isMerged,
+          isActive: _isMerged,
+          isOnDark: isVideo,
+          onPressed: _mergeConference,
+        ),
+        mute(),
+        speaker(),
+      ];
+      row2 = [
+        hold(),
+        _CallControlButton(
+          icon: Icons.person_remove_rounded,
+          label: 'Leave',
+          isOnDark: isVideo,
+          onPressed: _disconnectConference,
+        ),
+        keypad(),
+      ];
     } else {
       row1 = [mute(), transfer(), speaker()];
-      row2 = [hold(), record(), keypad()];
+      row2 = [hold(), record(), keypad(), addCall()];
     }
 
     Widget row(List<Widget> items) {
@@ -2263,6 +2694,146 @@ class _DialpadScreenState extends State<DialpadScreen>
   Widget _buildDtmfRow(List<String> keys) {
     return Expanded(
       child: Row(children: keys.map((key) => _buildDtmfKey(key)).toList()),
+    );
+  }
+
+  Widget _buildConferenceKeypad({required bool isWide}) {
+    final cs = Theme.of(context).colorScheme;
+    return Padding(
+      padding: EdgeInsets.symmetric(horizontal: isWide ? 120 : 32),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Align(
+            alignment: Alignment.centerRight,
+            child: IconButton(
+              icon: const Icon(Icons.close_rounded),
+              onPressed: () {
+                setState(() => _showConferenceKeypad = false);
+              },
+              color: cs.onSurface.withValues(alpha: 0.6),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Expanded(
+                  child: Center(
+                    child: Text(
+                      _conferenceNumber.isEmpty
+                          ? 'Enter number'
+                          : _conferenceNumber,
+                      style: TextStyle(
+                        fontSize: 30,
+                        fontWeight: FontWeight.w600,
+                        color: _conferenceNumber.isEmpty
+                            ? cs.onSurface.withValues(alpha: 0.35)
+                            : cs.onSurface,
+                        letterSpacing: 2,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                ),
+                if (_conferenceNumber.isNotEmpty)
+                  IconButton(
+                    icon: const Icon(Icons.backspace_outlined),
+                    onPressed: () => setState(
+                      () => _conferenceNumber = _conferenceNumber.substring(
+                        0,
+                        _conferenceNumber.length - 1,
+                      ),
+                    ),
+                    color: cs.onSurface.withValues(alpha: 0.6),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            height: 200,
+            child: Column(
+              children: [
+                _buildConfDialRow(['1', '2', '3']),
+                _buildConfDialRow(['4', '5', '6']),
+                _buildConfDialRow(['7', '8', '9']),
+                _buildConfDialRow(['*', '0', '#']),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          GestureDetector(
+            onTap: _conferenceNumber.isNotEmpty ? _startConferenceCall : null,
+            child: Container(
+              width: 56,
+              height: 56,
+              decoration: BoxDecoration(
+                color: _conferenceNumber.isNotEmpty
+                    ? Colors.green
+                    : cs.onSurface.withValues(alpha: 0.12),
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.green.withValues(
+                      alpha: _conferenceNumber.isNotEmpty ? 0.4 : 0,
+                    ),
+                    blurRadius: 12,
+                    offset: const Offset(0, 6),
+                  ),
+                ],
+              ),
+              child: const Icon(Icons.call_rounded, color: Colors.white, size: 24),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildConfDialRow(List<String> keys) {
+    return Expanded(
+      child: Row(
+        children: keys
+            .map(
+              (d) => Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.all(4),
+                  child: Material(
+                    color: Colors.white.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(14),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(14),
+                      onTap: () {
+                        if (_conferenceNumber.length < 15) {
+                          setState(() => _conferenceNumber += d);
+                        }
+                      },
+                      child: Container(
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.1),
+                          ),
+                        ),
+                        child: Text(
+                          d,
+                          style: const TextStyle(
+                            fontSize: 24,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            )
+            .toList(),
+      ),
     );
   }
 }
@@ -2402,22 +2973,83 @@ const _dispositionOptions = [
   'DND',
 ];
 
+class _DispositionResult {
+  const _DispositionResult({
+    required this.disposition,
+    this.followUpDisposition,
+  });
+
+  final String disposition;
+  final Map<String, dynamic>? followUpDisposition;
+}
+
 class _DispositionSheet extends StatefulWidget {
-  const _DispositionSheet({required this.bridgeId, required this.number});
+  const _DispositionSheet({
+    required this.bridgeId,
+    required this.number,
+    required this.options,
+  });
 
   final String bridgeId;
   final String number;
+  final List<String> options;
 
   @override
   State<_DispositionSheet> createState() => _DispositionSheetState();
 }
 
 class _DispositionSheetState extends State<_DispositionSheet> {
-  String _selected = 'Auto Disposed';
+  late String _selected;
+
+  static final RegExp _followUpPattern = RegExp(
+    r'follow.?up|callback|call.?back',
+    caseSensitive: false,
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    _selected = widget.options.isNotEmpty
+        ? widget.options.first
+        : 'Auto Disposed';
+  }
+
+  bool _isFollowUpAction(String action) => _followUpPattern.hasMatch(action);
+
+  Future<void> _save() async {
+    if (!_isFollowUpAction(_selected)) {
+      Navigator.of(context).pop(_DispositionResult(disposition: _selected));
+      return;
+    }
+
+    final callback = await showScheduleCallbackSheet(
+      context,
+      number: widget.number,
+    );
+    if (callback == null) return;
+    if (!mounted) return;
+
+    final username = UserData.username();
+    final campaign = UserData.campaign();
+    Navigator.of(context).pop(
+      _DispositionResult(
+        disposition: _selected,
+        followUpDisposition: {
+          'date': callback['date'],
+          'time': callback['time'],
+          'comment': callback['details'],
+          'user': username,
+          'campaignID': campaign,
+          'phoneNumber': widget.number,
+        },
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final followUpSelected = _isFollowUpAction(_selected);
     return Container(
       decoration: BoxDecoration(
         color: cs.surface,
@@ -2462,6 +3094,35 @@ class _DispositionSheetState extends State<_DispositionSheet> {
                 color: cs.onSurface.withValues(alpha: 0.55),
               ),
             ),
+            if (followUpSelected) ...[
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 8,
+                ),
+                decoration: BoxDecoration(
+                  color: cs.primary.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.schedule_rounded, size: 16, color: cs.primary),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'A callback will be scheduled with this disposition.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: cs.primary,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             const SizedBox(height: 16),
             Flexible(
               child: RadioGroup<String>(
@@ -2474,7 +3135,7 @@ class _DispositionSheetState extends State<_DispositionSheet> {
                 child: ListView(
                   shrinkWrap: true,
                   children: [
-                    for (final option in _dispositionOptions)
+                    for (final option in widget.options)
                       RadioListTile<String>(
                         value: option,
                         title: Text(
@@ -2498,7 +3159,7 @@ class _DispositionSheetState extends State<_DispositionSheet> {
             SizedBox(
               width: double.infinity,
               child: FilledButton(
-                onPressed: () => Navigator.of(context).pop(_selected),
+                onPressed: _save,
                 child: const Padding(
                   padding: EdgeInsets.symmetric(vertical: 12),
                   child: Text('Save Disposition'),
@@ -2761,4 +3422,111 @@ Widget _sheetHeader({
       ),
     ],
   );
+}
+
+class _FollowUpEntry {
+  const _FollowUpEntry({
+    required this.item,
+    required this.phone,
+    required this.comment,
+    required this.status,
+    required this.callbackId,
+    required this.scheduledAt,
+    required this.isAlert,
+    required this.isActive,
+  });
+
+  final dynamic item;
+  final String phone;
+  final String comment;
+  final String status;
+  final String callbackId;
+  final DateTime? scheduledAt;
+  final bool isAlert;
+  final bool isActive;
+}
+
+class _FollowUpTabBar extends StatelessWidget {
+  const _FollowUpTabBar({
+    required this.tabs,
+    required this.selectedIndex,
+    required this.counts,
+    required this.onSelected,
+  });
+
+  final List<String> tabs;
+  final int selectedIndex;
+  final Map<String, int> counts;
+  final ValueChanged<int> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(AppRadii.lg),
+      ),
+      child: Row(
+        children: [
+          for (var i = 0; i < tabs.length; i++)
+            Expanded(
+              child: InkWell(
+                onTap: () => onSelected(i),
+                borderRadius: BorderRadius.circular(AppRadii.md),
+                child: AnimatedContainer(
+                  duration: AppMotion.fast,
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  decoration: BoxDecoration(
+                    color: i == selectedIndex ? cs.primary : Colors.transparent,
+                    borderRadius: BorderRadius.circular(AppRadii.md),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        tabs[i],
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: i == selectedIndex
+                              ? cs.onPrimary
+                              : cs.onSurface.withValues(alpha: 0.6),
+                        ),
+                      ),
+                      if ((counts[tabs[i]] ?? 0) > 0) ...[
+                        const SizedBox(width: 5),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 1,
+                          ),
+                          decoration: BoxDecoration(
+                            color: i == selectedIndex
+                                ? cs.onPrimary.withValues(alpha: 0.2)
+                                : cs.primary.withValues(alpha: 0.12),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Text(
+                            '${counts[tabs[i]]}',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w800,
+                              color: i == selectedIndex
+                                  ? cs.onPrimary
+                                  : cs.primary,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
 }
