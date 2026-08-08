@@ -1801,6 +1801,14 @@ class SipSocketService implements sip.SipUaHelperListener {
   }
 
   Future<bool> sendUserReady() async {
+    final prefs = await SharedPreferences.getInstance();
+    final selectedBreak = prefs.getString('selectedBreak');
+    final isOnBreak =
+        selectedBreak != null && selectedBreak.isNotEmpty && selectedBreak != 'Break';
+    if (isOnBreak) {
+      return false;
+    }
+
     for (var attempt = 1; attempt <= 3; attempt++) {
       try {
         final username = await _resolveApiUsername();

@@ -217,9 +217,12 @@ class _DialpadScreenState extends State<DialpadScreen>
           final isQueueFallback = event['fromQueue'] == true;
 
           // Never surface the incoming call screen while on break: reject any
-          // real SIP session (so it stops ringing) and ignore queue fallbacks.
+          // real SIP session (so it stops ringing), but ignore queue fallbacks
+          // so the caller stays in the queue (rejecting would hang it up).
           if (_currentBreak != null) {
-            await _sip.rejectCall();
+            if (!isQueueFallback) {
+              await _sip.rejectCall();
+            }
             break;
           }
 
