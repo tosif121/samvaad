@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:sip_ua/sip_ua.dart' as sip;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/sip_credentials.dart';
+import '../models/call_log_entry.dart';
 import 'remote_audio_stub.dart'
     if (dart.library.html) 'remote_audio_web.dart';
 import 'call_lifecycle_service.dart';
@@ -24,6 +25,11 @@ enum SipEvent {
   connectionLost,
   connectionRestored,
   streamAdded,
+  queueUpdated,
+  agentStatusChanged,
+  missedCallsUpdated,
+  followUpsUpdated,
+  recentCallsUpdated,
 }
 
 class SipSocketService implements sip.SipUaHelperListener {
@@ -51,6 +57,27 @@ class SipSocketService implements sip.SipUaHelperListener {
   bool _isHeld = false;
   dynamic _localStream;
   dynamic _remoteStream;
+
+  int _queueCount = 0;
+  List<dynamic> _currentCallqueue = [];
+  String _agentStatus = '';
+  String _lastQueueCallers = '';
+  String _lastFollowUpsJson = '';
+  String _bridgeID = '';
+
+  List<dynamic> _missedCalls = [];
+  List<dynamic> _followUps = [];
+  List<dynamic> _breakOptions = [];
+  List<CallLogEntry> _recentCalls = [];
+
+  int get queueCount => _queueCount;
+  List<dynamic> get currentCallqueue => _currentCallqueue;
+  String get agentStatus => _agentStatus;
+  String get bridgeID => _bridgeID;
+  List<dynamic> get missedCalls => _missedCalls;
+  List<dynamic> get followUps => _followUps;
+  List<dynamic> get breakOptions => _breakOptions;
+  List<CallLogEntry> get recentCalls => _recentCalls;
 
   bool _connecting = false;
   bool _wasStarted = false;
@@ -263,6 +290,30 @@ class SipSocketService implements sip.SipUaHelperListener {
         );
       } catch (_) {}
     }
+    await _loadBreakOptions();
+  }
+
+  /// Loads the agent's configurable break options from the login token
+  /// payload (`userData.breakoptions`) like the webphone does.
+  Future<void> _loadBreakOptions() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final tokenStr = prefs.getString('token');
+      if (tokenStr != null && tokenStr.isNotEmpty) {
+        final decoded = jsonDecode(tokenStr);
+        if (decoded is Map) {
+          final userData = decoded['userData'];
+          if (userData is Map) {
+            final options = userData['breakoptions'];
+            if (options is List && options.isNotEmpty) {
+              _breakOptions = options;
+            }
+          }
+        }
+      }
+    } catch (e) {
+      _log('Error loading break options: $e');
+    }
   }
 
   Future<void> saveCredentials(SipCredentials creds) async {
@@ -299,6 +350,8 @@ class SipSocketService implements sip.SipUaHelperListener {
         _emit(SipEvent.registered);
         unawaited(sendUserReady());
         _startHeartbeatTimer();
+        unawaited(fetchMissedCalls());
+        unawaited(fetchRecentCalls());
         break;
       case sip.RegistrationStateEnum.UNREGISTERED:
         _log('SIP UNREGISTERED');
@@ -344,7 +397,7 @@ class SipSocketService implements sip.SipUaHelperListener {
   @override
   void callStateChanged(sip.Call call, sip.CallState state) {
     _log('callStateChanged: ${state.state} for call ID: ${call.id}'
-        ' | direction=${call.direction} | sessionState=${call.session?.state}');
+        ' | direction=${call.direction} | sessionState=${call.session.state}');
     if (state.state == sip.CallStateEnum.CALL_INITIATION || _activeCall == null) {
       _activeCall = call;
     }
@@ -531,6 +584,7 @@ class SipSocketService implements sip.SipUaHelperListener {
     _isLocalVideoMuted = false;
     _isSpeakerOn = false;
     _isHeld = false;
+    _bridgeID = '';
     _remoteStream = null;
     _activeCall = null;
     _pendingPushCallId = null;
@@ -608,7 +662,7 @@ class SipSocketService implements sip.SipUaHelperListener {
       _log('Before call.answer() - options: $options');
       call.answer(options);
       _log('After call.answer() - success'
-          ' | sessionState=${call.session?.state} | call.state=${call.state}');
+          ' | sessionState=${call.session.state} | call.state=${call.state}');
       _isAnswering = false;
     } catch (e) {
       _log('answerCall failed: $e');
@@ -951,6 +1005,44 @@ class SipSocketService implements sip.SipUaHelperListener {
     };
   }
 
+  /// Resolves the canonical `user@admin` username used by the REST APIs.
+  /// The SIP/WebSocket layer uses the dash form (`demo-surya`) while every
+  /// backend API keyed on `user.split("@")` needs the `demo@surya` form, so
+  /// we must not trust what was typed at login time.
+  String _normalizeToApiFormat(String s) {
+    if (s.isEmpty || s.contains('@')) return s;
+    final idx = s.indexOf('-');
+    if (idx > 0) return '${s.substring(0, idx)}@${s.substring(idx + 1)}';
+    return s;
+  }
+
+  Future<String> _resolveApiUsername() async {
+    final prefs = await SharedPreferences.getInstance();
+    final tokenStr = prefs.getString('token');
+    if (tokenStr != null && tokenStr.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(tokenStr);
+        if (decoded is Map) {
+          final userData = decoded['userData'];
+          if (userData is Map) {
+            final u = userData['username'];
+            if (u != null && u.toString().isNotEmpty) {
+              return _normalizeToApiFormat(u.toString());
+            }
+          }
+          final u = decoded['username'];
+          if (u != null && u.toString().isNotEmpty) {
+            return _normalizeToApiFormat(u.toString());
+          }
+        }
+      } catch (_) {}
+    }
+    final saved = prefs.getString('savedUsername') ?? '';
+    if (saved.isNotEmpty) return _normalizeToApiFormat(saved);
+    final cred = _credentials?.displayName ?? _credentials?.username ?? '';
+    return _normalizeToApiFormat(cred);
+  }
+
   Future<void> clearRejectedCallFromAgent(String callerNumber) async {
     try {
       final cleanNum = callerNumber.replaceAll('+', '').trim();
@@ -965,6 +1057,174 @@ class SipSocketService implements sip.SipUaHelperListener {
       _log('clearRejectedCallFromAgent response: ${response.body}');
     } catch (e) {
       _log('Error calling clearRejectedCallFromAgent: $e');
+    }
+  }
+
+  /// Fetches the server-side missed/dropped calls list for this agent
+  /// (`POST /userMissedCalls/{username}`), like the webphone does.
+  Future<List<dynamic>> fetchMissedCalls() async {
+    try {
+      final username = await _resolveApiUsername();
+      if (username.isEmpty) return _missedCalls;
+      _log('Fetching missed calls for $username...');
+      final headers = await _getAuthHeaders();
+      final response = await http.post(
+        Uri.parse('https://devapp.iotcom.io/userMissedCalls/$username'),
+        headers: headers,
+        body: jsonEncode({}),
+      ).timeout(const Duration(seconds: 8));
+      final data = jsonDecode(response.body);
+      final result = data is Map ? data['result'] : null;
+      if (result is List) {
+        _missedCalls = result;
+        _emit(SipEvent.missedCallsUpdated, data: {'count': result.length});
+      }
+    } catch (e) {
+      _log('Error fetching missed calls: $e');
+    }
+    return _missedCalls;
+  }
+
+  /// Fetches the agent's recent call records from `POST /reports/calls/byAgent`
+  /// (agent + last 30 days) and maps them into [CallLogEntry] list.
+  Future<List<CallLogEntry>> fetchRecentCalls() async {
+    try {
+      final username = await _resolveApiUsername();
+      if (username.isEmpty) return _recentCalls;
+      _log('Fetching recent calls for $username...');
+      final headers = await _getAuthHeaders();
+      final now = DateTime.now();
+      final startDate = now.subtract(const Duration(days: 30));
+      final response = await http.post(
+        Uri.parse('https://devapp.iotcom.io/reports/calls/byAgent'),
+        headers: headers,
+        body: jsonEncode({
+          'startDate': _formatDate(startDate),
+          'endDate': _formatDate(now),
+          'agentName': username,
+        }),
+      ).timeout(const Duration(seconds: 10));
+      final data = jsonDecode(response.body);
+      final result = data is Map ? data['result'] : null;
+      if (result is List) {
+        final mapped = result.map(_callRecordToEntry).toList()
+          ..sort((a, b) => b.startedAt.compareTo(a.startedAt));
+        _recentCalls = mapped;
+        _emit(SipEvent.recentCallsUpdated, data: {'count': mapped.length});
+      }
+    } catch (e) {
+      _log('Error fetching recent calls: $e');
+    }
+    return _recentCalls;
+  }
+
+  String _formatDate(DateTime d) {
+    final m = d.month.toString().padLeft(2, '0');
+    final day = d.day.toString().padLeft(2, '0');
+    return '${d.year}-$m-$day';
+  }
+
+  CallLogEntry _callRecordToEntry(dynamic record) {
+    final map = record is Map ? Map<dynamic, dynamic>.from(record) : {};
+    String field(String key) {
+      final v = map[key];
+      return v?.toString() ?? '';
+    }
+
+    var number = field('Caller');
+    if (number.isEmpty) number = field('contactNumber');
+    if (number.isEmpty) number = field('dialNumber');
+    if (number.isEmpty) number = field('DestinationNumber');
+
+    var type = field('Type');
+    if (type.isEmpty) type = field('callType');
+
+    final direction = type.toLowerCase().contains('incoming')
+        ? CallLogDirection.incoming
+        : CallLogDirection.outgoing;
+
+    final startRaw = field('startTime');
+    DateTime? start;
+    if (startRaw.isNotEmpty) {
+      final ms = int.tryParse(startRaw);
+      if (ms != null) {
+        start = DateTime.fromMillisecondsSinceEpoch(ms).toLocal();
+      } else {
+        start = DateTime.tryParse(startRaw)?.toLocal();
+      }
+    }
+    start ??= DateTime.now();
+
+    var durationSec = 0;
+    final durRaw = field('duration');
+    final durNum = int.tryParse(durRaw);
+    if (durNum != null) {
+      durationSec = durNum;
+    } else {
+      final ansRaw = field('anstime');
+      final endRaw = field('hanguptime');
+      final ansMs = int.tryParse(ansRaw);
+      final endMs = int.tryParse(endRaw);
+      if (ansMs != null && endMs != null && endMs > ansMs) {
+        durationSec = (endMs - ansMs) ~/ 1000;
+      }
+    }
+
+    final bridgeId = field('bridgeID');
+    return CallLogEntry(
+      id: bridgeId.isNotEmpty ? bridgeId : '${start.millisecondsSinceEpoch}_$number',
+      number: number,
+      direction: direction,
+      source: field('campaign').isEmpty ? 'Server' : field('campaign'),
+      startedAt: start,
+      durationSec: durationSec,
+      bridgeId: bridgeId.isEmpty ? null : bridgeId,
+    );
+  }
+
+  /// Calls back a missed/dropped caller via `POST /dialmissedcall`.
+  Future<bool> dialMissedCall(String receiver) async {
+    try {
+      final cleanNum = receiver.replaceAll('+', '').trim();
+      if (cleanNum.isEmpty) return false;
+      _log('Calling back missed caller $cleanNum...');
+      shouldAutoAnswerNextCall = true;
+      final headers = await _getAuthHeaders();
+      final response = await http.post(
+        Uri.parse('https://devapp.iotcom.io/dialmissedcall'),
+        headers: headers,
+        body: jsonEncode({'receiver': cleanNum}),
+      ).timeout(const Duration(seconds: 10));
+      _log('/dialmissedcall response (${response.statusCode}): ${response.body}');
+      final data = jsonDecode(response.body);
+      if (data is Map && data['success'] == true) {
+        final callId = data['CallID'];
+        if (callId != null && callId.toString().isNotEmpty) {
+          _bridgeID = callId.toString();
+        }
+        return true;
+      }
+      shouldAutoAnswerNextCall = false;
+    } catch (e) {
+      shouldAutoAnswerNextCall = false;
+      _log('Error calling /dialmissedcall: $e');
+    }
+    return false;
+  }
+
+  /// Marks a scheduled follow-up callback as complete on the backend
+  /// (`POST /callback/update-status`).
+  Future<void> updateCallbackStatus(String callbackId, String status) async {
+    try {
+      _log('Updating callback $callbackId → $status...');
+      final headers = await _getAuthHeaders();
+      await http.post(
+        Uri.parse('https://devapp.iotcom.io/callback/update-status'),
+        headers: headers,
+        body: jsonEncode({'callbackId': callbackId, 'status': status}),
+      ).timeout(const Duration(seconds: 5));
+    } catch (e) {
+      _log('Error updating callback status: $e');
     }
   }
 
@@ -986,22 +1246,7 @@ class SipSocketService implements sip.SipUaHelperListener {
 
   Future<Map<String, dynamic>?> sendUserconnection() async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      var savedUser = prefs.getString('savedUsername') ?? '';
-      if (savedUser.isEmpty) {
-        final tokenStr = prefs.getString('token');
-        if (tokenStr != null && tokenStr.isNotEmpty) {
-          try {
-            final decoded = jsonDecode(tokenStr);
-            if (decoded is Map) {
-              savedUser = (decoded['userData']?['username'] ?? decoded['username'] ?? '').toString();
-            }
-          } catch (_) {}
-        }
-      }
-      final username = savedUser.isNotEmpty
-          ? savedUser
-          : (_credentials?.displayName ?? _credentials?.username ?? '');
+      final username = await _resolveApiUsername();
       if (username.isEmpty) return null;
       _log('Sending /userconnection check for $username...');
       final headers = await _getAuthHeaders();
@@ -1019,27 +1264,65 @@ class SipSocketService implements sip.SipUaHelperListener {
     return null;
   }
 
+  /// Processes the /userconnection poll response the same way the webphone does:
+  /// updates the queue count/badge, tracks the agent status, and rings as a
+  /// fallback when a queued call for this agent's campaign is visible but the
+  /// SIP INVITE/FCM path has not surfaced it yet.
+  void _processUserconnection(Map<String, dynamic> data) {
+    final count = data['currentCallqueueCount'];
+    if (count is int && count != _queueCount) {
+      _queueCount = count;
+      _emit(SipEvent.queueUpdated, data: {'count': count});
+    }
+
+    final status = data['status'];
+    if (status is String && status != _agentStatus) {
+      _agentStatus = status;
+      _emit(SipEvent.agentStatusChanged, data: {'status': status});
+    }
+
+    final followUps = data['followUpDispoes'];
+    if (followUps is List) {
+      final followUpsJson = followUps.join();
+      if (followUpsJson != _lastFollowUpsJson) {
+        _lastFollowUpsJson = followUpsJson;
+        _followUps = followUps;
+        _emit(SipEvent.followUpsUpdated, data: {'count': followUps.length});
+      }
+    }
+
+    final queue = data['currentCallqueue'];
+    if (queue is List) {
+      _currentCallqueue = queue;
+      final callers = queue
+          .map((c) => (c is Map ? (c['Caller'] ?? '') : '').toString())
+          .join(',');
+      final changed = callers != _lastQueueCallers;
+      _lastQueueCallers = callers;
+
+      if (changed &&
+          callers.isNotEmpty &&
+          _callState == CallState.idle &&
+          _activeCall == null) {
+        final first = queue.first;
+        final caller = first is Map ? (first['Caller'] ?? '').toString() : '';
+        if (caller.isNotEmpty) {
+          _log('Queue fallback ring for caller $caller');
+          _emit(SipEvent.incomingCall, data: {
+            'number': caller,
+            'fromQueue': true,
+          });
+        }
+      }
+    }
+  }
+
   Future<Map<String, dynamic>?> fetchUserOnCall(
     String phoneNumber, {
     String? leadLockToken,
   }) async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      var savedUser = prefs.getString('savedUsername') ?? '';
-      if (savedUser.isEmpty) {
-        final tokenStr = prefs.getString('token');
-        if (tokenStr != null && tokenStr.isNotEmpty) {
-          try {
-            final decoded = jsonDecode(tokenStr);
-            if (decoded is Map) {
-              savedUser = (decoded['userData']?['username'] ?? decoded['username'] ?? '').toString();
-            }
-          } catch (_) {}
-        }
-      }
-      final username = savedUser.isNotEmpty
-          ? savedUser
-          : (_credentials?.displayName ?? _credentials?.username ?? '');
+      final username = await _resolveApiUsername();
       if (username.isEmpty) return null;
       _log('Sending /useroncall/$username for $phoneNumber...');
       final headers = await _getAuthHeaders();
@@ -1068,22 +1351,7 @@ class SipSocketService implements sip.SipUaHelperListener {
     bool isMerged = false,
   }) async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      var savedUser = prefs.getString('savedUsername') ?? '';
-      if (savedUser.isEmpty) {
-        final tokenStr = prefs.getString('token');
-        if (tokenStr != null && tokenStr.isNotEmpty) {
-          try {
-            final decoded = jsonDecode(tokenStr);
-            if (decoded is Map) {
-              savedUser = (decoded['userData']?['username'] ?? decoded['username'] ?? '').toString();
-            }
-          } catch (_) {}
-        }
-      }
-      final username = savedUser.isNotEmpty
-          ? savedUser
-          : (_credentials?.displayName ?? _credentials?.username ?? '');
+      final username = await _resolveApiUsername();
       if (username.isEmpty) return;
       _log('Sending /user/callended$username...');
       final headers = await _getAuthHeaders();
@@ -1111,22 +1379,7 @@ class SipSocketService implements sip.SipUaHelperListener {
     bool autoDialDisabled = false,
   }) async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      var savedUser = prefs.getString('savedUsername') ?? '';
-      if (savedUser.isEmpty) {
-        final tokenStr = prefs.getString('token');
-        if (tokenStr != null && tokenStr.isNotEmpty) {
-          try {
-            final decoded = jsonDecode(tokenStr);
-            if (decoded is Map) {
-              savedUser = (decoded['userData']?['username'] ?? decoded['username'] ?? '').toString();
-            }
-          } catch (_) {}
-        }
-      }
-      final username = savedUser.isNotEmpty
-          ? savedUser
-          : (_credentials?.displayName ?? _credentials?.username ?? '');
+      final username = await _resolveApiUsername();
       if (username.isEmpty) return;
       _log('Submitting /user/disposition$username...');
       final headers = await _getAuthHeaders();
@@ -1151,22 +1404,7 @@ class SipSocketService implements sip.SipUaHelperListener {
 
   Future<void> setAgentBreak(String breakType) async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      var savedUser = prefs.getString('savedUsername') ?? '';
-      if (savedUser.isEmpty) {
-        final tokenStr = prefs.getString('token');
-        if (tokenStr != null && tokenStr.isNotEmpty) {
-          try {
-            final decoded = jsonDecode(tokenStr);
-            if (decoded is Map) {
-              savedUser = (decoded['userData']?['username'] ?? decoded['username'] ?? '').toString();
-            }
-          } catch (_) {}
-        }
-      }
-      final username = savedUser.isNotEmpty
-          ? savedUser
-          : (_credentials?.displayName ?? _credentials?.username ?? '');
+      final username = await _resolveApiUsername();
       if (username.isEmpty) return;
       _log('Setting agent break $breakType for $username...');
       final headers = await _getAuthHeaders();
@@ -1180,12 +1418,40 @@ class SipSocketService implements sip.SipUaHelperListener {
     }
   }
 
+  Future<void> removeAgentBreak() async {
+    try {
+      final username = await _resolveApiUsername();
+      if (username.isEmpty) return;
+      _log('Removing agent break for $username...');
+      final headers = await _getAuthHeaders();
+      await http.post(
+        Uri.parse('https://devapp.iotcom.io/user/removebreakuser:$username'),
+        headers: headers,
+        body: jsonEncode({}),
+      ).timeout(const Duration(seconds: 5));
+    } catch (e) {
+      _log('Error in /user/removebreakuser: $e');
+    }
+  }
+
   Timer? _heartbeatTimer;
 
   void _startHeartbeatTimer() {
     _heartbeatTimer?.cancel();
-    _heartbeatTimer = Timer.periodic(const Duration(seconds: 10), (_) {
-      sendUserconnection();
+    var tick = 0;
+    _heartbeatTimer = Timer.periodic(const Duration(seconds: 10), (_) async {
+      tick++;
+      final data = await sendUserconnection();
+      if (data != null) {
+        _processUserconnection(data);
+      }
+      if (tick % 6 == 0) {
+        sendUserReady();
+      }
+      if (tick % 3 == 0) {
+        fetchMissedCalls();
+        fetchRecentCalls();
+      }
     });
   }
 
@@ -1194,37 +1460,34 @@ class SipSocketService implements sip.SipUaHelperListener {
     _heartbeatTimer = null;
   }
 
-  Future<void> sendUserReady() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      var savedUser = prefs.getString('savedUsername') ?? '';
-      if (savedUser.isEmpty) {
-        final tokenStr = prefs.getString('token');
-        if (tokenStr != null && tokenStr.isNotEmpty) {
-          try {
-            final decoded = jsonDecode(tokenStr);
-            if (decoded is Map) {
-              savedUser = (decoded['userData']?['username'] ?? decoded['username'] ?? '').toString();
-            }
-          } catch (_) {}
-        }
-      }
-      final username = savedUser.isNotEmpty
-          ? savedUser
-          : (_credentials?.displayName ?? _credentials?.username ?? '');
-      if (username.isEmpty) return;
+  Future<bool> sendUserReady() async {
+    for (var attempt = 1; attempt <= 3; attempt++) {
+      try {
+        final username = await _resolveApiUsername();
+        if (username.isEmpty) return false;
 
-      _log('Sending /userready/$username/Web...');
-      final headers = await _getAuthHeaders();
-      final response = await http.post(
-        Uri.parse('https://devapp.iotcom.io/userready/$username/Web'),
-        headers: headers,
-        body: jsonEncode({}),
-      ).timeout(const Duration(seconds: 5));
-      _log('/userready response (${response.statusCode}): ${response.body}');
-    } catch (e) {
-      _log('Error sending /userready: $e');
+        _log('Sending /userready/$username/Web...');
+        final headers = await _getAuthHeaders();
+        final response = await http.post(
+          Uri.parse('https://devapp.iotcom.io/userready/$username/Web'),
+          headers: headers,
+          body: jsonEncode({}),
+        ).timeout(const Duration(seconds: 5));
+        _log('/userready response (${response.statusCode}): ${response.body}');
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body);
+          if (data is Map && data['message'] == 'success') {
+            return true;
+          }
+        }
+      } catch (e) {
+        _log('Error sending /userready: $e');
+      }
+      if (attempt < 3) {
+        await Future.delayed(const Duration(milliseconds: 500));
+      }
     }
+    return false;
   }
 
   Future<bool> dialNumber(
@@ -1235,11 +1498,7 @@ class SipSocketService implements sip.SipUaHelperListener {
     bool? autoLeadDial,
   }) async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final savedUser = prefs.getString('savedUsername') ?? '';
-      final username = savedUser.isNotEmpty
-          ? savedUser
-          : (_credentials?.displayName ?? _credentials?.username ?? '');
+      final username = await _resolveApiUsername();
       if (username.isEmpty) {
         _log('dialNumber error: username is empty');
         return false;
@@ -1259,7 +1518,7 @@ class SipSocketService implements sip.SipUaHelperListener {
           'leadLockToken': leadLockToken,
         if (dialSource != null && dialSource.isNotEmpty)
           'dialSource': dialSource,
-        if (autoLeadDial != null) 'autoLeadDial': autoLeadDial,
+        'autoLeadDial': ?autoLeadDial,
       };
 
       var response = await http.post(
@@ -1289,6 +1548,11 @@ class SipSocketService implements sip.SipUaHelperListener {
       }
 
       if (data != null && data['success'] == true) {
+        final callId = data['CallID'];
+        if (callId != null && callId.toString().isNotEmpty) {
+          _bridgeID = callId.toString();
+          _log('Captured bridgeID from /dialnumber: $_bridgeID');
+        }
         return true;
       } else {
         shouldAutoAnswerNextCall = false;
@@ -1298,6 +1562,34 @@ class SipSocketService implements sip.SipUaHelperListener {
       _log('Error calling /dialnumber: $e');
     }
     return false;
+  }
+
+  /// Requests a transfer of the current call. The bridgeID is captured from the
+  /// /dialnumber response (outgoing calls); for inbound calls the backend assigns
+  /// a bridge that we may not know, so callers should disable the button when
+  /// [bridgeID] is empty.
+  Future<bool> requestTransfer() async {
+    final bridgeId = _bridgeID;
+    if (bridgeId.isEmpty) {
+      _log('requestTransfer skipped: no bridgeID known for current call');
+      return false;
+    }
+    try {
+      final username = await _resolveApiUsername();
+      if (username.isEmpty) return false;
+      _log('Requesting transfer for $username with bridgeID $bridgeId...');
+      final headers = await _getAuthHeaders();
+      final response = await http.post(
+        Uri.parse('https://devapp.iotcom.io/reqTransfer/$username'),
+        headers: headers,
+        body: jsonEncode({'bridgeID': bridgeId}),
+      ).timeout(const Duration(seconds: 10));
+      _log('/reqTransfer response: ${response.body}');
+      return response.statusCode == 200;
+    } catch (e) {
+      _log('Error calling /reqTransfer: $e');
+      return false;
+    }
   }
 
   Future<void> rejectCall([String? incomingNumber]) async {

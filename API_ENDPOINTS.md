@@ -4,6 +4,7 @@
 ```
 https://app.samvaad.io
 ```
+> **Note:** The Flutter app currently uses `https://devapp.iotcom.io` (see `lib/services/sip_socket_service.dart`).
 
 ## Authentication
 All authenticated endpoints require:
@@ -38,11 +39,16 @@ POST /userlogin/{username}
     "username": "string",
     "ExpiryDate": "ISO date string",
     "campaign": "string",
-    "uiPreferences": {}
+    "uiPreferences": {},
+    "breakoptions": [
+      { "value": "Lunch Break", "label": "Lunch Break", "type": "string", "name": "string", "id": "string" },
+      { "value": "General Break", "label": "Break" }
+    ]
   },
   "message": "success" | "wrong login info" | "User already login somewhere else"
 }
 ```
+> `breakoptions` drives the Take Break UI. Each option supplies a break **type** (`value`/`type`/`name`/`id`) and a display **label** (`label`/`name`/`title`/`value`/`type`). Falls back to `General Break` when absent.
 
 ### Logout
 ```http
@@ -107,6 +113,113 @@ POST /user/removebreakuser:{username}
 Headers: Authorization: Bearer {token}
 Body: {}
 ```
+
+### Set Break
+```http
+POST /user/breakuser:{username}
+Headers: Authorization: Bearer {token}
+Body: {
+  "breakType": "Lunch Break"
+}
+```
+> The route receives the user id with a leading `@` and strips it server-side — keep the colon form above. `breakType` values come from `userData.breakoptions`.
+
+---
+
+## 2.5 Missed Calls & Follow-ups
+
+### Fetch Missed Calls
+```http
+POST /userMissedCalls/{username}
+Headers: Authorization: Bearer {token}
+Body: {}
+```
+**Response:**
+```json
+{
+  "result": [
+    {
+      "Caller": "phone_number",
+      "startTime": "1712500000000",
+      "campaign": "string",
+      "anstime": "string",
+      "hanguptime": "string",
+      "Type": "string"
+    }
+  ]
+}
+```
+> `startTime` is an epoch-milliseconds string. The app polls this every 30 seconds and shows a badge for the current count.
+
+### Dial Back a Missed Call
+```http
+POST /dialmissedcall
+Headers: Authorization: Bearer {token}
+Body: {
+  "receiver": "phone_number"
+}
+```
+**Response:**
+```json
+{
+  "success": true,
+  "CallID": "bridgeID"
+}
+```
+**Purpose:** Calls back a missed caller. Server sends a SIP INVITE back to the agent (autodial); the app auto-answers and stores `CallID` as the bridge id.
+
+### Update Callback Status
+```http
+POST /callback/update-status
+Headers: Authorization: Bearer {token}
+Body: {
+  "callbackId": "string",
+  "status": "completed"
+}
+```
+**Purpose:** Marks a scheduled follow-up callback as completed (the callback `_id` from `followUpDispoes` in `/userconnection`).
+
+### Recent Call History
+```http
+POST /reports/calls/byAgent
+Headers: Authorization: Bearer {token}
+Body: {
+  "startDate": "YYYY-MM-DD",
+  "endDate": "YYYY-MM-DD",
+  "agentName": "username"
+}
+```
+**Response:**
+```json
+{
+  "result": [
+    {
+      "Caller": "phone_number",
+      "Type": "incoming" | "manualoutgoing",
+      "startTime": "epoch ms string",
+      "anstime": "string",
+      "hanguptime": "string",
+      "duration": "seconds",
+      "Disposition": "string",
+      "bridgeID": "string",
+      "campaign": "string",
+      "agent": "username",
+      "dialNumber": "string",
+      "contactNumber": "string",
+      "_id": "string",
+      "status": "string"
+    }
+  ],
+  "summary": {
+    "incomingCalls": 0,
+    "outgoingCalls": 0,
+    "totalCalls": 0,
+    "connectedCalls": 0,
+    "avgDurationSeconds": 0
+  }
+}
+```
+**Purpose:** Backs the Recent tab "Call History". The app requests the last 30 days, maps records to local log entries, and merges them with locally-logged calls (deduped by `bridgeID`, else number + minute). Refreshed on SIP registration and every 30s alongside missed calls. No server-side paging.
 
 ---
 
@@ -385,17 +498,21 @@ wss://{origin}/socket
 
 ## 12. Implementation Checklist for Flutter
 
-- [ ] Implement login API
-- [ ] Call /userready after login
-- [ ] Start periodic /userconnection check
-- [ ] Implement /dialnumber for outgoing calls
-- [ ] Handle SIP INVITE (autodial)
-- [ ] Call /useroncall when connected
-- [ ] Implement call timer
-- [ ] Call /user/callended when call ends
-- [ ] Auto-dispose with "Auto Disposed"
-- [ ] Handle connection errors
-- [ ] Implement SIP heartbeat
-- [ ] Handle incoming calls (if needed)
-- [ ] Implement hold/unhold
+- [x] Implement login API
+- [x] Call /userready after login
+- [x] Start periodic /userconnection check
+- [x] Implement /dialnumber for outgoing calls
+- [x] Handle SIP INVITE (autodial)
+- [x] Call /useroncall when connected
+- [x] Implement call timer
+- [x] Call /user/callended when call ends
+- [x] Auto-dispose with "Auto Disposed"
+- [x] Handle connection errors
+- [x] Implement SIP heartbeat
+- [x] Handle incoming calls
+- [x] Implement hold/unhold
 - [ ] Implement conference calls (optional)
+- [x] Implement break set/remove (dynamic options from token)
+- [x] Implement missed calls polling + call-back
+- [x] Implement follow-up callbacks
+- [x] Fetch recent call history from `/reports/calls/byAgent` (merged with local logs)

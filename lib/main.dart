@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'screens/login_screen.dart';
 import 'screens/dialpad_screen.dart';
@@ -11,9 +12,26 @@ const _secondaryColor = Color(0xFF00C853);
 const _errorColor = Color(0xFFFF5252);
 const _darkText = Color(0xFF1a1a1a);
 
+const _singleInstancePort = 56321;
+ServerSocket? _instanceLock;
+
+Future<void> _acquireSingleInstanceLock() async {
+  try {
+    _instanceLock = await ServerSocket.bind(
+      InternetAddress.loopbackIPv4,
+      _singleInstancePort,
+    );
+    _instanceLock?.listen((_) {});
+  } on SocketException {
+    exit(0);
+  }
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
+
+  await _acquireSingleInstanceLock();
+
   await Firebase.initializeApp();
   await FcmService().init();
 
@@ -90,6 +108,74 @@ class SamvaadApp extends StatelessWidget {
             fontSize: 16,
             fontWeight: FontWeight.w700,
             letterSpacing: 0.5,
+          ),
+        ),
+      ),
+      filledButtonTheme: FilledButtonThemeData(
+        style: FilledButton.styleFrom(
+          backgroundColor: colorScheme.primary,
+          foregroundColor: Colors.white,
+          elevation: 0,
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
+          textStyle: const TextStyle(
+            fontSize: 15,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.3,
+          ),
+        ),
+      ),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: OutlinedButton.styleFrom(
+          foregroundColor: colorScheme.primary,
+          elevation: 0,
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(14),
+          ),
+          side: BorderSide(color: colorScheme.primary.withValues(alpha: 0.4)),
+          textStyle: const TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ),
+      chipTheme: ChipThemeData(
+        backgroundColor: Colors.white,
+        selectedColor: colorScheme.primary.withValues(alpha: 0.12),
+        side: BorderSide(color: Colors.grey.shade200),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14),
+        ),
+        labelStyle: const TextStyle(
+          fontSize: 13,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+      navigationBarTheme: NavigationBarThemeData(
+        backgroundColor: Colors.white,
+        elevation: 0,
+        height: 68,
+        indicatorColor: colorScheme.primary.withValues(alpha: 0.12),
+        labelTextStyle: WidgetStateProperty.resolveWith(
+          (states) => TextStyle(
+            fontSize: 12,
+            fontWeight: states.contains(WidgetState.selected)
+                ? FontWeight.w700
+                : FontWeight.w500,
+            color: states.contains(WidgetState.selected)
+                ? colorScheme.primary
+                : Colors.grey.shade600,
+          ),
+        ),
+        iconTheme: WidgetStateProperty.resolveWith(
+          (states) => IconThemeData(
+            color: states.contains(WidgetState.selected)
+                ? colorScheme.primary
+                : Colors.grey.shade600,
+            size: 26,
           ),
         ),
       ),
