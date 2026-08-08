@@ -64,6 +64,7 @@ class _DialpadScreenState extends State<DialpadScreen>
   bool _isMerged = false;
   bool _showConferenceKeypad = false;
   String _conferenceNumber = '';
+  String _dtmfNumber = '';
 
   String? _lastHandledNumber;
   DateTime? _lastHandledAt;
@@ -298,6 +299,7 @@ class _DialpadScreenState extends State<DialpadScreen>
           _isMerged = false;
           _showConferenceKeypad = false;
           _conferenceNumber = '';
+          _dtmfNumber = '';
           _lastHandledNumber = endedNumber.isNotEmpty
               ? endedNumber
               : _activeCallNumber;
@@ -2345,7 +2347,7 @@ class _DialpadScreenState extends State<DialpadScreen>
         ] else if (_isShowingKeypad) ...[
           const SizedBox(height: 16),
           SizedBox(
-            height: 260,
+            height: 340,
             child: Padding(
               padding: EdgeInsets.symmetric(horizontal: isWide ? 120 : 32),
               child: _buildDtmfKeypad(),
@@ -2427,7 +2429,7 @@ class _DialpadScreenState extends State<DialpadScreen>
         const Spacer(),
         if (_isShowingKeypad) ...[
           SizedBox(
-            height: 260,
+            height: 340,
             child: Padding(
               padding: EdgeInsets.symmetric(horizontal: isWide ? 120 : 32),
               child: _buildDtmfKeypad(),
@@ -2645,21 +2647,93 @@ class _DialpadScreenState extends State<DialpadScreen>
   }
 
   Widget _buildDtmfKeypad() {
-    return FittedBox(
-      fit: BoxFit.contain,
-      child: SizedBox(
-        width: 264,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _buildDialRow(['1', '2', '3'], onDigit: _sip.sendDTMF),
-            _buildDialRow(['4', '5', '6'], onDigit: _sip.sendDTMF),
-            _buildDialRow(['7', '8', '9'], onDigit: _sip.sendDTMF),
-            _buildDialRow(['*', '0', '#'], onDigit: _sip.sendDTMF),
-          ],
+    final cs = Theme.of(context).colorScheme;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Align(
+          alignment: Alignment.centerRight,
+          child: IconButton(
+            iconSize: 26,
+            icon: const Icon(Icons.close_rounded),
+            onPressed: () {
+              setState(() {
+                _isShowingKeypad = false;
+                _dtmfNumber = '';
+              });
+            },
+            color: cs.onSurface.withValues(alpha: 0.7),
+          ),
         ),
-      ),
+        Container(
+          margin: const EdgeInsets.only(bottom: 12),
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+          decoration: BoxDecoration(
+            color: cs.surfaceContainerLow,
+            borderRadius: BorderRadius.circular(AppRadii.xl),
+            border: Border.all(color: cs.outline.withValues(alpha: 0.5)),
+          ),
+          constraints: const BoxConstraints(minHeight: 56),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: Center(
+                  child: Text(
+                    _dtmfNumber.isEmpty ? 'Enter number' : _dtmfNumber,
+                    style: TextStyle(
+                      fontSize: 26,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 3,
+                      color: _dtmfNumber.isEmpty
+                          ? cs.onSurface.withValues(alpha: 0.25)
+                          : cs.onSurface,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ),
+              if (_dtmfNumber.isNotEmpty)
+                IconButton(
+                  iconSize: 24,
+                  icon: const Icon(Icons.backspace_outlined),
+                  onPressed: () => setState(
+                    () => _dtmfNumber = _dtmfNumber.substring(
+                      0,
+                      _dtmfNumber.length - 1,
+                    ),
+                  ),
+                  color: cs.onSurface.withValues(alpha: 0.5),
+                ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: FittedBox(
+            fit: BoxFit.contain,
+            child: SizedBox(
+              width: 264,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _buildDialRow(['1', '2', '3'], onDigit: _onDtmfKey),
+                  _buildDialRow(['4', '5', '6'], onDigit: _onDtmfKey),
+                  _buildDialRow(['7', '8', '9'], onDigit: _onDtmfKey),
+                  _buildDialRow(['*', '0', '#'], onDigit: _onDtmfKey),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
     );
+  }
+
+  void _onDtmfKey(String key) {
+    _sip.sendDTMF(key);
+    setState(() {
+      if (_dtmfNumber.length < 15) _dtmfNumber += key;
+    });
   }
 
   Widget _buildConferenceKeypad({required bool isWide}) {
