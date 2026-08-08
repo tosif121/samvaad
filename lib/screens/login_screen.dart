@@ -1,13 +1,16 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../models/sip_credentials.dart';
 import '../services/sip_socket_service.dart';
 import 'dialpad_screen.dart';
 import '../services/fcm_service.dart';
 
-const _defaultServer = 'wss://esamwad.iotcom.io:8089/ws';
-const _defaultHost = 'esamwad.iotcom.io:8089';
+const _defaultServer = 'wss://devapp.iotcom.io:8089/ws';
+const _defaultHost = 'devapp.iotcom.io:8089';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -76,16 +79,53 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _login() async {
     if (!_formKey.currentState!.validate()) return;
 
-    final creds = _buildCreds();
+    final rawUsername = _usernameController.text.trim();
+    final password = _passwordController.text.trim();
 
     setState(() {
       _connecting = true;
       _error = null;
     });
 
-    await _requestPermissions();
-    await _sip.saveCredentials(creds);
-    unawaited(_sip.connect(creds).then((_) {}));
+    try {
+      debugPrint('[LOGIN] Hitting REST login API for $rawUsername...');
+      final url = Uri.parse('https://devapp.iotcom.io/userlogin/$rawUsername');
+      final response = await http.post(
+        url,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'username': rawUsername,
+          'password': password,
+        }),
+      ).timeout(const Duration(seconds: 10));
+
+      debugPrint('[LOGIN] Login API response status: ${response.statusCode}');
+      final data = jsonDecode(response.body);
+
+      if (response.statusCode != 200 || data['success'] == false) {
+        final msg = data['message'] ?? 'Login failed. Please check credentials.';
+        setState(() {
+          _connecting = false;
+          _error = msg;
+        });
+        return;
+      }
+
+      // Save token and credentials
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('token', jsonEncode(data));
+
+      final creds = _buildCreds();
+      await _requestPermissions();
+      await _sip.saveCredentials(creds);
+      unawaited(_sip.connect(creds).then((_) {}));
+    } catch (e) {
+      debugPrint('[LOGIN] Login API error or timeout: $e — proceeding with SIP registration fallback');
+      final creds = _buildCreds();
+      await _requestPermissions();
+      await _sip.saveCredentials(creds);
+      unawaited(_sip.connect(creds).then((_) {}));
+    }
   }
 
   @override
