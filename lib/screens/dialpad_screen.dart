@@ -826,7 +826,7 @@ class _DialpadScreenState extends State<DialpadScreen>
     return Column(
       children: [
         Container(
-          margin: const EdgeInsets.symmetric(horizontal: 32, vertical: 4),
+          margin: const EdgeInsets.fromLTRB(32, 32, 32, 4),
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
           decoration: BoxDecoration(
             color: cs.surfaceContainerLow,
@@ -883,37 +883,23 @@ class _DialpadScreenState extends State<DialpadScreen>
             onChanged: (_) => setState(() {}),
           ),
         ),
-        AnimatedSwitcher(
-          duration: AppMotion.normal,
-          child: _phoneController.text.isNotEmpty
-              ? Padding(
-                  padding: const EdgeInsets.only(top: 2),
-                  child: InfoChip(
-                    icon: Icons.bolt_rounded,
-                    label: 'Auto-answers on the other end',
-                  ),
-                )
-              : const SizedBox.shrink(),
-        ),
       ],
     );
   }
 
   Widget _buildDialpadGrid() {
-    return Center(
-      child: FittedBox(
-        fit: BoxFit.scaleDown,
-        child: SizedBox(
-          width: 264,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _buildDialRow(['1', '2', '3']),
-              _buildDialRow(['4', '5', '6']),
-              _buildDialRow(['7', '8', '9']),
-              _buildDialRow(['*', '0', '#']),
-            ],
-          ),
+    return FittedBox(
+      fit: BoxFit.contain,
+      child: SizedBox(
+        width: 264,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _buildDialRow(['1', '2', '3']),
+            _buildDialRow(['4', '5', '6']),
+            _buildDialRow(['7', '8', '9']),
+            _buildDialRow(['*', '0', '#']),
+          ],
         ),
       ),
     );
@@ -1044,11 +1030,9 @@ class _DialpadScreenState extends State<DialpadScreen>
             const SizedBox(height: 4),
             _buildNumberDisplay(),
             Expanded(
-              child: Center(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxHeight: 360),
-                  child: _buildDialpadGrid(),
-                ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 32),
+                child: _buildDialpadGrid(),
               ),
             ),
             _buildCallButtons(),
