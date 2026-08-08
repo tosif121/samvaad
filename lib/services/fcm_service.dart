@@ -16,14 +16,33 @@ import 'user_data.dart';
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
-  log('[FCM_SERVICE] Background message received: ${message.messageId}');
+  log('[FCM_SERVICE] Background message received: ${message.messageId}, data: ${message.data}');
 
   final type = message.data['type'];
-  if (type == 'incomingCall' || type == 'incoming_call') {
-    // Native MyFirebaseMessagingService handles notification + app opening
-    // when app is killed or in background. This handler is kept as fallback
-    // for logging and future non-call message types.
-    log('[FCM_SERVICE] Incoming call background message (handled natively)');
+  final callerName = message.data['callerName'] ?? message.data['title'] ?? 'Incoming Call';
+  final callerNumber = message.data['callerNumber'] ?? message.data['body'] ?? '';
+
+  if (type == 'incomingCall' || type == 'incoming_call' || type == 'call') {
+    log('[FCM_SERVICE] Displaying incoming call notification for $callerName...');
+    final flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+    const androidDetails = AndroidNotificationDetails(
+      'incoming_calls_channel',
+      'Incoming Calls',
+      channelDescription: 'Notifications for incoming call alerts',
+      importance: Importance.max,
+      priority: Priority.high,
+      fullScreenIntent: true,
+      category: AndroidNotificationCategory.call,
+      playSound: true,
+    );
+    const notificationDetails = NotificationDetails(android: androidDetails);
+    await flutterLocalNotificationsPlugin.show(
+      0,
+      callerName,
+      callerNumber.isNotEmpty ? 'Incoming call from $callerNumber' : 'Incoming call',
+      notificationDetails,
+      payload: jsonEncode(message.data),
+    );
   }
 }
 
@@ -70,7 +89,11 @@ class FcmService with WidgetsBindingObserver {
       }
 
       final creds = jsonDecode(credsStr);
-      final username = UserData.username().isNotEmpty
+      // Mirror the webphone: register under `userid` (e.g. demo@surya) so the
+      // backend finds the token when it sends a push for an incoming call.
+      final username = UserData.userId().isNotEmpty
+          ? UserData.userId()
+          : UserData.username().isNotEmpty
           ? UserData.username()
           : (creds['extension'] ?? creds['username'] ?? '');
 
@@ -79,7 +102,10 @@ class FcmService with WidgetsBindingObserver {
         await UserData.init();
         adminuser = UserData.adminUser();
       }
-      if (username.isEmpty || adminuser.isEmpty) return;
+      if (adminuser.isEmpty) {
+        adminuser = "devapp";
+      }
+      if (username.isEmpty) return;
 
       final deviceInfo = await _getDeviceInfo();
 
@@ -121,7 +147,10 @@ class FcmService with WidgetsBindingObserver {
       if (credsStr == null) return;
 
       final creds = jsonDecode(credsStr);
-      final username = UserData.username().isNotEmpty
+      // Mirror the webphone: register under `userid` (e.g. demo@surya).
+      final username = UserData.userId().isNotEmpty
+          ? UserData.userId()
+          : UserData.username().isNotEmpty
           ? UserData.username()
           : (creds['extension'] ?? creds['username'] ?? '');
 
@@ -130,7 +159,10 @@ class FcmService with WidgetsBindingObserver {
         await UserData.init();
         adminuser = UserData.adminUser();
       }
-      if (username.isEmpty || adminuser.isEmpty) return;
+      if (adminuser.isEmpty) {
+        adminuser = "devapp";
+      }
+      if (username.isEmpty) return;
 
       String? token = await _messaging.getToken();
       if (token == null) return;
@@ -179,11 +211,25 @@ class FcmService with WidgetsBindingObserver {
       initializationSettings,
       onDidReceiveNotificationResponse: (details) {
         log('[FCM_SERVICE] Local notification tapped: ${details.payload}');
-        // Simply tapping it opens the app. The SIP socket will reconnect automatically
-        // and trigger the incoming call screen if the call is still active.
         _localNotificationsPlugin.cancelAll();
       },
     );
+
+    // Register high priority Android Notification Channel
+    const AndroidNotificationChannel channel = AndroidNotificationChannel(
+      'incoming_calls_channel',
+      'Incoming Calls',
+      description: 'Notifications for incoming call alerts',
+      importance: Importance.max,
+      playSound: true,
+    );
+
+    final androidPlugin = _localNotificationsPlugin
+        .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>();
+    if (androidPlugin != null) {
+      await androidPlugin.createNotificationChannel(channel);
+    }
 
     // Clear notifications on startup
     await _localNotificationsPlugin.cancelAll();
@@ -222,11 +268,12 @@ class FcmService with WidgetsBindingObserver {
       }
     }
 
+    // Fetch and send FCM token immediately on init
     try {
       String? token = await _messaging.getToken();
       if (token != null) {
-        log('[FCM_SERVICE] FCM Token: $token');
-        await sendTokenToBackend(token);
+        log('[FCM_SERVICE] FCM Token retrieved: $token');
+        sendTokenToBackend(token);
       }
     } catch (e) {
       log('[FCM_SERVICE] Error getting FCM token: $e');
@@ -246,6 +293,34 @@ class FcmService with WidgetsBindingObserver {
       if (type == 'incomingCall' || type == 'incoming_call' || type == 'call') {
         log('[FCM_SERVICE] Ringing on foreground notification...');
         RingtoneService().startRinging();
+
+        final callerName =
+            message.data['callerName'] ?? message.data['title'] ?? 'Incoming Call';
+        final callerNumber =
+            message.data['callerNumber'] ?? message.data['body'] ?? '';
+
+        const androidDetails = AndroidNotificationDetails(
+          'incoming_calls_channel',
+          'Incoming Calls',
+          channelDescription: 'Notifications for incoming call alerts',
+          importance: Importance.max,
+          priority: Priority.high,
+          fullScreenIntent: true,
+          category: AndroidNotificationCategory.call,
+          playSound: true,
+        );
+        const notificationDetails =
+            NotificationDetails(android: androidDetails);
+
+        _localNotificationsPlugin.show(
+          0,
+          callerName,
+          callerNumber.isNotEmpty
+              ? 'Incoming call from $callerNumber'
+              : 'Incoming call',
+          notificationDetails,
+          payload: jsonEncode(message.data),
+        );
       }
     });
 
