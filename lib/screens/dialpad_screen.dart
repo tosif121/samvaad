@@ -2273,7 +2273,10 @@ class _DialpadScreenState extends State<DialpadScreen>
     final keypadOpen = _showConferenceKeypad || _isShowingKeypad;
     return Column(
       children: [
-        const Spacer(flex: 2),
+        if (keypadOpen)
+          const SizedBox(height: 24)
+        else
+          const Spacer(flex: 2),
         Container(
           width: keypadOpen ? 84 : 120,
           height: keypadOpen ? 84 : 120,
