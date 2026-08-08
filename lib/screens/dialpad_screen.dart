@@ -2503,10 +2503,10 @@ class _DialpadScreenState extends State<DialpadScreen>
       },
     );
 
-    Widget transfer() => _CallControlButton(
+    Widget transfer({bool disabled = false}) => _CallControlButton(
       icon: Icons.call_made_rounded,
       label: 'Transfer',
-      disabled: _sip.bridgeID.isEmpty,
+      disabled: disabled || _sip.bridgeID.isEmpty,
       isOnDark: isVideo,
       onPressed: () async {
         final ok = await _sip.requestTransfer();
@@ -2531,10 +2531,11 @@ class _DialpadScreenState extends State<DialpadScreen>
       },
     );
 
-    Widget hold() => _CallControlButton(
+    Widget hold({bool disabled = false}) => _CallControlButton(
       icon: _sip.isHeld ? Icons.play_arrow_rounded : Icons.pause_rounded,
       label: _sip.isHeld ? 'Resume' : 'Hold',
       isActive: _sip.isHeld,
+      disabled: disabled,
       isOnDark: isVideo,
       onPressed: () {
         setState(() {
@@ -2555,17 +2556,10 @@ class _DialpadScreenState extends State<DialpadScreen>
       },
     );
 
-    Widget record() => _CallControlButton(
-      icon: Icons.fiber_manual_record_rounded,
-      label: 'Record',
-      disabled: true,
-      isOnDark: isVideo,
-      onPressed: null,
-    );
-
-    Widget addCall() => _CallControlButton(
+    Widget addCall({bool disabled = false}) => _CallControlButton(
       icon: Icons.person_add_alt_1_rounded,
       label: 'Add Call',
+      disabled: disabled,
       isOnDark: isVideo,
       onPressed: () {
         setState(() {
@@ -2604,34 +2598,32 @@ class _DialpadScreenState extends State<DialpadScreen>
       ];
       row2 = [hold(), keypad(), transfer(), addCall()];
     } else if (_conferenceStatus) {
-      // During an active conference the main-call controls are replaced by
-      // conference controls: Merge once the participant is connected, and
-      // hold/transfer stay available once merged.
+      // Match webphone conference controls: Hold is disabled, Transfer is
+      // enabled only once merged, Merge is hidden after merging.
       row1 = [
-        _CallControlButton(
-          icon: Icons.call_merge_rounded,
-          label: 'Merge',
-          disabled: !_conferenceConnected || _isMerged,
-          isActive: _isMerged,
-          isOnDark: isVideo,
-          onPressed: _mergeConference,
-        ),
+        hold(disabled: true),
+        transfer(disabled: !_isMerged),
+        keypad(),
+      ];
+      row2 = [
+        if (!_isMerged)
+          _CallControlButton(
+            icon: Icons.call_merge_rounded,
+            label: 'Merge',
+            disabled: !_conferenceConnected,
+            isOnDark: isVideo,
+            onPressed: _mergeConference,
+          ),
         mute(),
         speaker(),
       ];
-      row2 = [
-        hold(),
-        _CallControlButton(
-          icon: Icons.person_remove_rounded,
-          label: 'Leave',
-          isOnDark: isVideo,
-          onPressed: _disconnectConference,
-        ),
-        keypad(),
-      ];
     } else {
-      row1 = [mute(), transfer(), speaker()];
-      row2 = [hold(), record(), keypad(), addCall()];
+      row1 = [hold(), transfer(), keypad()];
+      row2 = [
+        addCall(disabled: !_sip.isConnected),
+        mute(),
+        speaker(),
+      ];
     }
 
     Widget row(List<Widget> items) {
