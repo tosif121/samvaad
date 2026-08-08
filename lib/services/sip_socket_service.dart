@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:developer' as developer;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
 import 'package:sip_ua/sip_ua.dart' as sip;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/sip_credentials.dart';
@@ -59,6 +60,7 @@ class SipSocketService implements sip.SipUaHelperListener {
   // an explicit endCall()/rejectCall() racing with it).
   bool _callEndedHandled = false;
   bool _isAnswering = false;
+  bool shouldAutoAnswerNextCall = false;
 
   // Set when a call arrives via FCM/VoIP push before the real SIP INVITE
   // has been received. Used to bind the native call UI (already showing)
@@ -295,14 +297,18 @@ class SipSocketService implements sip.SipUaHelperListener {
         _isRegistered = true;
         _log('SIP REGISTERED');
         _emit(SipEvent.registered);
+        unawaited(sendUserReady());
+        _startHeartbeatTimer();
         break;
       case sip.RegistrationStateEnum.UNREGISTERED:
         _log('SIP UNREGISTERED');
         _isRegistered = false;
+        _stopHeartbeatTimer();
         break;
       case sip.RegistrationStateEnum.REGISTRATION_FAILED:
         _log('SIP REGISTRATION FAILED');
         _isRegistered = false;
+        _stopHeartbeatTimer();
         _emit(SipEvent.registrationFailed,
             data: {'cause': state.cause?.toString()});
         break;
@@ -337,7 +343,8 @@ class SipSocketService implements sip.SipUaHelperListener {
 
   @override
   void callStateChanged(sip.Call call, sip.CallState state) {
-    _log('callStateChanged: ${state.state} for call ID: ${call.id}');
+    _log('callStateChanged: ${state.state} for call ID: ${call.id}'
+        ' | direction=${call.direction} | sessionState=${call.session?.state}');
     if (state.state == sip.CallStateEnum.CALL_INITIATION || _activeCall == null) {
       _activeCall = call;
     }
@@ -598,13 +605,10 @@ class SipSocketService implements sip.SipUaHelperListener {
       if (options['rtcOfferConstraints'] is Map) {
         (options['rtcOfferConstraints'] as Map)['offerModifiers'] = [_makeH264Modifier()];
       }
-      if (options['rtcAnswerConstraints'] is Map) {
-        (options['rtcAnswerConstraints'] as Map)['offerModifiers'] = [_makeH264Modifier()];
-      }
-
       _log('Before call.answer() - options: $options');
       call.answer(options);
-      _log('After call.answer() - success');
+      _log('After call.answer() - success'
+          ' | sessionState=${call.session?.state} | call.state=${call.state}');
       _isAnswering = false;
     } catch (e) {
       _log('answerCall failed: $e');
@@ -617,9 +621,13 @@ class SipSocketService implements sip.SipUaHelperListener {
 
   Future<void> makeCall(String number) async {
     if (!_isRegistered) {
-      _log('Cannot call — not registered');
-      _emit(SipEvent.callFailed, data: {'reason': 'not_registered'});
-      return;
+      _log('SIP not registered — attempting to connect before makeCall...');
+      await connect();
+      if (!_isRegistered) {
+        _log('Cannot call — SIP registration failed');
+        _emit(SipEvent.callFailed, data: {'reason': 'not_registered'});
+        return;
+      }
     }
     _log('Making outgoing call to: $number');
     _callState = CallState.dialing;
@@ -849,18 +857,8 @@ class SipSocketService implements sip.SipUaHelperListener {
     };
   }
 
-  Future<void> rejectCall() async {
-    final call = _activeCall;
-    if (call != null) {
-      try {
-        call.session.terminate();
-      } catch (e) {
-        _log('Exception during reject/terminate: $e');
-      }
-    }
-    // Rejection is reported as a single callFailed event (not callEnded).
-    _finishCall(emitFailedReason: 'rejected');
-  }
+  dynamic get remoteStream => _remoteStream;
+  bool get isMuted => _isMuted;
 
   void mute(bool muted) {
     if (muted == _isMuted) return;
@@ -917,11 +915,419 @@ class SipSocketService implements sip.SipUaHelperListener {
     }
   }
 
-  dynamic get remoteStream => _remoteStream;
-  bool get isMuted => _isMuted;
+  Future<Map<String, String>> _getAuthHeaders({bool includeXUserId = false}) async {
+    String token = '';
+    String savedUser = '';
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      savedUser = prefs.getString('savedUsername') ?? '';
+      final tokenStr = prefs.getString('token');
+      if (tokenStr != null && tokenStr.isNotEmpty) {
+        try {
+          final decoded = jsonDecode(tokenStr);
+          if (decoded is Map) {
+            token = (decoded['token'] ?? decoded['userData']?['token'] ?? '').toString();
+            if (savedUser.isEmpty) {
+              savedUser = (decoded['userData']?['username'] ?? decoded['username'] ?? '').toString();
+            }
+          } else if (tokenStr.startsWith('eyJ')) {
+            token = tokenStr;
+          }
+        } catch (_) {
+          if (tokenStr.startsWith('eyJ')) {
+            token = tokenStr;
+          }
+        }
+      }
+    } catch (_) {}
+
+    final username = savedUser.isNotEmpty
+        ? savedUser
+        : (_credentials?.displayName ?? _credentials?.username ?? '');
+    return {
+      'Content-Type': 'application/json',
+      if (token.isNotEmpty) 'Authorization': 'Bearer $token',
+      if (includeXUserId && username.isNotEmpty) 'X-User-ID': username,
+    };
+  }
+
+  Future<void> clearRejectedCallFromAgent(String callerNumber) async {
+    try {
+      final cleanNum = callerNumber.replaceAll('+', '').trim();
+      if (cleanNum.isEmpty) return;
+      _log('Requesting clearRejectedCallFromAgent for $cleanNum...');
+      final headers = await _getAuthHeaders();
+      final response = await http.post(
+        Uri.parse('https://devapp.iotcom.io/clearRejectedCallFromAgent'),
+        headers: headers,
+        body: jsonEncode({'caller': cleanNum}),
+      ).timeout(const Duration(seconds: 5));
+      _log('clearRejectedCallFromAgent response: ${response.body}');
+    } catch (e) {
+      _log('Error calling clearRejectedCallFromAgent: $e');
+    }
+  }
+
+  Future<void> hangupChannel(String channelId) async {
+    try {
+      if (channelId.isEmpty) return;
+      _log('Requesting hangupChannel for channelId: $channelId...');
+      final headers = await _getAuthHeaders();
+      final response = await http.post(
+        Uri.parse('https://devapp.iotcom.io/hangupChannel'),
+        headers: headers,
+        body: jsonEncode({'channelId': channelId}),
+      ).timeout(const Duration(seconds: 5));
+      _log('hangupChannel response: ${response.body}');
+    } catch (e) {
+      _log('Error calling hangupChannel: $e');
+    }
+  }
+
+  Future<Map<String, dynamic>?> sendUserconnection() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      var savedUser = prefs.getString('savedUsername') ?? '';
+      if (savedUser.isEmpty) {
+        final tokenStr = prefs.getString('token');
+        if (tokenStr != null && tokenStr.isNotEmpty) {
+          try {
+            final decoded = jsonDecode(tokenStr);
+            if (decoded is Map) {
+              savedUser = (decoded['userData']?['username'] ?? decoded['username'] ?? '').toString();
+            }
+          } catch (_) {}
+        }
+      }
+      final username = savedUser.isNotEmpty
+          ? savedUser
+          : (_credentials?.displayName ?? _credentials?.username ?? '');
+      if (username.isEmpty) return null;
+      _log('Sending /userconnection check for $username...');
+      final headers = await _getAuthHeaders();
+      final response = await http.post(
+        Uri.parse('https://devapp.iotcom.io/userconnection'),
+        headers: headers,
+        body: jsonEncode({'user': username}),
+      ).timeout(const Duration(seconds: 5));
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body) as Map<String, dynamic>?;
+      }
+    } catch (e) {
+      _log('Error in userconnection check: $e');
+    }
+    return null;
+  }
+
+  Future<Map<String, dynamic>?> fetchUserOnCall(
+    String phoneNumber, {
+    String? leadLockToken,
+  }) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      var savedUser = prefs.getString('savedUsername') ?? '';
+      if (savedUser.isEmpty) {
+        final tokenStr = prefs.getString('token');
+        if (tokenStr != null && tokenStr.isNotEmpty) {
+          try {
+            final decoded = jsonDecode(tokenStr);
+            if (decoded is Map) {
+              savedUser = (decoded['userData']?['username'] ?? decoded['username'] ?? '').toString();
+            }
+          } catch (_) {}
+        }
+      }
+      final username = savedUser.isNotEmpty
+          ? savedUser
+          : (_credentials?.displayName ?? _credentials?.username ?? '');
+      if (username.isEmpty) return null;
+      _log('Sending /useroncall/$username for $phoneNumber...');
+      final headers = await _getAuthHeaders();
+      final response = await http.post(
+        Uri.parse('https://devapp.iotcom.io/useroncall/$username'),
+        headers: headers,
+        body: jsonEncode({
+          'user': username,
+          'phoneNumber': phoneNumber,
+          if (leadLockToken != null && leadLockToken.isNotEmpty)
+            'leadLockToken': leadLockToken,
+        }),
+      ).timeout(const Duration(seconds: 5));
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body) as Map<String, dynamic>?;
+      }
+    } catch (e) {
+      _log('Error calling /useroncall: $e');
+    }
+    return null;
+  }
+
+  Future<void> sendCallEnded({
+    String? leadLockToken,
+    String callType = 'Manual',
+    bool isMerged = false,
+  }) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      var savedUser = prefs.getString('savedUsername') ?? '';
+      if (savedUser.isEmpty) {
+        final tokenStr = prefs.getString('token');
+        if (tokenStr != null && tokenStr.isNotEmpty) {
+          try {
+            final decoded = jsonDecode(tokenStr);
+            if (decoded is Map) {
+              savedUser = (decoded['userData']?['username'] ?? decoded['username'] ?? '').toString();
+            }
+          } catch (_) {}
+        }
+      }
+      final username = savedUser.isNotEmpty
+          ? savedUser
+          : (_credentials?.displayName ?? _credentials?.username ?? '');
+      if (username.isEmpty) return;
+      _log('Sending /user/callended$username...');
+      final headers = await _getAuthHeaders();
+      await http.post(
+        Uri.parse('https://devapp.iotcom.io/user/callended$username'),
+        headers: headers,
+        body: jsonEncode({
+          'callType': callType,
+          'isMerged': isMerged,
+          if (leadLockToken != null && leadLockToken.isNotEmpty)
+            'leadLockToken': leadLockToken,
+        }),
+      ).timeout(const Duration(seconds: 5));
+    } catch (e) {
+      _log('Error in /user/callended: $e');
+    }
+  }
+
+  Future<void> submitDisposition({
+    required String bridgeId,
+    required String disposition,
+    String? contactNumber,
+    String? leadId,
+    String? leadLockToken,
+    bool autoDialDisabled = false,
+  }) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      var savedUser = prefs.getString('savedUsername') ?? '';
+      if (savedUser.isEmpty) {
+        final tokenStr = prefs.getString('token');
+        if (tokenStr != null && tokenStr.isNotEmpty) {
+          try {
+            final decoded = jsonDecode(tokenStr);
+            if (decoded is Map) {
+              savedUser = (decoded['userData']?['username'] ?? decoded['username'] ?? '').toString();
+            }
+          } catch (_) {}
+        }
+      }
+      final username = savedUser.isNotEmpty
+          ? savedUser
+          : (_credentials?.displayName ?? _credentials?.username ?? '');
+      if (username.isEmpty) return;
+      _log('Submitting /user/disposition$username...');
+      final headers = await _getAuthHeaders();
+      await http.post(
+        Uri.parse('https://devapp.iotcom.io/user/disposition$username'),
+        headers: headers,
+        body: jsonEncode({
+          'bridgeID': bridgeId.isNotEmpty ? bridgeId : 'deadCallId',
+          'Disposition': disposition.isNotEmpty ? disposition : 'Auto Disposed',
+          'autoDialDisabled': autoDialDisabled,
+          if (contactNumber != null && contactNumber.isNotEmpty)
+            'contactNumber': contactNumber,
+          if (leadId != null && leadId.isNotEmpty) 'leadId': leadId,
+          if (leadLockToken != null && leadLockToken.isNotEmpty)
+            'leadLockToken': leadLockToken,
+        }),
+      ).timeout(const Duration(seconds: 5));
+    } catch (e) {
+      _log('Error in /user/disposition: $e');
+    }
+  }
+
+  Future<void> setAgentBreak(String breakType) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      var savedUser = prefs.getString('savedUsername') ?? '';
+      if (savedUser.isEmpty) {
+        final tokenStr = prefs.getString('token');
+        if (tokenStr != null && tokenStr.isNotEmpty) {
+          try {
+            final decoded = jsonDecode(tokenStr);
+            if (decoded is Map) {
+              savedUser = (decoded['userData']?['username'] ?? decoded['username'] ?? '').toString();
+            }
+          } catch (_) {}
+        }
+      }
+      final username = savedUser.isNotEmpty
+          ? savedUser
+          : (_credentials?.displayName ?? _credentials?.username ?? '');
+      if (username.isEmpty) return;
+      _log('Setting agent break $breakType for $username...');
+      final headers = await _getAuthHeaders();
+      await http.post(
+        Uri.parse('https://devapp.iotcom.io/user/breakuser:$username'),
+        headers: headers,
+        body: jsonEncode({'breakType': breakType}),
+      ).timeout(const Duration(seconds: 5));
+    } catch (e) {
+      _log('Error in /user/breakuser: $e');
+    }
+  }
+
+  Timer? _heartbeatTimer;
+
+  void _startHeartbeatTimer() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+      sendUserconnection();
+    });
+  }
+
+  void _stopHeartbeatTimer() {
+    _heartbeatTimer?.cancel();
+    _heartbeatTimer = null;
+  }
+
+  Future<void> sendUserReady() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      var savedUser = prefs.getString('savedUsername') ?? '';
+      if (savedUser.isEmpty) {
+        final tokenStr = prefs.getString('token');
+        if (tokenStr != null && tokenStr.isNotEmpty) {
+          try {
+            final decoded = jsonDecode(tokenStr);
+            if (decoded is Map) {
+              savedUser = (decoded['userData']?['username'] ?? decoded['username'] ?? '').toString();
+            }
+          } catch (_) {}
+        }
+      }
+      final username = savedUser.isNotEmpty
+          ? savedUser
+          : (_credentials?.displayName ?? _credentials?.username ?? '');
+      if (username.isEmpty) return;
+
+      _log('Sending /userready/$username/Web...');
+      final headers = await _getAuthHeaders();
+      final response = await http.post(
+        Uri.parse('https://devapp.iotcom.io/userready/$username/Web'),
+        headers: headers,
+        body: jsonEncode({}),
+      ).timeout(const Duration(seconds: 5));
+      _log('/userready response (${response.statusCode}): ${response.body}');
+    } catch (e) {
+      _log('Error sending /userready: $e');
+    }
+  }
+
+  Future<bool> dialNumber(
+    String number, {
+    String? leadId,
+    String? leadLockToken,
+    String? dialSource,
+    bool? autoLeadDial,
+  }) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedUser = prefs.getString('savedUsername') ?? '';
+      final username = savedUser.isNotEmpty
+          ? savedUser
+          : (_credentials?.displayName ?? _credentials?.username ?? '');
+      if (username.isEmpty) {
+        _log('dialNumber error: username is empty');
+        return false;
+      }
+      final cleanNum = number.replaceAll('+', '').trim();
+      unawaited(clearRejectedCallFromAgent(cleanNum));
+
+      // Mark auto-answer flag BEFORE hitting /dialnumber so incoming SIP INVITE is answered in 0ms
+      shouldAutoAnswerNextCall = true;
+
+      final headers = await _getAuthHeaders(includeXUserId: true);
+      _log('Initiating REST /dialnumber to $cleanNum for $username...');
+      final payload = <String, dynamic>{
+        'receiver': cleanNum,
+        if (leadId != null && leadId.isNotEmpty) 'leadId': leadId,
+        if (leadLockToken != null && leadLockToken.isNotEmpty)
+          'leadLockToken': leadLockToken,
+        if (dialSource != null && dialSource.isNotEmpty)
+          'dialSource': dialSource,
+        if (autoLeadDial != null) 'autoLeadDial': autoLeadDial,
+      };
+
+      var response = await http.post(
+        Uri.parse('https://devapp.iotcom.io/dialnumber'),
+        headers: headers,
+        body: jsonEncode(payload),
+      ).timeout(const Duration(seconds: 10));
+
+      _log('/dialnumber response (${response.statusCode}): ${response.body}');
+      var data = jsonDecode(response.body);
+
+      // If server returns "Agent is not in a ready state", auto-send userready and retry once
+      if (data != null && data['success'] == false) {
+        final msg = (data['message'] ?? data['cause'] ?? '').toString();
+        if (msg.contains('Agent is not in a ready state') || msg.contains('Please Login again')) {
+          _log('Agent not in ready state for dialnumber — sending /userready and retrying...');
+          await sendUserReady();
+          await Future.delayed(const Duration(milliseconds: 500));
+          response = await http.post(
+            Uri.parse('https://devapp.iotcom.io/dialnumber'),
+            headers: headers,
+            body: jsonEncode(payload),
+          ).timeout(const Duration(seconds: 10));
+          data = jsonDecode(response.body);
+          _log('Retry /dialnumber response: ${response.body}');
+        }
+      }
+
+      if (data != null && data['success'] == true) {
+        return true;
+      } else {
+        shouldAutoAnswerNextCall = false;
+      }
+    } catch (e) {
+      shouldAutoAnswerNextCall = false;
+      _log('Error calling /dialnumber: $e');
+    }
+    return false;
+  }
+
+  Future<void> rejectCall([String? incomingNumber]) async {
+    final call = _activeCall;
+    final numToClear = (incomingNumber != null && incomingNumber.isNotEmpty)
+        ? incomingNumber
+        : _incomingNumber;
+
+    if (call != null) {
+      try {
+        final channelId = call.id;
+        if (channelId != null && channelId.isNotEmpty) {
+          unawaited(hangupChannel(channelId));
+        }
+        call.session.terminate();
+      } catch (e) {
+        _log('Exception during reject/terminate: $e');
+      }
+    }
+
+    if (numToClear.isNotEmpty) {
+      unawaited(clearRejectedCallFromAgent(numToClear));
+    }
+
+    _finishCall(emitFailedReason: 'rejected');
+  }
 
   void disconnect() {
     _log('disconnect() called', data: StackTrace.current.toString());
+    _stopHeartbeatTimer();
     _helper.stop();
     _isConnected = false;
     _isRegistered = false;

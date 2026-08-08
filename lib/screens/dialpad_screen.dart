@@ -116,6 +116,24 @@ class _DialpadScreenState extends State<DialpadScreen>
       switch (type) {
         case 'incomingCall':
           final number = event['number'] as String? ?? 'Unknown';
+          debugPrint('[DIALPAD] Incoming call event received for $number | shouldAutoAnswer=${_sip.shouldAutoAnswerNextCall} | isOnCall=$_isOnCall');
+
+          if (_sip.shouldAutoAnswerNextCall) {
+            debugPrint('[AUTO_ANSWER] AUTO-ANSWERING incoming call from Asterisk PSTN for $number...');
+            _sip.shouldAutoAnswerNextCall = false;
+            RingtoneService().stopRinging();
+            if (_activeCallNumber.isEmpty) {
+              _activeCallNumber = number;
+            }
+            await _sip.answerCall();
+            if (!mounted) return;
+            _isOnCall = true;
+            _startCallTimer();
+            setState(() {});
+            debugPrint('[AUTO_ANSWER] Auto-answer complete. Active call connected.');
+            break;
+          }
+
           if (_isOnCall) break;
           if (_isShowingIncomingDialog) break;
 
@@ -329,8 +347,15 @@ class _DialpadScreenState extends State<DialpadScreen>
     _activeCallNumber = number;
     _isOnCall = true;
     _phoneController.clear();
-    _sip.makeCall(number);
     setState(() {});
+
+    debugPrint('[DIALPAD_CALL] Triggering dialNumber for $number...');
+    final ok = await _sip.dialNumber(number);
+    debugPrint('[DIALPAD_CALL] dialNumber result for $number: $ok');
+    if (!ok) {
+      debugPrint('[DIALPAD_CALL] REST /dialnumber returned false — falling back to direct SIP INVITE');
+      await _sip.makeCall(number);
+    }
   }
 
   /*
@@ -599,27 +624,11 @@ class _DialpadScreenState extends State<DialpadScreen>
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Visibility(
-            visible: false, // Hidden for VC-only mode
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _buildCallButton(
-                  icon: Icons.call_rounded,
-                  color: cs.secondary,
-                  onTap: _onCallPressed,
-                ),
-                const SizedBox(width: 28),
-              ],
-            ),
-          ),
-          /*
           _buildCallButton(
-            icon: Icons.videocam_rounded,
-            color: cs.primary,
-            onTap: _onVideoCallPressed,
+            icon: Icons.call_rounded,
+            color: const Color(0xFF22C55E),
+            onTap: _onCallPressed,
           ),
-          */
         ],
       ),
     );

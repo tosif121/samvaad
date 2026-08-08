@@ -111,9 +111,11 @@ class _LoginScreenState extends State<LoginScreen> {
         return;
       }
 
-      // Save token and credentials
+      // Save token, username, password and credentials
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('token', jsonEncode(data));
+      await prefs.setString('savedUsername', rawUsername);
+      await prefs.setString('savedPassword', password);
 
       final creds = _buildCreds();
       await _requestPermissions();
@@ -121,6 +123,9 @@ class _LoginScreenState extends State<LoginScreen> {
       unawaited(_sip.connect(creds).then((_) {}));
     } catch (e) {
       debugPrint('[LOGIN] Login API error or timeout: $e — proceeding with SIP registration fallback');
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('savedUsername', rawUsername);
+      await prefs.setString('savedPassword', password);
       final creds = _buildCreds();
       await _requestPermissions();
       await _sip.saveCredentials(creds);
@@ -271,7 +276,7 @@ class _LoginScreenState extends State<LoginScreen> {
                                           color: cs.onPrimary,
                                         ),
                                       )
-                                    : const Text('Connect'),
+                                    : const Text('Login'),
                               ),
                             ),
                           ],
