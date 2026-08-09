@@ -81,7 +81,9 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
 
     debugPrint('[INCOMING_CALL] Call rejected successfully');
     _onDismiss();
-    if (mounted) Navigator.of(context).pop(false);
+    if (mounted && Navigator.canPop(context)) {
+      Navigator.of(context).pop(false);
+    }
   }
 
   Future<void> _acceptCall() async {
@@ -93,7 +95,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
 
     try {
       _onDismiss();
-      if (mounted) {
+      if (mounted && Navigator.canPop(context)) {
         Navigator.of(context).pop('answer');
       }
       debugPrint('[INCOMING_CALL] Call answered successfully');

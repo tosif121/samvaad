@@ -13,6 +13,7 @@ const _singleInstancePort = 56321;
 ServerSocket? _instanceLock;
 
 Future<void> _acquireSingleInstanceLock() async {
+  if (Platform.isAndroid || Platform.isIOS) return;
   try {
     _instanceLock = await ServerSocket.bind(
       InternetAddress.loopbackIPv4,

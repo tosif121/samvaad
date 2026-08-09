@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:developer';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'incoming_call_screen.dart';
 import '../services/fcm_service.dart';
@@ -248,8 +250,6 @@ class _DialpadScreenState extends State<DialpadScreen>
             }
           }
 
-          RingtoneService().stopRinging();
-
           _callWasAnswered = false;
           _activeLogEntry = _createLogEntry(
             number: number,
@@ -258,11 +258,30 @@ class _DialpadScreenState extends State<DialpadScreen>
           );
 
           if (_appLifecycleState != AppLifecycleState.resumed) {
-            if (_isShowingIncomingDialog && mounted) {
-              Navigator.of(context).pop();
-              _isShowingIncomingDialog = false;
-            }
+            log('[DIALPAD] Incoming call received while app is backgrounded/minimized for $number');
+            RingtoneService().startRinging();
+            RingtoneService().bringAppToForeground();
+
+            const androidDetails = AndroidNotificationDetails(
+              'incoming_calls_channel',
+              'Incoming Calls',
+              channelDescription: 'Notifications for incoming call alerts',
+              importance: Importance.max,
+              priority: Priority.high,
+              fullScreenIntent: true,
+              category: AndroidNotificationCategory.call,
+              playSound: true,
+            );
+            const notificationDetails = NotificationDetails(android: androidDetails);
+            FlutterLocalNotificationsPlugin().show(
+              0,
+              'Incoming Call',
+              'Incoming call from $number',
+              notificationDetails,
+              payload: jsonEncode({'number': number}),
+            );
           } else {
+            RingtoneService().stopRinging();
             _showIncomingCall(number);
           }
           break;
@@ -302,6 +321,15 @@ class _DialpadScreenState extends State<DialpadScreen>
 
         case 'callEnded':
         case 'callFailed':
+          if (_isShowingIncomingDialog && mounted) {
+            try {
+              final nav = Navigator.of(context, rootNavigator: true);
+              if (nav.canPop()) {
+                nav.pop('call_cancelled');
+              }
+            } catch (_) {}
+            _isShowingIncomingDialog = false;
+          }
           final wasAnswered = _callWasAnswered;
           final endedNumber = _activeCallNumber.isNotEmpty
               ? _activeCallNumber
@@ -310,7 +338,6 @@ class _DialpadScreenState extends State<DialpadScreen>
           await _finalizeActiveCall(failed: type == 'callFailed');
           _isOnCall = false;
           _isShowingKeypad = false;
-          _isShowingIncomingDialog = false;
           _conferenceStatus = false;
           _conferenceConnected = false;
           _isMerged = false;
@@ -326,6 +353,9 @@ class _DialpadScreenState extends State<DialpadScreen>
           _callTimer?.cancel();
           _callSeconds = 0;
           RingtoneService().stopRinging();
+          try {
+            FlutterLocalNotificationsPlugin().cancelAll();
+          } catch (_) {}
           if (mounted) setState(() {});
           if (type == 'callEnded' && wasAnswered && mounted) {
             unawaited(

@@ -237,6 +237,7 @@ class FcmService with WidgetsBindingObserver {
       initializationSettings,
       onDidReceiveNotificationResponse: (details) {
         log('[FCM_SERVICE] Local notification tapped: ${details.payload}');
+        RingtoneService().bringAppToForeground();
         _localNotificationsPlugin.cancelAll();
       },
     );
