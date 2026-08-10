@@ -12,13 +12,13 @@ class CallHistoryTile extends StatelessWidget {
     super.key,
     required this.entry,
     required this.onTap,
-    required this.onDelete,
+    this.onDelete,
     this.onCallBack,
   });
 
   final CallLogEntry entry;
   final VoidCallback onTap;
-  final Future<void> Function() onDelete;
+  final Future<void> Function()? onDelete;
   final VoidCallback? onCallBack;
 
   static String formatDuration(int seconds) {
@@ -47,6 +47,95 @@ class CallHistoryTile extends StatelessWidget {
     final duration = formatDuration(entry.durationSec);
     final time = timeLabel(entry.startedAt);
 
+    final tile = ListTile(
+      onTap: onTap,
+      contentPadding: const EdgeInsets.symmetric(
+        horizontal: AppSpacing.md,
+        vertical: 2,
+      ),
+      leading: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          AvatarBubble(
+            name: displayNumber,
+            size: AppSizes.avatarSm,
+            iconColor: color,
+          ),
+          Positioned(
+            right: -2,
+            bottom: -2,
+            child: Container(
+              padding: const EdgeInsets.all(2),
+              decoration: BoxDecoration(
+                color: cs.surface,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(icon, size: 13, color: color),
+            ),
+          ),
+        ],
+      ),
+      title: Text(
+        displayNumber,
+        style: TextStyle(
+          fontSize: AppType.body,
+          fontWeight: entry.isMissed ? FontWeight.w800 : FontWeight.w600,
+          color: entry.isMissed ? cs.error : cs.onSurface,
+        ),
+      ),
+      subtitle: Padding(
+        padding: const EdgeInsets.only(top: 3),
+        child: Wrap(
+          spacing: 8,
+          runSpacing: 3,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: [
+            if (entry.source.isNotEmpty)
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 7,
+                  vertical: 1,
+                ),
+                decoration: BoxDecoration(
+                  color: cs.primary.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(AppRadii.sm),
+                ),
+                child: Text(
+                  entry.source,
+                  style: TextStyle(
+                    fontSize: AppType.overline - 1,
+                    fontWeight: FontWeight.w700,
+                    color: cs.primary,
+                  ),
+                ),
+              ),
+            Text(
+              [
+                time,
+                if (duration.isNotEmpty) duration,
+                if (entry.type == CallLogType.video) 'Video',
+              ].join('  ·  '),
+              style: TextStyle(
+                fontSize: AppType.caption - 1,
+                color: cs.onSurface.withValues(alpha: 0.45),
+              ),
+            ),
+          ],
+        ),
+      ),
+      trailing: onCallBack == null
+          ? null
+          : IconButton(
+              icon: Icon(Icons.call_rounded, color: cs.secondary, size: 22),
+              tooltip: 'Call back',
+              onPressed: onCallBack,
+            ),
+    );
+
+    if (onDelete == null) {
+      return tile;
+    }
+
     return Dismissible(
       key: ValueKey(entry.id),
       direction: DismissDirection.endToStart,
@@ -54,7 +143,7 @@ class CallHistoryTile extends StatelessWidget {
         Haptics.light();
         return true;
       },
-      onDismissed: (_) => onDelete(),
+      onDismissed: (_) => onDelete!(),
       background: Container(
         alignment: Alignment.centerRight,
         padding: const EdgeInsets.only(right: AppSpacing.lg),
@@ -64,90 +153,7 @@ class CallHistoryTile extends StatelessWidget {
         ),
         child: Icon(Icons.delete_outline_rounded, color: cs.error),
       ),
-      child: ListTile(
-        onTap: onTap,
-        contentPadding: const EdgeInsets.symmetric(
-          horizontal: AppSpacing.md,
-          vertical: 2,
-        ),
-        leading: Stack(
-          clipBehavior: Clip.none,
-          children: [
-            AvatarBubble(
-              name: displayNumber,
-              size: AppSizes.avatarSm,
-              iconColor: color,
-            ),
-            Positioned(
-              right: -2,
-              bottom: -2,
-              child: Container(
-                padding: const EdgeInsets.all(2),
-                decoration: BoxDecoration(
-                  color: cs.surface,
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(icon, size: 13, color: color),
-              ),
-            ),
-          ],
-        ),
-        title: Text(
-          displayNumber,
-          style: TextStyle(
-            fontSize: AppType.body,
-            fontWeight: entry.isMissed ? FontWeight.w800 : FontWeight.w600,
-            color: entry.isMissed ? cs.error : cs.onSurface,
-          ),
-        ),
-        subtitle: Padding(
-          padding: const EdgeInsets.only(top: 3),
-          child: Wrap(
-            spacing: 8,
-            runSpacing: 3,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              if (entry.source.isNotEmpty)
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 7,
-                    vertical: 1,
-                  ),
-                  decoration: BoxDecoration(
-                    color: cs.primary.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(AppRadii.sm),
-                  ),
-                  child: Text(
-                    entry.source,
-                    style: TextStyle(
-                      fontSize: AppType.overline - 1,
-                      fontWeight: FontWeight.w700,
-                      color: cs.primary,
-                    ),
-                  ),
-                ),
-              Text(
-                [
-                  time,
-                  if (duration.isNotEmpty) duration,
-                  if (entry.type == CallLogType.video) 'Video',
-                ].join('  ·  '),
-                style: TextStyle(
-                  fontSize: AppType.caption - 1,
-                  color: cs.onSurface.withValues(alpha: 0.45),
-                ),
-              ),
-            ],
-          ),
-        ),
-        trailing: onCallBack == null
-            ? null
-            : IconButton(
-                icon: Icon(Icons.call_rounded, color: cs.secondary, size: 22),
-                tooltip: 'Call back',
-                onPressed: onCallBack,
-              ),
-      ),
+      child: tile,
     );
   }
 }

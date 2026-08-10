@@ -7,13 +7,16 @@ class UserData {
   UserData._();
 
   static Map<String, dynamic>? _userData;
+  static SharedPreferences? _prefs;
 
   /// Loads and caches `userData` from the saved login token. Call once at
   /// startup and again after a fresh login so the dashboard uses new values.
   static Future<void> init() async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final tokenStr = prefs.getString('token');
+      _prefs = await SharedPreferences.getInstance();
+      _autoDialActive = _prefs?.getBool('auto_dial_active') ?? true;
+      _autoDialCountdownSeconds = _prefs?.getInt('auto_dial_countdown_seconds') ?? 3;
+      final tokenStr = _prefs?.getString('token');
       if (tokenStr == null || tokenStr.isEmpty) return;
       final decoded = jsonDecode(tokenStr);
       if (decoded is Map) {
@@ -42,6 +45,27 @@ class UserData {
 
   /// When true, phone numbers are masked (webphone `numberMasking`).
   static bool isNumberMasking() => _bool('numberMasking', fallback: false);
+
+  static bool _autoDialActive = true;
+  static int _autoDialCountdownSeconds = 3;
+
+  /// Auto-dial mode state (Active vs Paused).
+  static bool isAutoDialActive() => _autoDialActive;
+
+  static Future<void> setAutoDialActive(bool value) async {
+    _autoDialActive = value;
+    final prefs = _prefs ?? await SharedPreferences.getInstance();
+    await prefs.setBool('auto_dial_active', value);
+  }
+
+  /// Auto-dial countdown timer seconds (default 3s).
+  static int autoDialCountdownSeconds() => _autoDialCountdownSeconds;
+
+  static Future<void> setAutoDialCountdownSeconds(int seconds) async {
+    _autoDialCountdownSeconds = seconds;
+    final prefs = _prefs ?? await SharedPreferences.getInstance();
+    await prefs.setInt('auto_dial_countdown_seconds', seconds);
+  }
 
   static String campaignName() => _str('campaignName');
 

@@ -1217,6 +1217,7 @@ class SipSocketService implements sip.SipUaHelperListener {
             body: jsonEncode({}),
           )
           .timeout(const Duration(seconds: 8));
+      if (_checkResponseForAuthFailure(response)) return _missedCalls;
       final data = jsonDecode(response.body);
       final result = data is Map ? data['result'] : null;
       if (result is List) {
@@ -1229,6 +1230,9 @@ class SipSocketService implements sip.SipUaHelperListener {
     return _missedCalls;
   }
 
+  List<Map<String, dynamic>> _leads = [];
+  List<Map<String, dynamic>> get leads => _leads;
+
   /// Fetches the agent's recent call records from `POST /reports/calls/byAgent`
   /// (agent + last 30 days) and maps them into [CallLogEntry] list.
   Future<List<CallLogEntry>> fetchRecentCalls() async {
@@ -1238,7 +1242,7 @@ class SipSocketService implements sip.SipUaHelperListener {
       _log('Fetching recent calls for $username...');
       final headers = await _getAuthHeaders();
       final now = DateTime.now();
-      final startDate = now.subtract(const Duration(days: 30));
+      final startDate = DateTime(2000, 1, 1);
       final response = await http
           .post(
             Uri.parse('https://devapp.iotcom.io/reports/calls/byAgent'),
@@ -1250,6 +1254,8 @@ class SipSocketService implements sip.SipUaHelperListener {
             }),
           )
           .timeout(const Duration(seconds: 10));
+      _log('Recent calls API status: ${response.statusCode}, body: ${response.body}');
+      if (_checkResponseForAuthFailure(response)) return _recentCalls;
       final data = jsonDecode(response.body);
       final result = data is Map ? data['result'] : null;
       if (result is List) {
@@ -1262,6 +1268,68 @@ class SipSocketService implements sip.SipUaHelperListener {
       _log('Error fetching recent calls: $e');
     }
     return _recentCalls;
+  }
+
+  /// Fetches agent leads from `POST /leadswithdaterange`
+  Future<List<Map<String, dynamic>>> fetchLeads([
+    DateTime? customStartDate,
+    DateTime? customEndDate,
+  ]) async {
+    try {
+      final username = await _resolveApiUsername();
+      if (username.isEmpty) return _leads;
+      final now = DateTime.now();
+      final endDate = customEndDate ?? now;
+      final startDate = customStartDate ?? now;
+      _log('Fetching leads for $username (${_formatDate(startDate)} to ${_formatDate(endDate)})...');
+      final headers = await _getAuthHeaders();
+      final response = await http
+          .post(
+            Uri.parse('https://devapp.iotcom.io/leadswithdaterange'),
+            headers: headers,
+            body: jsonEncode({
+              'startDate': _formatDate(startDate),
+              'endDate': _formatDate(endDate),
+              'user': username,
+              'campaignID': UserData.campaign(),
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
+      _log('Leads API status: ${response.statusCode}');
+      if (_checkResponseForAuthFailure(response)) return _leads;
+      final data = jsonDecode(response.body);
+      final result = data is Map ? (data['data'] ?? data['result']) : null;
+      if (result is List) {
+        _leads = List<Map<String, dynamic>>.from(
+          result.map((x) => x is Map ? Map<String, dynamic>.from(x) : <String, dynamic>{}),
+        );
+        _emit(SipEvent.messageReceived, data: {'type': 'leadsUpdated', 'count': _leads.length});
+      }
+    } catch (e) {
+      _log('Error fetching leads: $e');
+    }
+    return _leads;
+  }
+
+  bool _checkResponseForAuthFailure(http.Response response) {
+    if (response.statusCode == 401 || response.statusCode == 403) {
+      _log('HTTP ${response.statusCode} Unauthorized detected on ${response.request?.url}! Triggering auto-logout...');
+      _handleAuthFailure();
+      return true;
+    }
+    try {
+      final body = response.body.toLowerCase();
+      if (body.contains('unauthorized') || body.contains('invalid token') || body.contains('token expired')) {
+        _log('Auth failure response detected on ${response.request?.url}! Triggering auto-logout...');
+        _handleAuthFailure();
+        return true;
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  void _handleAuthFailure() {
+    _emit(SipEvent.connectionLost, data: {'reason': '401_unauthorized'});
   }
 
   String _formatDate(DateTime d) {
@@ -1413,6 +1481,7 @@ class SipSocketService implements sip.SipUaHelperListener {
             body: jsonEncode({'user': username}),
           )
           .timeout(const Duration(seconds: 5));
+      if (_checkResponseForAuthFailure(response)) return null;
       if (response.statusCode == 200) {
         return jsonDecode(response.body) as Map<String, dynamic>?;
       }
@@ -1452,6 +1521,7 @@ class SipSocketService implements sip.SipUaHelperListener {
     final queue = data['currentCallqueue'];
     if (queue is List) {
       _currentCallqueue = queue;
+      _log('[CALL_QUEUE] Active Call Queue (${queue.length} callers): ${jsonEncode(queue)}');
       final callers = queue
           .map((c) => (c is Map ? (c['Caller'] ?? '') : '').toString())
           .join(',');
@@ -1824,6 +1894,7 @@ class SipSocketService implements sip.SipUaHelperListener {
             )
             .timeout(const Duration(seconds: 5));
         _log('/userready response (${response.statusCode}): ${response.body}');
+        if (_checkResponseForAuthFailure(response)) return false;
         if (response.statusCode == 200) {
           final data = jsonDecode(response.body);
           if (data is Map && data['message'] == 'success') {

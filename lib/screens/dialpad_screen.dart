@@ -22,7 +22,6 @@ import '../ui/widgets/call_history_tile.dart';
 import '../ui/widgets/chips.dart';
 import '../ui/widgets/common.dart';
 import '../ui/widgets/follow_up_tile.dart';
-import '../ui/widgets/missed_call_group_card.dart';
 import '../ui/widgets/dynamic_form_sheet.dart';
 import '../ui/widgets/schedule_callback_sheet.dart';
 
@@ -409,6 +408,14 @@ class _DialpadScreenState extends State<DialpadScreen>
 
         case 'registrationFailed':
           if (mounted) setState(() {});
+          break;
+
+        case 'connectionLost':
+          final reason = (event['reason'] ?? '').toString();
+          if (reason == 'force_login' || reason == '401_unauthorized') {
+            log('[DIALPAD] Unauthenticated session ($reason), triggering auto-logout...');
+            _logout();
+          }
           break;
 
         default:
@@ -916,6 +923,8 @@ class _DialpadScreenState extends State<DialpadScreen>
                 ),
               ),
             ),
+          const SizedBox(width: AppSpacing.xs),
+          _buildQueueBadge(),
         ],
       ),
     );
@@ -941,13 +950,16 @@ class _DialpadScreenState extends State<DialpadScreen>
     );
   }
 
+  int _callsFilterIndex = 0;
+  String _leadSearchQuery = '';
+
   Widget _buildTabs() {
     return IndexedStack(
       index: _tabIndex,
       children: [
         _buildDialerTab(),
-        _buildRecentTab(),
-        _buildMissedTab(),
+        _buildCallsTab(),
+        _buildLeadsTab(),
         _buildFollowUpsTab(),
         _buildSettingsTab(),
       ],
@@ -959,6 +971,7 @@ class _DialpadScreenState extends State<DialpadScreen>
       valueListenable: _callLog.unseenMissed,
       builder: (context, unseen, _) {
         final missedCount = _sip.missedCalls.length;
+        final leadsCount = _sip.leads.length;
         final followUpCount = _sip.followUps.length;
         return NavigationBar(
           selectedIndex: _tabIndex,
@@ -970,6 +983,8 @@ class _DialpadScreenState extends State<DialpadScreen>
             });
             if (index == 1) {
               _callLog.markMissedSeen();
+            } else if (index == 2) {
+              unawaited(_sip.fetchLeads());
             }
           },
           destinations: [
@@ -980,29 +995,29 @@ class _DialpadScreenState extends State<DialpadScreen>
             ),
             NavigationDestination(
               icon: Badge.count(
-                count: unseen,
-                isLabelVisible: unseen > 0,
-                child: const Icon(Icons.history_outlined),
+                count: missedCount,
+                isLabelVisible: missedCount > 0,
+                child: const Icon(Icons.call_outlined),
               ),
               selectedIcon: Badge.count(
-                count: unseen,
-                isLabelVisible: unseen > 0,
-                child: const Icon(Icons.history_rounded),
+                count: missedCount,
+                isLabelVisible: missedCount > 0,
+                child: const Icon(Icons.call_rounded),
               ),
-              label: 'Recent',
+              label: 'Calls',
             ),
             NavigationDestination(
               icon: Badge.count(
-                count: missedCount,
-                isLabelVisible: missedCount > 0,
-                child: const Icon(Icons.phone_missed_outlined),
+                count: leadsCount,
+                isLabelVisible: leadsCount > 0,
+                child: const Icon(Icons.assignment_ind_outlined),
               ),
               selectedIcon: Badge.count(
-                count: missedCount,
-                isLabelVisible: missedCount > 0,
-                child: const Icon(Icons.phone_missed_rounded),
+                count: leadsCount,
+                isLabelVisible: leadsCount > 0,
+                child: const Icon(Icons.assignment_ind_rounded),
               ),
-              label: 'Missed',
+              label: 'Leads',
             ),
             NavigationDestination(
               icon: Badge.count(
@@ -1042,13 +1057,14 @@ class _DialpadScreenState extends State<DialpadScreen>
     final count = _sip.queueCount;
     if (count <= 0) return const SizedBox.shrink();
     final cs = Theme.of(context).colorScheme;
+
     return GestureDetector(
       onTap: _showQueueSheet,
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 2),
         child: InfoChip(
           icon: Icons.queue_rounded,
-          label: 'Call Queue: ($count)',
+          label: 'Queue: $count',
           color: cs.primary,
         ),
       ),
@@ -1058,6 +1074,7 @@ class _DialpadScreenState extends State<DialpadScreen>
   Future<void> _showQueueSheet() async {
     final cs = Theme.of(context).colorScheme;
     final queue = List<dynamic>.from(_sip.currentCallqueue);
+    log('[CALL_QUEUE] Opened Call Queue Sheet (${queue.length} callers): ${jsonEncode(queue)}');
     if (queue.isEmpty) return;
     await showModalBottomSheet<void>(
       context: context,
@@ -1407,196 +1424,531 @@ class _DialpadScreenState extends State<DialpadScreen>
   }
 
   // ---------------------------------------------------------------------
-  // Recent (call history) tab
+  // Combined Calls tab (Recent + Missed)
   // ---------------------------------------------------------------------
 
-  Widget _buildRecentTab() {
-    return ValueListenableBuilder<List<CallLogEntry>>(
-      valueListenable: _callLog.entries,
-      builder: (context, list, _) {
-        final cs = Theme.of(context).colorScheme;
-        final merged = _mergedHistory(list);
-        if (merged.isEmpty) {
-          return Padding(
-            padding: const EdgeInsets.only(top: 64),
-            child: const EmptyState(
-              icon: Icons.history_rounded,
-              title: 'No recent calls',
-              subtitle: 'Incoming, outgoing and missed calls will appear here.',
-            ),
-          );
+  CallLogEntry _rawMissedCallToEntry(dynamic raw, int index) {
+    if (raw is Map) {
+      final caller = (raw['Caller'] ?? raw['caller'] ?? raw['number'] ?? 'Unknown').toString();
+      final startTimeRaw = raw['startTime'] ?? raw['time'] ?? raw['timestamp'];
+      DateTime time = DateTime.now();
+      if (startTimeRaw != null) {
+        final ms = int.tryParse(startTimeRaw.toString());
+        if (ms != null) {
+          time = DateTime.fromMillisecondsSinceEpoch(ms);
+        } else {
+          time = DateTime.tryParse(startTimeRaw.toString()) ?? DateTime.now();
         }
-        return CustomScrollView(
-          slivers: [
-            SliverToBoxAdapter(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(
-                  AppSpacing.md,
-                  AppSpacing.xs,
-                  AppSpacing.xs,
-                  0,
+      }
+      return CallLogEntry(
+        id: 'missed_${index}_${time.millisecondsSinceEpoch}',
+        number: caller,
+        startedAt: time,
+        durationSec: 0,
+        direction: CallLogDirection.incoming,
+        type: CallLogType.audio,
+        source: (raw['campaign'] ?? raw['source'] ?? '').toString(),
+      );
+    }
+    return CallLogEntry(
+      id: 'missed_$index',
+      number: raw.toString(),
+      startedAt: DateTime.now(),
+      durationSec: 0,
+      direction: CallLogDirection.incoming,
+      type: CallLogType.audio,
+    );
+  }
+
+  Widget _buildCallsTab() {
+    final cs = Theme.of(context).colorScheme;
+    final allCalls = _sip.recentCalls;
+    final rawMissed = _sip.missedCalls;
+    final missedCalls = rawMissed
+        .asMap()
+        .entries
+        .map((e) => _rawMissedCallToEntry(e.value, e.key))
+        .toList();
+    final displayList = _callsFilterIndex == 0 ? allCalls : missedCalls;
+
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            AppSpacing.md,
+            AppSpacing.xs,
+            AppSpacing.md,
+            AppSpacing.xs,
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Calls',
+                  style: TextStyle(
+                    fontSize: AppType.heading,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: -0.3,
+                    color: cs.onSurface,
+                  ),
                 ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        'Recent Calls',
-                        style: TextStyle(
-                          fontSize: AppType.heading,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: -0.3,
-                          color: cs.onSurface,
-                        ),
-                      ),
+              ),
+              IconButton(
+                onPressed: () => unawaited(Future.wait([
+                  _sip.fetchRecentCalls(),
+                  _sip.fetchMissedCalls(),
+                ])),
+                icon: const Icon(Icons.refresh_rounded, size: 20),
+                tooltip: 'Refresh Calls',
+              ),
+            ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: 4),
+          child: Row(
+            children: [
+              Expanded(
+                child: SegmentedButton<int>(
+                  segments: [
+                    ButtonSegment<int>(
+                      value: 0,
+                      label: Text('All Calls (${allCalls.length})'),
+                      icon: const Icon(Icons.call_rounded, size: 16),
                     ),
-                    TextButton.icon(
-                      onPressed: _confirmClearHistory,
-                      icon: const Icon(Icons.delete_sweep_outlined, size: 18),
-                      label: const Text('Clear'),
+                    ButtonSegment<int>(
+                      value: 1,
+                      label: Text('Missed (${missedCalls.length})'),
+                      icon: const Icon(Icons.phone_missed_rounded, size: 16),
                     ),
                   ],
+                  selected: {_callsFilterIndex},
+                  onSelectionChanged: (val) {
+                    setState(() => _callsFilterIndex = val.first);
+                  },
                 ),
               ),
-            ),
-            for (final group in _groupEntriesByDay(merged))
-              SliverMainAxisGroup(
-                slivers: [
-                  SliverPersistentHeader(
-                    pinned: true,
-                    delegate: _StickyDayHeaderDelegate(
-                      label: _dayLabel(group.key),
-                      color: Theme.of(context).colorScheme.surface,
-                    ),
-                  ),
-                  SliverList.builder(
-                    itemCount: group.value.length,
-                    itemBuilder: (context, i) {
-                      final entry = group.value[i];
-                      return CallHistoryTile(
-                        entry: entry,
-                        onTap: () => _dialFromHistory(entry),
-                        onCallBack: () => _dialFromHistory(entry),
-                        onDelete: () async {
-                          await _callLog.remove(entry.id);
-                        },
-                      );
-                    },
-                  ),
-                ],
-              ),
-            const SliverToBoxAdapter(child: SizedBox(height: 16)),
-          ],
-        );
-      },
-    );
-  }
-
-  List<CallLogEntry> _mergedHistory(List<CallLogEntry> local) {
-    final byKey = <String, CallLogEntry>{};
-    for (final entry in _sip.recentCalls) {
-      byKey[_historyKey(entry)] = entry;
-    }
-    for (final entry in local) {
-      byKey[_historyKey(entry)] = entry;
-    }
-    final merged = byKey.values.toList()
-      ..sort((a, b) => b.startedAt.compareTo(a.startedAt));
-    return merged;
-  }
-
-  String _historyKey(CallLogEntry entry) {
-    if (entry.bridgeId != null && entry.bridgeId!.isNotEmpty) {
-      return 'bridge:${entry.bridgeId}';
-    }
-    final min = DateTime(
-      entry.startedAt.year,
-      entry.startedAt.month,
-      entry.startedAt.day,
-      entry.startedAt.hour,
-      entry.startedAt.minute,
-    );
-    return '${min.millisecondsSinceEpoch}_${entry.number}';
-  }
-
-  // ---------------------------------------------------------------------
-  // Missed Calls tab
-  // ---------------------------------------------------------------------
-
-  Widget _buildMissedTab() {
-    final cs = Theme.of(context).colorScheme;
-    final missed = _sip.missedCalls;
-    if (missed.isEmpty) {
-      return Padding(
-        padding: const EdgeInsets.only(top: 64),
-        child: const EmptyState(
-          icon: Icons.phone_missed_rounded,
-          title: 'All caught up',
-          subtitle: 'Missed calls will show up here while you are on calls.',
+            ],
+          ),
         ),
-      );
-    }
+        Expanded(
+          child: RefreshIndicator(
+            onRefresh: () async {
+              await Future.wait([
+                _sip.fetchRecentCalls(),
+                _sip.fetchMissedCalls(),
+              ]);
+            },
+            child: displayList.isEmpty
+                ? SingleChildScrollView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 64),
+                      child: EmptyState(
+                        icon: _callsFilterIndex == 0 ? Icons.history_rounded : Icons.phone_missed_rounded,
+                        title: _callsFilterIndex == 0 ? 'No recent calls' : 'No missed calls',
+                        subtitle: _callsFilterIndex == 0
+                            ? 'Incoming, outgoing and missed calls will appear here.'
+                            : 'Missed calls will show up here while you are away.',
+                      ),
+                    ),
+                  )
+                : CustomScrollView(
+                  slivers: [
+                    for (final group in _groupEntriesByDay(displayList))
+                      SliverMainAxisGroup(
+                        slivers: [
+                          SliverPersistentHeader(
+                            pinned: true,
+                            delegate: _StickyDayHeaderDelegate(
+                              label: _dayLabel(group.key),
+                              color: Theme.of(context).colorScheme.surface,
+                            ),
+                          ),
+                          SliverList.builder(
+                            itemCount: group.value.length,
+                            itemBuilder: (context, i) {
+                              final entry = group.value[i];
+                              return CallHistoryTile(
+                                entry: entry,
+                                onTap: () => _dialFromHistory(entry),
+                                onCallBack: () => _dialFromHistory(entry),
+                              );
+                            },
+                          ),
+                        ],
+                      ),
+                    const SliverToBoxAdapter(child: SizedBox(height: 16)),
+                  ],
+                ),
+          ),
+        ),
+      ],
+    );
+  }
 
-    final groups = <String, List<dynamic>>{};
-    for (final call in missed) {
-      final caller = (call is Map ? (call['Caller'] ?? 'Unknown') : 'Unknown')
-          .toString();
-      groups.putIfAbsent(_stripCountryCode(caller), () => []).add(call);
-    }
-    final sorted = groups.entries.toList()
-      ..sort(
-        (a, b) => _latestCallTime(b.value).compareTo(_latestCallTime(a.value)),
-      );
+  // ---------------------------------------------------------------------
+  // Leads tab
+  // ---------------------------------------------------------------------
 
-    return AnimatedSwitcher(
-      duration: AppMotion.normal,
-      child: ListView(
-        key: ValueKey(missed.length),
-        padding: const EdgeInsets.only(bottom: AppSpacing.md),
+  int _leadDateFilterIndex = 0; // Default: Today (0: Today, 1: 7 Days, 2: 30 Days, 3: All Time)
+
+  Future<void> _fetchLeadsForSelectedFilter([int? filterIdx]) async {
+    final idx = filterIdx ?? _leadDateFilterIndex;
+    final now = DateTime.now();
+    DateTime startDate;
+    switch (idx) {
+      case 0:
+        startDate = now;
+        break;
+      case 1:
+        startDate = now.subtract(const Duration(days: 7));
+        break;
+      case 2:
+        startDate = now.subtract(const Duration(days: 30));
+        break;
+      case 3:
+      default:
+        startDate = DateTime(2000, 1, 1);
+        break;
+    }
+    await _sip.fetchLeads(startDate, now);
+  }
+
+  Widget _buildLeadsTab() {
+    final cs = Theme.of(context).colorScheme;
+    final allLeads = _sip.leads;
+    final hasLeads = allLeads.isNotEmpty;
+    final query = _leadSearchQuery.trim().toLowerCase();
+    final leads = query.isEmpty
+        ? allLeads
+        : allLeads.where((lead) {
+            final name = (lead['name'] ?? lead['leadName'] ?? lead['customerName'] ?? '').toString().toLowerCase();
+            final phone = (lead['phone'] ?? lead['contactNumber'] ?? lead['mobileNumber'] ?? lead['dialNumber'] ?? '').toString().toLowerCase();
+            return name.contains(query) || phone.contains(query);
+          }).toList();
+
+    final isAutoActive = UserData.isAutoDialActive();
+    final badgeColor = !hasLeads
+        ? cs.onSurface.withValues(alpha: 0.38)
+        : isAutoActive
+            ? Colors.green
+            : Colors.orange;
+
+    return RefreshIndicator(
+      onRefresh: () async => await _fetchLeadsForSelectedFilter(),
+      child: Column(
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(
               AppSpacing.md,
               AppSpacing.xs,
               AppSpacing.md,
-              AppSpacing.sm,
+              AppSpacing.xs,
             ),
-            child: Text(
-              'Missed Calls',
-              style: TextStyle(
-                fontSize: AppType.heading,
-                fontWeight: FontWeight.w800,
-                letterSpacing: -0.3,
-                color: cs.onSurface,
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Leads (${allLeads.length})',
+                    style: TextStyle(
+                      fontSize: AppType.heading,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: -0.3,
+                      color: cs.onSurface,
+                    ),
+                  ),
+                ),
+                GestureDetector(
+                  onTap: !hasLeads
+                      ? null
+                      : () async {
+                          final active = UserData.isAutoDialActive();
+                          await UserData.setAutoDialActive(!active);
+                          if (mounted) setState(() {});
+                        },
+                  child: AnimatedOpacity(
+                    duration: const Duration(milliseconds: 200),
+                    opacity: hasLeads ? 1.0 : 0.5,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: badgeColor.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: badgeColor.withValues(alpha: 0.5),
+                          width: 1,
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            !hasLeads
+                                ? Icons.block_rounded
+                                : isAutoActive
+                                    ? Icons.play_arrow_rounded
+                                    : Icons.pause_rounded,
+                            size: 14,
+                            color: badgeColor,
+                          ),
+                          const SizedBox(width: 3),
+                          Text(
+                            !hasLeads
+                                ? 'Disabled'
+                                : isAutoActive
+                                    ? 'Auto Active'
+                                    : 'Paused',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold,
+                              color: badgeColor,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 4),
+                IconButton(
+                  onPressed: () => unawaited(_fetchLeadsForSelectedFilter()),
+                  icon: const Icon(Icons.refresh_rounded, size: 20),
+                  tooltip: 'Refresh Leads',
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: 4),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  ChoiceChip(
+                    label: const Text('Today'),
+                    selected: _leadDateFilterIndex == 0,
+                    onSelected: (sel) {
+                      if (sel) {
+                        setState(() => _leadDateFilterIndex = 0);
+                        _fetchLeadsForSelectedFilter(0);
+                      }
+                    },
+                  ),
+                  const SizedBox(width: 8),
+                  ChoiceChip(
+                    label: const Text('Last 7 Days'),
+                    selected: _leadDateFilterIndex == 1,
+                    onSelected: (sel) {
+                      if (sel) {
+                        setState(() => _leadDateFilterIndex = 1);
+                        _fetchLeadsForSelectedFilter(1);
+                      }
+                    },
+                  ),
+                  const SizedBox(width: 8),
+                  ChoiceChip(
+                    label: const Text('Last 30 Days'),
+                    selected: _leadDateFilterIndex == 2,
+                    onSelected: (sel) {
+                      if (sel) {
+                        setState(() => _leadDateFilterIndex = 2);
+                        _fetchLeadsForSelectedFilter(2);
+                      }
+                    },
+                  ),
+                  const SizedBox(width: 8),
+                  ChoiceChip(
+                    label: const Text('All Time'),
+                    selected: _leadDateFilterIndex == 3,
+                    onSelected: (sel) {
+                      if (sel) {
+                        setState(() => _leadDateFilterIndex = 3);
+                        _fetchLeadsForSelectedFilter(3);
+                      }
+                    },
+                  ),
+                ],
               ),
             ),
           ),
-          for (final group in sorted)
-            Padding(
-              padding: const EdgeInsets.only(bottom: AppSpacing.xs),
-              child: MissedCallGroupCard(
-                caller: group.key,
-                count: group.value.length,
-                lastAttempt: _latestCallTime(group.value),
-                callBacking: _callBackingCallers.contains(group.key),
-                onCallBack: () => _callBackNumber(group.key),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: 4),
+            child: TextField(
+              decoration: InputDecoration(
+                hintText: 'Search leads by name or number...',
+                prefixIcon: const Icon(Icons.search_rounded, size: 20),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: cs.outline.withValues(alpha: 0.3)),
+                ),
+                filled: true,
+                fillColor: cs.surfaceContainerLow,
               ),
+              onChanged: (val) => setState(() => _leadSearchQuery = val),
             ),
+          ),
+          Expanded(
+            child: leads.isEmpty
+                ? SingleChildScrollView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 64),
+                      child: EmptyState(
+                        icon: Icons.assignment_ind_outlined,
+                        title: allLeads.isEmpty ? 'No leads found' : 'No matching leads',
+                        subtitle: allLeads.isEmpty
+                            ? 'Pull down to refresh or check your assigned campaign.'
+                            : 'Try searching with a different name or number.',
+                      ),
+                    ),
+                  )
+                : ListView.separated(
+                    padding: const EdgeInsets.all(AppSpacing.md),
+                    itemCount: leads.length,
+                    separatorBuilder: (context, index) => const SizedBox(height: 10),
+                    itemBuilder: (context, i) {
+                      final item = leads[i];
+                      final name = (item['name'] ?? item['leadName'] ?? item['customerName'] ?? item['Lead Name'] ?? 'Lead #${i + 1}').toString();
+                      final phone = (item['phone'] ?? item['contactNumber'] ?? item['mobileNumber'] ?? item['dialNumber'] ?? item['Lead Number'] ?? '').toString();
+                      final status = (item['status'] ?? item['leadStatus'] ?? item['Status'] ?? 'New').toString();
+                      final dialStatus = (item['dialStatus'] ?? item['callStatus'] ?? item['disposition'] ?? item['Dial Status'] ?? 'Not Dialed').toString();
+                      final lastUpdated = (item['updatedAt'] ?? item['lastUpdated'] ?? item['uploadDate'] ?? item['created_at'] ?? item['Last Updated']);
+
+                      final isDialed = dialStatus.toLowerCase().contains('dial') ||
+                          dialStatus.toLowerCase().contains('answered') ||
+                          dialStatus.toLowerCase().contains('completed');
+
+                      return Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: cs.surfaceContainerLow,
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: cs.outline.withValues(alpha: 0.2)),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                CircleAvatar(
+                                  radius: 20,
+                                  backgroundColor: cs.primaryContainer,
+                                  child: Icon(Icons.person_rounded, size: 20, color: cs.onPrimaryContainer),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        name,
+                                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Row(
+                                        children: [
+                                          Icon(Icons.phone_rounded, size: 13, color: cs.onSurfaceVariant),
+                                          const SizedBox(width: 4),
+                                          Text(
+                                            phone.isNotEmpty ? phone : 'No phone number',
+                                            style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant, fontWeight: FontWeight.w500),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                IconButton(
+                                  icon: const Icon(Icons.phone_forwarded_rounded, color: Colors.green, size: 22),
+                                  onPressed: phone.isEmpty
+                                      ? null
+                                      : () {
+                                          _phoneController.text = phone;
+                                          setState(() => _tabIndex = 0);
+                                          _onCallPressed();
+                                        },
+                                  tooltip: 'Dial Lead',
+                                ),
+                              ],
+                            ),
+                            const Padding(
+                              padding: EdgeInsets.symmetric(vertical: 8),
+                              child: Divider(height: 1),
+                            ),
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 6,
+                              crossAxisAlignment: WrapCrossAlignment.center,
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                  decoration: BoxDecoration(
+                                    color: cs.primary.withValues(alpha: 0.12),
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        'Status: ',
+                                        style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
+                                      ),
+                                      Text(
+                                        status,
+                                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: cs.primary),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                  decoration: BoxDecoration(
+                                    color: isDialed ? Colors.green.withValues(alpha: 0.12) : Colors.orange.withValues(alpha: 0.12),
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        'Dial Status: ',
+                                        style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
+                                      ),
+                                      Text(
+                                        dialStatus,
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.bold,
+                                          color: isDialed ? Colors.green : Colors.orange,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 6),
+                            Row(
+                              children: [
+                                Icon(Icons.access_time_rounded, size: 12, color: cs.onSurfaceVariant.withValues(alpha: 0.6)),
+                                const SizedBox(width: 4),
+                                Text(
+                                  'Last Updated: ${_formatLeadDate(lastUpdated)}',
+                                  style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant.withValues(alpha: 0.7)),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+          ),
         ],
       ),
     );
-  }
-
-  DateTime _latestCallTime(List<dynamic> calls) {
-    var latest = DateTime.fromMillisecondsSinceEpoch(0);
-    for (final call in calls) {
-      final raw = call is Map ? call['startTime'] : null;
-      final ms = int.tryParse(raw?.toString() ?? '');
-      if (ms != null) {
-        final t = DateTime.fromMillisecondsSinceEpoch(ms);
-        if (t.isAfter(latest)) latest = t;
-      }
-    }
-    return latest;
   }
 
   // ---------------------------------------------------------------------
@@ -1793,6 +2145,34 @@ class _DialpadScreenState extends State<DialpadScreen>
     return DateTime(y, m, d, h, min);
   }
 
+  String _formatLeadDate(dynamic raw) {
+    if (raw == null || raw.toString().isEmpty) return 'N/A';
+    try {
+      final dt = DateTime.tryParse(raw.toString()) ??
+          (raw is int ? DateTime.fromMillisecondsSinceEpoch(raw) : null);
+      if (dt != null) {
+        final months = [
+          'Jan',
+          'Feb',
+          'Mar',
+          'Apr',
+          'May',
+          'Jun',
+          'Jul',
+          'Aug',
+          'Sep',
+          'Oct',
+          'Nov',
+          'Dec',
+        ];
+        final hour = dt.hour.toString().padLeft(2, '0');
+        final min = dt.minute.toString().padLeft(2, '0');
+        return '${dt.day} ${months[dt.month - 1]} ${dt.year}, $hour:$min';
+      }
+    } catch (_) {}
+    return raw.toString();
+  }
+
   Widget _followUpTile(_FollowUpEntry entry, DateTime now) {
     final overdue =
         entry.scheduledAt != null &&
@@ -1909,6 +2289,9 @@ class _DialpadScreenState extends State<DialpadScreen>
       children: [
         _buildProfileCard(cs),
         const SizedBox(height: AppSpacing.lg),
+        const SectionHeader('Auto-Dial Settings'),
+        _buildAutoDialCard(cs),
+        const SizedBox(height: AppSpacing.lg),
         const SectionHeader('Account'),
         _buildAccountCard(cs),
         const SizedBox(height: AppSpacing.lg),
@@ -1927,6 +2310,122 @@ class _DialpadScreenState extends State<DialpadScreen>
         const SizedBox(height: AppSpacing.md),
       ],
     );
+  }
+
+  Widget _buildAutoDialCard(ColorScheme cs) {
+    final hasLeads = _sip.leads.isNotEmpty;
+    final isActive = UserData.isAutoDialActive() && hasLeads;
+    final countdownSec = UserData.autoDialCountdownSeconds();
+
+    return Container(
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerLow,
+        borderRadius: BorderRadius.circular(AppRadii.lg),
+        border: Border.all(color: cs.outline.withValues(alpha: 0.2)),
+      ),
+      child: Column(
+        children: [
+          SwitchListTile(
+            title: const Text(
+              'Auto-Dial Mode',
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
+            subtitle: Text(
+              !hasLeads
+                  ? 'No leads available to auto-dial'
+                  : isActive
+                      ? 'Auto Active — Automatically dials next lead'
+                      : 'Paused — Manual dialing required',
+              style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+            ),
+            secondary: Icon(
+              !hasLeads
+                  ? Icons.block_rounded
+                  : isActive
+                      ? Icons.play_circle_fill_rounded
+                      : Icons.pause_circle_filled_rounded,
+              color: !hasLeads
+                  ? cs.onSurface.withValues(alpha: 0.38)
+                  : isActive
+                      ? Colors.green
+                      : Colors.orange,
+            ),
+            value: isActive,
+            onChanged: !hasLeads
+                ? null
+                : (val) async {
+                    await UserData.setAutoDialActive(val);
+                    if (mounted) setState(() {});
+                  },
+          ),
+          const Divider(height: 1),
+          ListTile(
+            leading: const Icon(Icons.timer_outlined),
+            title: const Text(
+              'Auto-Dial Countdown',
+              style: TextStyle(fontWeight: FontWeight.w600),
+            ),
+            subtitle: Text(
+              'Countdown before dialing: ${countdownSec}s',
+              style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
+            ),
+            trailing: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: cs.primaryContainer,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                '${countdownSec}s',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: cs.onPrimaryContainer,
+                ),
+              ),
+            ),
+            onTap: _showCountdownDurationDialog,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showCountdownDurationDialog() async {
+    final cs = Theme.of(context).colorScheme;
+    final current = UserData.autoDialCountdownSeconds();
+    final options = [3, 5, 10, 15, 30];
+
+    final selected = await showDialog<int>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Auto-Dial Countdown Duration'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: options.map((sec) {
+            final isSelected = sec == current;
+            return ListTile(
+              title: Text('$sec Seconds ${sec == 3 ? '(Default)' : ''}'),
+              leading: Icon(
+                isSelected ? Icons.check_circle_rounded : Icons.circle_outlined,
+                color: isSelected ? cs.primary : cs.onSurfaceVariant.withValues(alpha: 0.5),
+              ),
+              onTap: () => Navigator.of(context).pop(sec),
+            );
+          }).toList(),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+
+    if (selected != null) {
+      await UserData.setAutoDialCountdownSeconds(selected);
+      if (mounted) setState(() {});
+    }
   }
 
   Widget _buildProfileCard(ColorScheme cs) {
@@ -2193,30 +2692,6 @@ class _DialpadScreenState extends State<DialpadScreen>
           duration: Duration(seconds: 2),
         ),
       );
-    }
-  }
-
-  Future<void> _confirmClearHistory() async {
-    if (!mounted) return;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Clear call history?'),
-        content: const Text('This will remove all saved calls.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Clear'),
-          ),
-        ],
-      ),
-    );
-    if (ok == true) {
-      await _callLog.clear();
     }
   }
 
