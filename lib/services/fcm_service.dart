@@ -67,11 +67,10 @@ class FcmService with WidgetsBindingObserver {
         log("[FCM_SERVICE] No SIP credentials found, skipping token registration.");
         return;
       }
-      
+
       final creds = jsonDecode(credsStr);
       final username = creds['extension'] ?? creds['username'] ?? '';
-      
-      String adminuser = "v2-matrix";
+      const adminuser = 'matrix'; // Hardcoded for hostel
       if (username.isEmpty) return;
 
       final deviceInfo = await _getDeviceInfo();
@@ -81,12 +80,12 @@ class FcmService with WidgetsBindingObserver {
         "adminuser": adminuser,
         "token": token,
         "platform": Platform.isAndroid ? "android" : "ios",
-        "deviceId": deviceInfo["deviceId"], 
+        "deviceId": deviceInfo["deviceId"],
         "deviceName": deviceInfo["deviceName"],
         "appSecret": "samvaad_mobile_secret_123"
       };
 
-      log("[FCM_SERVICE] Sending payload to backend: ${jsonEncode(payload)}");
+      log("[FCM_SERVICE] Sending token to backend: username=$username adminuser=$adminuser");
 
       final url = Uri.parse('https://esamwad.iotcom.io/storeFirebaseTokenMobile');
       final response = await http.post(
@@ -110,20 +109,17 @@ class FcmService with WidgetsBindingObserver {
       final prefs = await SharedPreferences.getInstance();
       final credsStr = prefs.getString('sip_credentials');
       if (credsStr == null) return;
-      
+
       final creds = jsonDecode(credsStr);
       final username = creds['extension'] ?? creds['username'] ?? '';
-      
-      String adminuser = "matrix";
+      const adminuser = 'matrix'; // Hardcoded for hostel
       if (username.isEmpty) return;
 
-      String? token = await _messaging.getToken();
-      if (token == null) return;
+      log("[FCM_SERVICE] Removing token: username=$username adminuser=$adminuser");
 
       final payload = {
         "username": username,
         "adminuser": adminuser,
-        "token": token,
         "appSecret": "samvaad_mobile_secret_123"
       };
 
