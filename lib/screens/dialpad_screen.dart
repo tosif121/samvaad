@@ -1049,48 +1049,56 @@ class _DialpadScreenState extends State<DialpadScreen>
             ),
           ),
           const SizedBox(width: AppSpacing.sm),
-          if (onBreak && _breakStartedAt != null)
-            BreakTimerChip(
-              startedAt: _breakStartedAt!,
-              breakLabel: _currentBreak!,
-              onTap: _removeBreak,
-            )
-          else if (_isBreaksEnabled)
-            PressableScale(
-              onTap: _showBreakQuickSheet,
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: AppSpacing.sm + 2,
-                  vertical: 7,
-                ),
-                decoration: BoxDecoration(
-                  color: cs.tertiary.withValues(alpha: 0.12),
-                  borderRadius: BorderRadius.circular(AppRadii.pill),
-                  border: Border.all(color: cs.tertiary.withValues(alpha: 0.3)),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.free_breakfast_rounded,
-                      size: 15,
-                      color: cs.tertiary,
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (onBreak && _breakStartedAt != null)
+                BreakTimerChip(
+                  startedAt: _breakStartedAt!,
+                  breakLabel: _currentBreak!,
+                  onTap: _removeBreak,
+                )
+              else if (_isBreaksEnabled)
+                PressableScale(
+                  onTap: _showBreakQuickSheet,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: AppSpacing.sm + 2,
+                      vertical: 7,
                     ),
-                    const SizedBox(width: 6),
-                    Text(
-                      'Take Break',
-                      style: TextStyle(
-                        fontSize: AppType.overline,
-                        fontWeight: FontWeight.w800,
-                        color: cs.tertiary,
-                      ),
+                    decoration: BoxDecoration(
+                      color: cs.tertiary.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(AppRadii.pill),
+                      border: Border.all(color: cs.tertiary.withValues(alpha: 0.3)),
                     ),
-                  ],
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.free_breakfast_rounded,
+                          size: 15,
+                          color: cs.tertiary,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          'Take Break',
+                          style: TextStyle(
+                            fontSize: AppType.overline,
+                            fontWeight: FontWeight.w800,
+                            color: cs.tertiary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
-              ),
-            ),
-          const SizedBox(width: AppSpacing.xs),
-          _buildQueueBadge(),
+              if (_sip.queueCount > 0) ...[
+                const SizedBox(height: 4),
+                _buildQueueBadge(),
+              ],
+            ],
+          ),
         ],
       ),
     );
@@ -1540,8 +1548,7 @@ class _DialpadScreenState extends State<DialpadScreen>
                     mainAxisSize: MainAxisSize.min,
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      _buildQueueBadge(),
-                      const SizedBox(height: 24),
+
                       SizedBox(
                         width: isTablet ? 400 : null,
                         child: _buildNumberDisplay(),
@@ -1567,8 +1574,7 @@ class _DialpadScreenState extends State<DialpadScreen>
 
         return Column(
           children: [
-            _buildQueueBadge(),
-            const SizedBox(height: 4),
+
             _buildNumberDisplay(),
             Expanded(
               child: Padding(
