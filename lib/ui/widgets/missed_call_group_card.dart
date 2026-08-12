@@ -36,12 +36,14 @@ class MissedCallGroupCard extends StatelessWidget {
   }
 
   static String formatTime(DateTime t) {
-    final h = t.hour.toString().padLeft(2, '0');
+    final hour12 = t.hour % 12 == 0 ? 12 : t.hour % 12;
+    final ampm = t.hour < 12 ? 'AM' : 'PM';
+    final h = hour12.toString().padLeft(2, '0');
     final m = t.minute.toString().padLeft(2, '0');
     final now = DateTime.now();
     final sameDay =
         t.year == now.year && t.month == now.month && t.day == now.day;
-    return sameDay ? '$h:$m' : '${t.day}/${t.month} $h:$m';
+    return sameDay ? '$h:$m $ampm' : '${t.day}/${t.month} $h:$m $ampm';
   }
 
   @override

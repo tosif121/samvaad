@@ -163,21 +163,32 @@ class _DynamicFormSheetState extends State<_DynamicFormSheet> {
   bool _isVisible(Map field) {
     final parent = (field['parentField'] ?? '').toString();
     if (parent.isEmpty) return true;
+    final parentValue = _values[parent]?.toString() ?? '';
+    if (parentValue.isEmpty) return false;
     final visibilityValues = (field['visibilityValues'] as List?) ?? const [];
     if (visibilityValues.isEmpty) return true;
-    final parentValue = _values[parent]?.toString() ?? '';
-    return visibilityValues.map((v) => v.toString()).contains(parentValue);
+    return visibilityValues
+        .map((v) => v.toString().trim())
+        .where((v) => v.isNotEmpty)
+        .contains(parentValue.trim());
   }
 
-  /// Filters cascading select options by `option.parentValue`.
+  /// Filters cascading select options by `option.parentValue`, matching the
+  /// webphone's `getFilteredOptions`: no parentField -> all options, empty
+  /// parent value -> no options, otherwise trimmed exact match on parentValue.
   List<Map<String, dynamic>> _filteredOptions(Map field) {
     final options = (field['options'] as List?) ?? const [];
     final parent = (field['parentField'] ?? '').toString();
-    final parentValue = parent.isEmpty
-        ? ''
-        : (_values[parent]?.toString() ?? '');
+    if (parent.isEmpty) {
+      return options
+          .whereType<Map>()
+          .map((o) => Map<String, dynamic>.from(o))
+          .toList();
+    }
+    final parentValue = _values[parent]?.toString().trim() ?? '';
+    if (parentValue.isEmpty) return [];
     final hasCascade = options.any(
-      (o) => o is Map && (o['parentValue']?.toString() ?? '').isNotEmpty,
+      (o) => o is Map && (o['parentValue']?.toString().trim() ?? '').isNotEmpty,
     );
     if (!hasCascade) {
       return options
@@ -189,8 +200,8 @@ class _DynamicFormSheetState extends State<_DynamicFormSheet> {
         .whereType<Map>()
         .map((o) => Map<String, dynamic>.from(o))
         .where((o) {
-          final pv = (o['parentValue'] ?? '').toString();
-          return pv.isEmpty || pv == parentValue;
+          final pv = (o['parentValue'] ?? '').toString().trim();
+          return pv == parentValue;
         })
         .toList();
   }
@@ -209,9 +220,15 @@ class _DynamicFormSheetState extends State<_DynamicFormSheet> {
     final type = _fieldType(field);
     final label = _labelOf(field);
     if (field['required'] == true) {
-      if (value == null) return '$label is required';
-      if (value is String && value.trim().isEmpty) return '$label is required';
-      if (value is List && value.isEmpty) return '$label is required';
+      // Matches the webphone: falsy values (null, '', false, 0, empty list)
+      // mean the required field was not filled.
+      final missing =
+          value == null ||
+          value == false ||
+          value == 0 ||
+          (value is String && value.trim().isEmpty) ||
+          (value is List && value.isEmpty);
+      if (missing) return '$label is required';
     }
     if (value == null || (value is String && value.isEmpty)) return null;
     if (type == 'email') {
@@ -222,7 +239,7 @@ class _DynamicFormSheetState extends State<_DynamicFormSheet> {
     if (type == 'phone') {
       final v = value.toString().replaceAll(' ', '');
       if (!RegExp(r'^\+?[1-9][0-9]{0,15}$').hasMatch(v)) {
-        return 'Please enter a valid phone number';
+        return 'Please enter a valid mobile number';
       }
     }
     if (type == 'number') {

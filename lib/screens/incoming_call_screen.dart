@@ -39,21 +39,31 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
 
     _sipSubscription = _sip.events.listen((event) {
       if (!mounted || _dismissed) return;
-      final type = event['event'] as String;
+      try {
+        final type = event['event'] as String;
 
-      if (type == 'callEnded' || type == 'callFailed') {
+        if (type == 'callEnded' || type == 'callFailed') {
+          _dismissed = true;
+          _onDismiss();
+          RingtoneService().stopRinging();
+          RingtoneService().clearNotification();
+          _popDialog(false);
+        } else if (type == 'callAnswered') {
+          _dismissed = true;
+          _onDismiss();
+          _sipSubscription?.cancel();
+          RingtoneService().stopRinging();
+          RingtoneService().clearNotification();
+          _popDialog(true);
+        }
+      } catch (e, st) {
+        debugPrint('[INCOMING_CALL] Event handling error: $e');
+        debugPrintStack(stackTrace: st);
         _dismissed = true;
         _onDismiss();
         RingtoneService().stopRinging();
         RingtoneService().clearNotification();
-        Navigator.of(context).pop(false);
-      } else if (type == 'callAnswered') {
-        _dismissed = true;
-        _onDismiss();
-        _sipSubscription?.cancel();
-        RingtoneService().stopRinging();
-        RingtoneService().clearNotification();
-        Navigator.of(context).pop(true);
+        _popDialog(false);
       }
     });
   }
@@ -70,6 +80,25 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
     widget.onDismiss?.call();
   }
 
+  // Pops this dialog only if it is still the topmost route. The dialpad
+  // screen's own callEnded handler may have already popped the dialog via
+  // the root navigator; popping again would remove DialpadScreen and leave
+  // a blank screen.
+  void _popDialog(dynamic result) {
+    if (!mounted) return;
+    try {
+      final current = ModalRoute.of(context);
+      if (current == null || !current.isCurrent) return;
+      final nav = Navigator.of(context);
+      if (nav.canPop()) {
+        nav.pop(result);
+      }
+    } catch (e, st) {
+      debugPrint('[INCOMING_CALL] Pop error: $e');
+      debugPrintStack(stackTrace: st);
+    }
+  }
+
   Future<void> _decline() async {
     debugPrint('[INCOMING_CALL] Decline button pressed for ${widget.phoneNumber}');
     _dismissed = true;
@@ -81,9 +110,7 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
 
     debugPrint('[INCOMING_CALL] Call rejected successfully');
     _onDismiss();
-    if (mounted && Navigator.canPop(context)) {
-      Navigator.of(context).pop(false);
-    }
+    _popDialog(false);
   }
 
   Future<void> _acceptCall() async {
@@ -95,13 +122,12 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
 
     try {
       _onDismiss();
-      if (mounted && Navigator.canPop(context)) {
-        Navigator.of(context).pop('answer');
-      }
+      _popDialog('answer');
       debugPrint('[INCOMING_CALL] Call answered successfully');
     } catch (e, st) {
       debugPrint('[INCOMING_CALL] Answer failed: $e');
       debugPrintStack(stackTrace: st);
+      _popDialog(false);
     }
   }
 

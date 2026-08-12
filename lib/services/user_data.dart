@@ -14,7 +14,7 @@ class UserData {
   static Future<void> init() async {
     try {
       _prefs = await SharedPreferences.getInstance();
-      _autoDialActive = _prefs?.getBool('auto_dial_active') ?? true;
+      _autoDialActive = _prefs?.getBool('auto_dial_active') ?? false;
       _autoDialCountdownSeconds = _prefs?.getInt('auto_dial_countdown_seconds') ?? 3;
       final tokenStr = _prefs?.getString('token');
       if (tokenStr == null || tokenStr.isEmpty) return;
@@ -46,7 +46,7 @@ class UserData {
   /// When true, phone numbers are masked (webphone `numberMasking`).
   static bool isNumberMasking() => _bool('numberMasking', fallback: false);
 
-  static bool _autoDialActive = true;
+  static bool _autoDialActive = false;
   static int _autoDialCountdownSeconds = 3;
 
   /// Auto-dial mode state (Active vs Paused).
@@ -96,21 +96,18 @@ class UserData {
       (_userData?['breakoptions'] as List?) ?? const [];
 
   /// Webphone-compatible number masking: keep the last two digits, `*` the
-  /// rest, preserve the +91 prefix, and never mask 1-2 digit numbers.
+  /// rest, never mask 1-2 digit numbers, and drop the country prefix so the
+  /// UI never shows +91/0091.
   static String maskNumber(String number) {
-    if (!isNumberMasking() || number.isEmpty) return number;
-    if (number.startsWith('+91')) {
-      final rest = number.substring(3);
-      if (rest.length <= 2) return number;
-      final masked = rest
-          .substring(0, rest.length - 2)
-          .replaceAll(RegExp(r'.'), '*');
-      return '+91$masked${rest.substring(rest.length - 2)}';
-    }
-    if (number.length <= 2) return number;
-    final masked = number
-        .substring(0, number.length - 2)
+    var n = number.trim();
+    if (n.startsWith('+91')) n = n.substring(3);
+    if (n.startsWith('0091')) n = n.substring(4);
+    if (n.isEmpty) return n;
+    if (!isNumberMasking()) return n;
+    if (n.length <= 2) return n;
+    final masked = n
+        .substring(0, n.length - 2)
         .replaceAll(RegExp(r'.'), '*');
-    return '$masked${number.substring(number.length - 2)}';
+    return '$masked${n.substring(n.length - 2)}';
   }
 }

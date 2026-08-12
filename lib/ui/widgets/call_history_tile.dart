@@ -30,9 +30,14 @@ class CallHistoryTile extends StatelessWidget {
   }
 
   static String timeLabel(DateTime time) {
-    final h = time.hour.toString().padLeft(2, '0');
+    final hour12 = time.hour % 12 == 0 ? 12 : time.hour % 12;
+    final ampm = time.hour < 12 ? 'AM' : 'PM';
+    final h = hour12.toString().padLeft(2, '0');
     final m = time.minute.toString().padLeft(2, '0');
-    return '$h:$m';
+    final now = DateTime.now();
+    final sameDay =
+        time.year == now.year && time.month == now.month && time.day == now.day;
+    return sameDay ? '$h:$m $ampm' : '${time.day}/${time.month} $h:$m $ampm';
   }
 
   @override
@@ -85,42 +90,16 @@ class CallHistoryTile extends StatelessWidget {
       ),
       subtitle: Padding(
         padding: const EdgeInsets.only(top: 3),
-        child: Wrap(
-          spacing: 8,
-          runSpacing: 3,
-          crossAxisAlignment: WrapCrossAlignment.center,
-          children: [
-            if (entry.source.isNotEmpty)
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 7,
-                  vertical: 1,
-                ),
-                decoration: BoxDecoration(
-                  color: cs.primary.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(AppRadii.sm),
-                ),
-                child: Text(
-                  entry.source,
-                  style: TextStyle(
-                    fontSize: AppType.overline - 1,
-                    fontWeight: FontWeight.w700,
-                    color: cs.primary,
-                  ),
-                ),
-              ),
-            Text(
-              [
-                time,
-                if (duration.isNotEmpty) duration,
-                if (entry.type == CallLogType.video) 'Video',
-              ].join('  ·  '),
-              style: TextStyle(
-                fontSize: AppType.caption - 1,
-                color: cs.onSurface.withValues(alpha: 0.45),
-              ),
-            ),
-          ],
+        child: Text(
+          [
+            time,
+            if (duration.isNotEmpty) duration,
+            if (entry.type == CallLogType.video) 'Video',
+          ].join('  ·  '),
+          style: TextStyle(
+            fontSize: AppType.caption - 1,
+            color: cs.onSurface.withValues(alpha: 0.45),
+          ),
         ),
       ),
       trailing: onCallBack == null

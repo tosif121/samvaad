@@ -434,7 +434,8 @@ class SipSocketService implements sip.SipUaHelperListener {
           final remoteNumber = call.remote_identity ?? 'Unknown';
           _log('INCOMING CALL from: $remoteNumber');
           _incomingNumber = remoteNumber;
-          _callState = CallState.ringing;          isVideoCall = call.remote_has_video;
+          _callState = CallState.ringing;
+          isVideoCall = call.remote_has_video;
           try {
             final sdp = call.session.request?.body as String? ?? '';
             if (sdp.contains('m=video')) {
@@ -1254,7 +1255,9 @@ class SipSocketService implements sip.SipUaHelperListener {
             }),
           )
           .timeout(const Duration(seconds: 10));
-      _log('Recent calls API status: ${response.statusCode}, body: ${response.body}');
+      _log(
+        'Recent calls API status: ${response.statusCode}, body: ${response.body}',
+      );
       if (_checkResponseForAuthFailure(response)) return _recentCalls;
       final data = jsonDecode(response.body);
       final result = data is Map ? data['result'] : null;
@@ -1281,7 +1284,9 @@ class SipSocketService implements sip.SipUaHelperListener {
       final now = DateTime.now();
       final endDate = customEndDate ?? now;
       final startDate = customStartDate ?? now;
-      _log('Fetching leads for $username (${_formatDate(startDate)} to ${_formatDate(endDate)})...');
+      _log(
+        'Fetching leads for $username (${_formatDate(startDate)} to ${_formatDate(endDate)})...',
+      );
       final headers = await _getAuthHeaders();
       final response = await http
           .post(
@@ -1301,9 +1306,18 @@ class SipSocketService implements sip.SipUaHelperListener {
       final result = data is Map ? (data['data'] ?? data['result']) : null;
       if (result is List) {
         _leads = List<Map<String, dynamic>>.from(
-          result.map((x) => x is Map ? Map<String, dynamic>.from(x) : <String, dynamic>{}),
+          result.map(
+            (x) =>
+                x is Map ? Map<String, dynamic>.from(x) : <String, dynamic>{},
+          ),
         );
-        _emit(SipEvent.messageReceived, data: {'type': 'leadsUpdated', 'count': _leads.length});
+        if (_leads.isNotEmpty) {
+          _log('Leads sample keys/values: ${_leads.first.toString()}');
+        }
+        _emit(
+          SipEvent.messageReceived,
+          data: {'type': 'leadsUpdated', 'count': _leads.length},
+        );
       }
     } catch (e) {
       _log('Error fetching leads: $e');
@@ -1313,14 +1327,20 @@ class SipSocketService implements sip.SipUaHelperListener {
 
   bool _checkResponseForAuthFailure(http.Response response) {
     if (response.statusCode == 401 || response.statusCode == 403) {
-      _log('HTTP ${response.statusCode} Unauthorized detected on ${response.request?.url}! Triggering auto-logout...');
+      _log(
+        'HTTP ${response.statusCode} Unauthorized detected on ${response.request?.url}! Triggering auto-logout...',
+      );
       _handleAuthFailure();
       return true;
     }
     try {
       final body = response.body.toLowerCase();
-      if (body.contains('unauthorized') || body.contains('invalid token') || body.contains('token expired')) {
-        _log('Auth failure response detected on ${response.request?.url}! Triggering auto-logout...');
+      if (body.contains('unauthorized') ||
+          body.contains('invalid token') ||
+          body.contains('token expired')) {
+        _log(
+          'Auth failure response detected on ${response.request?.url}! Triggering auto-logout...',
+        );
         _handleAuthFailure();
         return true;
       }
@@ -1521,7 +1541,9 @@ class SipSocketService implements sip.SipUaHelperListener {
     final queue = data['currentCallqueue'];
     if (queue is List) {
       _currentCallqueue = queue;
-      _log('[CALL_QUEUE] Active Call Queue (${queue.length} callers): ${jsonEncode(queue)}');
+      _log(
+        '[CALL_QUEUE] Active Call Queue (${queue.length} callers): ${jsonEncode(queue)}',
+      );
       final callers = queue
           .map((c) => (c is Map ? (c['Caller'] ?? '') : '').toString())
           .join(',');
@@ -1535,8 +1557,9 @@ class SipSocketService implements sip.SipUaHelperListener {
         final first = queue.first;
         final caller = first is Map ? (first['Caller'] ?? '').toString() : '';
         if (caller.isNotEmpty) {
-          _incomingChannelId =
-              first is Map ? (first['channelID'] ?? '').toString() : '';
+          _incomingChannelId = first is Map
+              ? (first['channelID'] ?? '').toString()
+              : '';
           _log('Queue fallback ring for caller $caller');
           _emit(
             SipEvent.incomingCall,
@@ -1561,7 +1584,9 @@ class SipSocketService implements sip.SipUaHelperListener {
     final prefs = await SharedPreferences.getInstance();
     final selectedBreak = prefs.getString('selectedBreak');
     final isOnBreak =
-        selectedBreak != null && selectedBreak.isNotEmpty && selectedBreak != 'Break';
+        selectedBreak != null &&
+        selectedBreak.isNotEmpty &&
+        selectedBreak != 'Break';
     if (isOnBreak) {
       return;
     }
@@ -1603,7 +1628,9 @@ class SipSocketService implements sip.SipUaHelperListener {
             body: jsonEncode({}),
           )
           .timeout(const Duration(seconds: 5));
-      _log('agentAvailable response (${response.statusCode}): ${response.body}');
+      _log(
+        'agentAvailable response (${response.statusCode}): ${response.body}',
+      );
     } catch (e) {
       _log('Error calling agentAvailable: $e');
     } finally {
@@ -1711,12 +1738,27 @@ class SipSocketService implements sip.SipUaHelperListener {
   /// two-step fetch: form list per campaign, then full schema by form id.
   /// Returns the parsed form config map (`{formId, formTitle, formType,
   /// sections}`) or null when the campaign has no web form enabled.
-  Future<Map<String, dynamic>?> fetchDynamicFormConfig({
+  /// Result of resolving the post-call webform.
+  ///
+  /// Mirrors the webphone's `LeadAndCallInfoPanel` logic:
+  /// - `webformEnabled: false` -> campaign webforms are off (or unresolvable);
+  ///   the webphone shows the "Campaign form is disabled" notice and skips the
+  ///   contact form entirely.
+  /// - `webformEnabled: true, config: null` -> webforms are enabled but no
+  ///   dynamic form resolved; the webphone falls back to the static UserCall
+  ///   contact form.
+  /// - `webformEnabled: true, config: != null` -> the dynamic form to render.
+  Future<DynamicFormConfigResult> fetchDynamicFormConfig({
     required String callType, // 'outgoing' | 'incoming'
   }) async {
     try {
       final campaign = UserData.campaign();
-      if (campaign.isEmpty) return null;
+      if (campaign.isEmpty) {
+        return const DynamicFormConfigResult(
+          webformEnabled: false,
+          config: null,
+        );
+      }
       final headers = await _getAuthHeaders();
 
       final listRes = await http
@@ -1727,13 +1769,34 @@ class SipSocketService implements sip.SipUaHelperListener {
             headers: headers,
           )
           .timeout(const Duration(seconds: 8));
-      if (listRes.statusCode != 200) return null;
+      if (listRes.statusCode != 200) {
+        return const DynamicFormConfigResult(
+          webformEnabled: false,
+          config: null,
+        );
+      }
       final listData = jsonDecode(listRes.body) as Map<String, dynamic>?;
-      if (listData == null) return null;
-      if (listData['webformEnabled'] != true) return null;
+      if (listData == null) {
+        return const DynamicFormConfigResult(
+          webformEnabled: false,
+          config: null,
+        );
+      }
+      if (listData['webformEnabled'] != true) {
+        return const DynamicFormConfigResult(
+          webformEnabled: false,
+          config: null,
+        );
+      }
 
-      final forms = listData['agentWebForm'];
-      if (forms is! List || forms.isEmpty) return null;
+      // Webphone reads `webForm || agentWebForm` from this response.
+      final forms = listData['webForm'] ?? listData['agentWebForm'];
+      if (forms is! List || forms.isEmpty) {
+        return const DynamicFormConfigResult(
+          webformEnabled: true,
+          config: null,
+        );
+      }
 
       final target = callType.toLowerCase();
       Map<String, dynamic>? match;
@@ -1750,12 +1813,22 @@ class SipSocketService implements sip.SipUaHelperListener {
       match ??= forms.first is Map
           ? Map<String, dynamic>.from(forms.first as Map)
           : null;
-      if (match == null) return null;
+      if (match == null) {
+        return const DynamicFormConfigResult(
+          webformEnabled: true,
+          config: null,
+        );
+      }
 
       final formId =
           (match['formId'] ?? match['id'] ?? match['Id'] ?? match['form_id'])
               .toString();
-      if (formId.isEmpty) return null;
+      if (formId.isEmpty) {
+        return const DynamicFormConfigResult(
+          webformEnabled: true,
+          config: null,
+        );
+      }
 
       final formRes = await http
           .get(
@@ -1763,16 +1836,26 @@ class SipSocketService implements sip.SipUaHelperListener {
             headers: headers,
           )
           .timeout(const Duration(seconds: 8));
-      if (formRes.statusCode != 200) return null;
+      if (formRes.statusCode != 200) {
+        return const DynamicFormConfigResult(
+          webformEnabled: true,
+          config: null,
+        );
+      }
       final formData = jsonDecode(formRes.body) as Map<String, dynamic>?;
       final result = formData?['result'];
-      if (result is! Map) return null;
+      if (result is! Map) {
+        return const DynamicFormConfigResult(
+          webformEnabled: true,
+          config: null,
+        );
+      }
       final config = Map<String, dynamic>.from(result);
       config['formId'] = formId;
-      return config;
+      return DynamicFormConfigResult(webformEnabled: true, config: config);
     } catch (e) {
       _log('Error fetching dynamic form config: $e');
-      return null;
+      return const DynamicFormConfigResult(webformEnabled: false, config: null);
     }
   }
 
@@ -1874,7 +1957,9 @@ class SipSocketService implements sip.SipUaHelperListener {
     final prefs = await SharedPreferences.getInstance();
     final selectedBreak = prefs.getString('selectedBreak');
     final isOnBreak =
-        selectedBreak != null && selectedBreak.isNotEmpty && selectedBreak != 'Break';
+        selectedBreak != null &&
+        selectedBreak.isNotEmpty &&
+        selectedBreak != 'Break';
     if (isOnBreak) {
       return false;
     }
@@ -2148,4 +2233,24 @@ class SipSocketService implements sip.SipUaHelperListener {
     _helper.removeSipUaHelperListener(this);
     _eventController.close();
   }
+}
+
+/// Result of resolving the post-call webform, distinguishing the cases the
+/// webphone's `LeadAndCallInfoPanel` treats differently:
+///
+/// - [webformEnabled] `false` -> campaign webforms are off (or unresolvable);
+///   the webphone shows the "Campaign form is disabled" notice and skips the
+///   contact form entirely.
+/// - [webformEnabled] `true`, [config] `null` -> webforms enabled but no
+///   dynamic form resolved; the webphone falls back to the static UserCall
+///   contact form.
+/// - [webformEnabled] `true`, [config] non-null -> the dynamic form to render.
+class DynamicFormConfigResult {
+  const DynamicFormConfigResult({
+    required this.webformEnabled,
+    required this.config,
+  });
+
+  final bool webformEnabled;
+  final Map<String, dynamic>? config;
 }

@@ -23,6 +23,7 @@ import '../ui/widgets/chips.dart';
 import '../ui/widgets/common.dart';
 import '../ui/widgets/follow_up_tile.dart';
 import '../ui/widgets/dynamic_form_sheet.dart';
+import '../ui/widgets/user_call_form_sheet.dart';
 import '../ui/widgets/schedule_callback_sheet.dart';
 
 class DialpadScreen extends StatefulWidget {
@@ -59,6 +60,9 @@ class _DialpadScreenState extends State<DialpadScreen>
   Timer? _breakTimer;
   bool _dispositionShowing = false;
   bool _isBreaksEnabled = true;
+  int _autoDialGeneration = 0;
+  bool _autoDialRunning = false;
+  final Set<String> _autoDialedPhones = {};
 
   bool _conferenceStatus = false;
   bool _conferenceConnected = false;
@@ -161,8 +165,10 @@ class _DialpadScreenState extends State<DialpadScreen>
 
   Future<bool> _requestPermissions({bool isVideo = false}) async {
     if (isVideo) {
-      final statuses =
-          await [Permission.microphone, Permission.camera].request();
+      final statuses = await [
+        Permission.microphone,
+        Permission.camera,
+      ].request();
       return (statuses[Permission.microphone]?.isGranted ?? false) &&
           (statuses[Permission.camera]?.isGranted ?? false);
     }
@@ -238,8 +244,7 @@ class _DialpadScreenState extends State<DialpadScreen>
                     const Duration(seconds: 3);
             final recentlyRejected = _recentlyRejected.entries.any(
               (e) =>
-                  (e.key == number ||
-                      e.key == number.replaceAll('+', '')) &&
+                  (e.key == number || e.key == number.replaceAll('+', '')) &&
                   DateTime.now().difference(e.value) <
                       const Duration(seconds: 15),
             );
@@ -257,7 +262,9 @@ class _DialpadScreenState extends State<DialpadScreen>
           );
 
           if (_appLifecycleState != AppLifecycleState.resumed) {
-            log('[DIALPAD] Incoming call received while app is backgrounded/minimized for $number');
+            log(
+              '[DIALPAD] Incoming call received while app is backgrounded/minimized for $number',
+            );
             RingtoneService().startRinging();
             RingtoneService().bringAppToForeground();
 
@@ -271,7 +278,9 @@ class _DialpadScreenState extends State<DialpadScreen>
               category: AndroidNotificationCategory.call,
               playSound: true,
             );
-            const notificationDetails = NotificationDetails(android: androidDetails);
+            const notificationDetails = NotificationDetails(
+              android: androidDetails,
+            );
             FlutterLocalNotificationsPlugin().show(
               0,
               'Incoming Call',
@@ -334,7 +343,12 @@ class _DialpadScreenState extends State<DialpadScreen>
               ? _activeCallNumber
               : _sip.incomingNumber;
           final endedBridge = _callBridgeId;
-          await _finalizeActiveCall(failed: type == 'callFailed');
+          try {
+            await _finalizeActiveCall(failed: type == 'callFailed');
+          } catch (e, st) {
+            log('[DIALPAD] _finalizeActiveCall error: $e');
+            log('$st');
+          }
           _isOnCall = false;
           _isShowingKeypad = false;
           _conferenceStatus = false;
@@ -358,7 +372,17 @@ class _DialpadScreenState extends State<DialpadScreen>
           if (mounted) setState(() {});
           if (type == 'callEnded' && wasAnswered && mounted) {
             unawaited(
-              _runPostCallFlow(bridgeId: endedBridge, number: endedNumber),
+              _runPostCallFlow(
+                bridgeId: endedBridge,
+                number: endedNumber,
+              ).whenComplete(() {
+                if (mounted) {
+                  if (UserData.isAutoDialActive()) {
+                    setState(() => _tabIndex = 2);
+                  }
+                  unawaited(_autoDialNextLead());
+                }
+              }),
             );
           }
           break;
@@ -413,7 +437,9 @@ class _DialpadScreenState extends State<DialpadScreen>
         case 'connectionLost':
           final reason = (event['reason'] ?? '').toString();
           if (reason == 'force_login' || reason == '401_unauthorized') {
-            log('[DIALPAD] Unauthenticated session ($reason), triggering auto-logout...');
+            log(
+              '[DIALPAD] Unauthenticated session ($reason), triggering auto-logout...',
+            );
             _logout();
           }
           break;
@@ -462,18 +488,28 @@ class _DialpadScreenState extends State<DialpadScreen>
     RingtoneService().clearNotification();
 
     if (!mounted) return;
-    final result = await showGeneralDialog<dynamic>(
-      context: context,
-      barrierDismissible: false,
-      barrierColor: Colors.transparent,
-      pageBuilder: (ctx, anim, secondaryAnim) => IncomingCallScreen(
-        phoneNumber: number,
-        onDismiss: () => _isShowingIncomingDialog = false,
-      ),
-      transitionBuilder: (ctx, anim, secondaryAnim, child) {
-        return FadeTransition(opacity: anim, child: child);
-      },
-    );
+    final dynamic result;
+    try {
+      result = await showGeneralDialog<dynamic>(
+        context: context,
+        barrierDismissible: false,
+        barrierColor: Colors.transparent,
+        pageBuilder: (ctx, anim, secondaryAnim) => IncomingCallScreen(
+          phoneNumber: number,
+          onDismiss: () => _isShowingIncomingDialog = false,
+        ),
+        transitionBuilder: (ctx, anim, secondaryAnim, child) {
+          return FadeTransition(opacity: anim, child: child);
+        },
+      );
+    } catch (e, st) {
+      log('[DIALPAD] Incoming dialog error: $e');
+      log('$st');
+      _isShowingIncomingDialog = false;
+      RingtoneService().stopRinging();
+      RingtoneService().clearNotification();
+      return;
+    }
 
     _isShowingIncomingDialog = false;
     _lastHandledNumber = number;
@@ -548,7 +584,12 @@ class _DialpadScreenState extends State<DialpadScreen>
     _phoneController.clear();
   }
 
-  Future<void> _onCallPressed() async {
+  Future<void> _onCallPressed({
+    String? leadId,
+    String? dialSource,
+    bool? autoLeadDial,
+  }) async {
+    _autoDialGeneration++;
     final number = _phoneController.text.trim();
     if (number.isEmpty) return;
     if (!await _requestPermissions(isVideo: false)) {
@@ -576,7 +617,12 @@ class _DialpadScreenState extends State<DialpadScreen>
     _phoneController.clear();
     setState(() {});
 
-    final ok = await _sip.dialNumber(number, dialSource: source);
+    final ok = await _sip.dialNumber(
+      number,
+      leadId: leadId,
+      dialSource: dialSource,
+      autoLeadDial: autoLeadDial,
+    );
     if (ok && _callBridgeId.isEmpty) {
       _callBridgeId = _sip.bridgeID;
     }
@@ -639,17 +685,37 @@ class _DialpadScreenState extends State<DialpadScreen>
     final callType = _lastCallDirection == CallLogDirection.incoming
         ? 'incoming'
         : 'outgoing';
-    final formConfig = await _sip.fetchDynamicFormConfig(callType: callType);
-    if (formConfig != null && mounted) {
-      final submitted = await showDynamicFormSheet(
-        context,
-        formConfig: formConfig,
-        callType: callType,
-        contactNumber: number,
-        onSubmit: (payload) => _sip.addModifyContact(payload),
-      );
+    final formResult = await _sip.fetchDynamicFormConfig(callType: callType);
+    if (formResult.webformEnabled && mounted) {
+      final formConfig = formResult.config;
+      if (formConfig != null) {
+        // Dynamic form is mandatory and cannot be dismissed: keep showing it
+        // until the user submits a valid form.
+        bool submitted = false;
+        while (mounted && !submitted) {
+          submitted = await showDynamicFormSheet(
+            context,
+            formConfig: formConfig,
+            callType: callType,
+            contactNumber: number,
+            onSubmit: (payload) => _sip.addModifyContact(payload),
+          );
+        }
+      } else {
+        // Webforms enabled but no dynamic form resolved: show the static
+        // UserCall contact form (webphone UserCall.jsx fallback). Also
+        // mandatory — keep showing until submitted.
+        bool submitted = false;
+        while (mounted && !submitted) {
+          submitted = await showUserCallFormSheet(
+            context,
+            callType: callType,
+            contactNumber: number,
+            onSubmit: (payload) => _sip.addModifyContact(payload),
+          );
+        }
+      }
       if (!mounted) return;
-      if (!submitted) return;
     }
 
     if (!UserData.isDispositionEnabled()) {
@@ -661,6 +727,106 @@ class _DialpadScreenState extends State<DialpadScreen>
       return;
     }
     await _showDispositionSheet(bridgeId: bridgeId, number: number);
+  }
+
+  /// Starts a call for [phone] by populating the keypad and reusing the
+  /// regular dial flow (permissions, log entry, dialNumber/makeCall). When
+  /// dialing a lead, [leadId] is sent so the server can update the lead's
+  /// `lastDialedStatus`, and [autoLeadDial] marks the auto-dial flow — the
+  /// same payload the webphone sends to `/dialnumber`.
+  Future<void> _startCallForNumber(
+    String phone, {
+    String? leadId,
+    bool? autoLeadDial,
+  }) async {
+    if (phone.isEmpty) return;
+    _phoneController.text = phone;
+    if (mounted) setState(() => _tabIndex = 0);
+    await _onCallPressed(
+      leadId: leadId,
+      dialSource: autoLeadDial == true
+          ? 'auto_lead_preview'
+          : leadId != null
+          ? 'manual_lead_preview'
+          : null,
+      autoLeadDial: autoLeadDial,
+    );
+  }
+
+  /// Dials the next lead that hasn't been dialed yet when Auto-Dial is active.
+  /// A monotonically increasing generation counter invalidates the countdown
+  /// when the user toggles auto-dial off or starts a manual call.
+  Future<void> _autoDialNextLead() async {
+    if (!UserData.isAutoDialActive()) return;
+    if (_isOnCall || _activeCallNumber.isNotEmpty) return;
+    if (_autoDialRunning) return;
+    _autoDialRunning = true;
+    try {
+      await _fetchLeadsForSelectedFilter();
+
+      Map<String, dynamic>? next;
+      String? nextPhone;
+      for (final lead in _sip.leads) {
+        final phone = _leadDisplayPhone(lead);
+        if (phone.isEmpty) continue;
+        if (_autoDialedPhones.contains(_stripCountryCode(phone))) continue;
+        final status = lead['lastDialedStatus'];
+        final alreadyDialed =
+            status == 1 ||
+            status == '1' ||
+            status == 2 ||
+            status == '2' ||
+            (status is String &&
+                (status.toLowerCase().contains('dial') ||
+                    status.toLowerCase().contains('answered') ||
+                    status.toLowerCase().contains('completed')));
+        if (alreadyDialed) continue;
+        next = lead;
+        nextPhone = phone;
+        break;
+      }
+      log(
+        '[AUTO-DIAL] leads=${_sip.leads.length} '
+        'dialedThisSession=${_autoDialedPhones.length} '
+        'next=${nextPhone ?? 'none'}',
+      );
+      if (next == null || nextPhone == null) return;
+
+      final cleanPhone = _stripCountryCode(nextPhone);
+      _autoDialedPhones.add(cleanPhone);
+
+      if (mounted) setState(() => _tabIndex = 2);
+
+      final gen = ++_autoDialGeneration;
+      final secs = UserData.autoDialCountdownSeconds();
+      if (mounted && secs > 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Auto-dialing $cleanPhone in ${secs}s...'),
+            duration: Duration(seconds: secs),
+          ),
+        );
+      }
+      for (var i = 0; i < secs; i++) {
+        await Future.delayed(const Duration(seconds: 1));
+        if (!mounted ||
+            gen != _autoDialGeneration ||
+            !UserData.isAutoDialActive()) {
+          return;
+        }
+        if (_isOnCall || _activeCallNumber.isNotEmpty) return;
+      }
+      if (!mounted || gen != _autoDialGeneration) return;
+      if (_isOnCall || _activeCallNumber.isNotEmpty) return;
+      final leadId = (next['leadId'] ?? next['_id'] ?? '').toString();
+      await _startCallForNumber(
+        cleanPhone,
+        leadId: leadId.isEmpty ? null : leadId,
+        autoLeadDial: true,
+      );
+    } finally {
+      _autoDialRunning = false;
+    }
   }
 
   Future<void> _showDispositionSheet({
@@ -1074,7 +1240,9 @@ class _DialpadScreenState extends State<DialpadScreen>
   Future<void> _showQueueSheet() async {
     final cs = Theme.of(context).colorScheme;
     final queue = List<dynamic>.from(_sip.currentCallqueue);
-    log('[CALL_QUEUE] Opened Call Queue Sheet (${queue.length} callers): ${jsonEncode(queue)}');
+    log(
+      '[CALL_QUEUE] Opened Call Queue Sheet (${queue.length} callers): ${jsonEncode(queue)}',
+    );
     if (queue.isEmpty) return;
     await showModalBottomSheet<void>(
       context: context,
@@ -1131,16 +1299,14 @@ class _DialpadScreenState extends State<DialpadScreen>
                 child: ListView.separated(
                   controller: scrollController,
                   itemCount: queue.length,
-                  separatorBuilder: (_, _) => Divider(
-                    height: 1,
-                    color: cs.outlineVariant,
-                  ),
+                  separatorBuilder: (_, _) =>
+                      Divider(height: 1, color: cs.outlineVariant),
                   itemBuilder: (context, index) {
-                    final call =
-                        queue[index] is Map ? queue[index] as Map : null;
+                    final call = queue[index] is Map
+                        ? queue[index] as Map
+                        : null;
                     final caller = (call?['Caller'] ?? 'Unknown').toString();
-                    final stickyAgent =
-                        (call?['stickyAgent'] ?? '').toString();
+                    final stickyAgent = (call?['stickyAgent'] ?? '').toString();
                     final isSticky = call?['isSticky'] == true;
                     return Padding(
                       padding: const EdgeInsets.symmetric(vertical: 10),
@@ -1285,7 +1451,10 @@ class _DialpadScreenState extends State<DialpadScreen>
     '#': '',
   };
 
-  Widget _buildDialpadKey(String key, {required void Function(String) onDigit}) {
+  Widget _buildDialpadKey(
+    String key, {
+    required void Function(String) onDigit,
+  }) {
     final cs = Theme.of(context).colorScheme;
     final letters = _dialLetters[key] ?? '';
     return Expanded(
@@ -1333,9 +1502,14 @@ class _DialpadScreenState extends State<DialpadScreen>
     );
   }
 
-  Widget _buildDialRow(List<String> keys, {required void Function(String) onDigit}) {
+  Widget _buildDialRow(
+    List<String> keys, {
+    required void Function(String) onDigit,
+  }) {
     return Row(
-      children: keys.map((key) => _buildDialpadKey(key, onDigit: onDigit)).toList(),
+      children: keys
+          .map((key) => _buildDialpadKey(key, onDigit: onDigit))
+          .toList(),
     );
   }
 
@@ -1429,7 +1603,9 @@ class _DialpadScreenState extends State<DialpadScreen>
 
   CallLogEntry _rawMissedCallToEntry(dynamic raw, int index) {
     if (raw is Map) {
-      final caller = (raw['Caller'] ?? raw['caller'] ?? raw['number'] ?? 'Unknown').toString();
+      final caller =
+          (raw['Caller'] ?? raw['caller'] ?? raw['number'] ?? 'Unknown')
+              .toString();
       final startTimeRaw = raw['startTime'] ?? raw['time'] ?? raw['timestamp'];
       DateTime time = DateTime.now();
       if (startTimeRaw != null) {
@@ -1471,6 +1647,19 @@ class _DialpadScreenState extends State<DialpadScreen>
         .toList();
     final displayList = _callsFilterIndex == 0 ? allCalls : missedCalls;
 
+    final totalCalls = displayList.length;
+    final incomingCount = displayList
+        .where((e) => e.direction == CallLogDirection.incoming)
+        .length;
+    final outgoingCount = displayList
+        .where((e) => e.direction == CallLogDirection.outgoing)
+        .length;
+    final withDuration = displayList.where((e) => e.durationSec > 0).toList();
+    final avgSec = withDuration.isEmpty
+        ? 0
+        : withDuration.fold<int>(0, (sum, e) => sum + e.durationSec) ~/
+              withDuration.length;
+
     return Column(
       children: [
         Padding(
@@ -1494,10 +1683,12 @@ class _DialpadScreenState extends State<DialpadScreen>
                 ),
               ),
               IconButton(
-                onPressed: () => unawaited(Future.wait([
-                  _sip.fetchRecentCalls(),
-                  _sip.fetchMissedCalls(),
-                ])),
+                onPressed: () => unawaited(
+                  Future.wait([
+                    _sip.fetchRecentCalls(),
+                    _sip.fetchMissedCalls(),
+                  ]),
+                ),
                 icon: const Icon(Icons.refresh_rounded, size: 20),
                 tooltip: 'Refresh Calls',
               ),
@@ -1505,7 +1696,49 @@ class _DialpadScreenState extends State<DialpadScreen>
           ),
         ),
         Padding(
-          padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: 4),
+          padding: const EdgeInsets.fromLTRB(
+            AppSpacing.md,
+            2,
+            AppSpacing.md,
+            4,
+          ),
+          child: Container(
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.sm,
+              vertical: AppSpacing.sm,
+            ),
+            decoration: BoxDecoration(
+              color: cs.surfaceContainerLow,
+              borderRadius: BorderRadius.circular(AppRadii.lg),
+              border: Border.all(color: cs.outline.withValues(alpha: 0.2)),
+            ),
+            child: Row(
+              children: [
+                _statTile(cs: cs, value: '$totalCalls', label: 'Total Calls'),
+                _statTile(
+                  cs: cs,
+                  value: '$incomingCount',
+                  label: 'Incoming Calls',
+                ),
+                _statTile(
+                  cs: cs,
+                  value: '$outgoingCount',
+                  label: 'Outgoing Calls',
+                ),
+                _statTile(
+                  cs: cs,
+                  value: CallHistoryTile.formatDuration(avgSec),
+                  label: 'Avg Duration',
+                ),
+              ],
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: AppSpacing.md,
+            vertical: 4,
+          ),
           child: Row(
             children: [
               Expanded(
@@ -1545,8 +1778,12 @@ class _DialpadScreenState extends State<DialpadScreen>
                     child: Padding(
                       padding: const EdgeInsets.only(top: 64),
                       child: EmptyState(
-                        icon: _callsFilterIndex == 0 ? Icons.history_rounded : Icons.phone_missed_rounded,
-                        title: _callsFilterIndex == 0 ? 'No recent calls' : 'No missed calls',
+                        icon: _callsFilterIndex == 0
+                            ? Icons.history_rounded
+                            : Icons.phone_missed_rounded,
+                        title: _callsFilterIndex == 0
+                            ? 'No recent calls'
+                            : 'No missed calls',
                         subtitle: _callsFilterIndex == 0
                             ? 'Incoming, outgoing and missed calls will appear here.'
                             : 'Missed calls will show up here while you are away.',
@@ -1554,33 +1791,33 @@ class _DialpadScreenState extends State<DialpadScreen>
                     ),
                   )
                 : CustomScrollView(
-                  slivers: [
-                    for (final group in _groupEntriesByDay(displayList))
-                      SliverMainAxisGroup(
-                        slivers: [
-                          SliverPersistentHeader(
-                            pinned: true,
-                            delegate: _StickyDayHeaderDelegate(
-                              label: _dayLabel(group.key),
-                              color: Theme.of(context).colorScheme.surface,
+                    slivers: [
+                      for (final group in _groupEntriesByDay(displayList))
+                        SliverMainAxisGroup(
+                          slivers: [
+                            SliverPersistentHeader(
+                              pinned: true,
+                              delegate: _StickyDayHeaderDelegate(
+                                label: _dayLabel(group.key),
+                                color: Theme.of(context).colorScheme.surface,
+                              ),
                             ),
-                          ),
-                          SliverList.builder(
-                            itemCount: group.value.length,
-                            itemBuilder: (context, i) {
-                              final entry = group.value[i];
-                              return CallHistoryTile(
-                                entry: entry,
-                                onTap: () => _dialFromHistory(entry),
-                                onCallBack: () => _dialFromHistory(entry),
-                              );
-                            },
-                          ),
-                        ],
-                      ),
-                    const SliverToBoxAdapter(child: SizedBox(height: 16)),
-                  ],
-                ),
+                            SliverList.builder(
+                              itemCount: group.value.length,
+                              itemBuilder: (context, i) {
+                                final entry = group.value[i];
+                                return CallHistoryTile(
+                                  entry: entry,
+                                  onTap: () => _dialFromHistory(entry),
+                                  onCallBack: () => _dialFromHistory(entry),
+                                );
+                              },
+                            ),
+                          ],
+                        ),
+                      const SliverToBoxAdapter(child: SizedBox(height: 16)),
+                    ],
+                  ),
           ),
         ),
       ],
@@ -1591,7 +1828,8 @@ class _DialpadScreenState extends State<DialpadScreen>
   // Leads tab
   // ---------------------------------------------------------------------
 
-  int _leadDateFilterIndex = 0; // Default: Today (0: Today, 1: 7 Days, 2: 30 Days, 3: All Time)
+  int _leadDateFilterIndex =
+      0; // Default: Today (0: Today, 1: 7 Days, 2: 30 Days, 3: All Time)
 
   Future<void> _fetchLeadsForSelectedFilter([int? filterIdx]) async {
     final idx = filterIdx ?? _leadDateFilterIndex;
@@ -1615,6 +1853,42 @@ class _DialpadScreenState extends State<DialpadScreen>
     await _sip.fetchLeads(startDate, now);
   }
 
+  Widget _statTile({
+    required ColorScheme cs,
+    required String value,
+    required String label,
+  }) {
+    return Expanded(
+      child: Column(
+        children: [
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              value,
+              style: TextStyle(
+                fontSize: AppType.heading,
+                fontWeight: FontWeight.w800,
+                color: cs.onSurface,
+              ),
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            label,
+            textAlign: TextAlign.center,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+              color: cs.onSurfaceVariant,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildLeadsTab() {
     final cs = Theme.of(context).colorScheme;
     final allLeads = _sip.leads;
@@ -1623,8 +1897,18 @@ class _DialpadScreenState extends State<DialpadScreen>
     final leads = query.isEmpty
         ? allLeads
         : allLeads.where((lead) {
-            final name = (lead['name'] ?? lead['leadName'] ?? lead['customerName'] ?? '').toString().toLowerCase();
-            final phone = (lead['phone'] ?? lead['contactNumber'] ?? lead['mobileNumber'] ?? lead['dialNumber'] ?? '').toString().toLowerCase();
+            final name =
+                (lead['name'] ?? lead['leadName'] ?? lead['customerName'] ?? '')
+                    .toString()
+                    .toLowerCase();
+            final phone =
+                (lead['phone'] ??
+                        lead['contactNumber'] ??
+                        lead['mobileNumber'] ??
+                        lead['dialNumber'] ??
+                        '')
+                    .toString()
+                    .toLowerCase();
             return name.contains(query) || phone.contains(query);
           }).toList();
 
@@ -1632,8 +1916,26 @@ class _DialpadScreenState extends State<DialpadScreen>
     final badgeColor = !hasLeads
         ? cs.onSurface.withValues(alpha: 0.38)
         : isAutoActive
-            ? Colors.green
-            : Colors.orange;
+        ? Colors.green
+        : Colors.orange;
+
+    var notDialedCount = 0;
+    var dialedNotPickedCount = 0;
+    var answeredCount = 0;
+    for (final lead in allLeads) {
+      final v = lead['lastDialedStatus'];
+      final n = v is num ? v.toInt() : int.tryParse(v?.toString() ?? '');
+      switch (n) {
+        case 1:
+          dialedNotPickedCount++;
+          break;
+        case 2:
+          answeredCount++;
+          break;
+        default:
+          notDialedCount++;
+      }
+    }
 
     return RefreshIndicator(
       onRefresh: () async => await _fetchLeadsForSelectedFilter(),
@@ -1664,14 +1966,21 @@ class _DialpadScreenState extends State<DialpadScreen>
                       ? null
                       : () async {
                           final active = UserData.isAutoDialActive();
+                          if (active) _autoDialGeneration++;
                           await UserData.setAutoDialActive(!active);
-                          if (mounted) setState(() {});
+                          if (mounted) {
+                            setState(() {});
+                            if (!active) unawaited(_autoDialNextLead());
+                          }
                         },
                   child: AnimatedOpacity(
                     duration: const Duration(milliseconds: 200),
                     opacity: hasLeads ? 1.0 : 0.5,
                     child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
                       decoration: BoxDecoration(
                         color: badgeColor.withValues(alpha: 0.12),
                         borderRadius: BorderRadius.circular(16),
@@ -1687,8 +1996,8 @@ class _DialpadScreenState extends State<DialpadScreen>
                             !hasLeads
                                 ? Icons.block_rounded
                                 : isAutoActive
-                                    ? Icons.play_arrow_rounded
-                                    : Icons.pause_rounded,
+                                ? Icons.play_arrow_rounded
+                                : Icons.pause_rounded,
                             size: 14,
                             color: badgeColor,
                           ),
@@ -1697,8 +2006,8 @@ class _DialpadScreenState extends State<DialpadScreen>
                             !hasLeads
                                 ? 'Disabled'
                                 : isAutoActive
-                                    ? 'Auto Active'
-                                    : 'Paused',
+                                ? 'Auto Active'
+                                : 'Paused',
                             style: TextStyle(
                               fontSize: 11,
                               fontWeight: FontWeight.bold,
@@ -1720,7 +2029,49 @@ class _DialpadScreenState extends State<DialpadScreen>
             ),
           ),
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: 4),
+            padding: const EdgeInsets.fromLTRB(
+              AppSpacing.md,
+              2,
+              AppSpacing.md,
+              4,
+            ),
+            child: Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: AppSpacing.sm,
+                vertical: AppSpacing.sm,
+              ),
+              decoration: BoxDecoration(
+                color: cs.surfaceContainerLow,
+                borderRadius: BorderRadius.circular(AppRadii.lg),
+                border: Border.all(color: cs.outline.withValues(alpha: 0.2)),
+              ),
+              child: Row(
+                children: [
+                  _statTile(
+                    cs: cs,
+                    value: '${allLeads.length}',
+                    label: 'Total Leads',
+                  ),
+                  _statTile(
+                    cs: cs,
+                    value: '$notDialedCount',
+                    label: 'Not Dialed',
+                  ),
+                  _statTile(
+                    cs: cs,
+                    value: '$dialedNotPickedCount',
+                    label: 'Dialed Not Picked',
+                  ),
+                  _statTile(cs: cs, value: '$answeredCount', label: 'Answered'),
+                ],
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.md,
+              vertical: 4,
+            ),
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: Row(
@@ -1773,15 +2124,23 @@ class _DialpadScreenState extends State<DialpadScreen>
             ),
           ),
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: 4),
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.md,
+              vertical: 4,
+            ),
             child: TextField(
               decoration: InputDecoration(
                 hintText: 'Search leads by name or number...',
                 prefixIcon: const Icon(Icons.search_rounded, size: 20),
-                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 12,
+                ),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide(color: cs.outline.withValues(alpha: 0.3)),
+                  borderSide: BorderSide(
+                    color: cs.outline.withValues(alpha: 0.3),
+                  ),
                 ),
                 filled: true,
                 fillColor: cs.surfaceContainerLow,
@@ -1797,7 +2156,9 @@ class _DialpadScreenState extends State<DialpadScreen>
                       padding: const EdgeInsets.only(top: 64),
                       child: EmptyState(
                         icon: Icons.assignment_ind_outlined,
-                        title: allLeads.isEmpty ? 'No leads found' : 'No matching leads',
+                        title: allLeads.isEmpty
+                            ? 'No leads found'
+                            : 'No matching leads',
                         subtitle: allLeads.isEmpty
                             ? 'Pull down to refresh or check your assigned campaign.'
                             : 'Try searching with a different name or number.',
@@ -1807,25 +2168,37 @@ class _DialpadScreenState extends State<DialpadScreen>
                 : ListView.separated(
                     padding: const EdgeInsets.all(AppSpacing.md),
                     itemCount: leads.length,
-                    separatorBuilder: (context, index) => const SizedBox(height: 10),
+                    separatorBuilder: (context, index) =>
+                        const SizedBox(height: 10),
                     itemBuilder: (context, i) {
                       final item = leads[i];
-                      final name = (item['name'] ?? item['leadName'] ?? item['customerName'] ?? item['Lead Name'] ?? 'Lead #${i + 1}').toString();
-                      final phone = (item['phone'] ?? item['contactNumber'] ?? item['mobileNumber'] ?? item['dialNumber'] ?? item['Lead Number'] ?? '').toString();
-                      final status = (item['status'] ?? item['leadStatus'] ?? item['Status'] ?? 'New').toString();
-                      final dialStatus = (item['dialStatus'] ?? item['callStatus'] ?? item['disposition'] ?? item['Dial Status'] ?? 'Not Dialed').toString();
-                      final lastUpdated = (item['updatedAt'] ?? item['lastUpdated'] ?? item['uploadDate'] ?? item['created_at'] ?? item['Last Updated']);
+                      final name = _leadDisplayName(
+                        item,
+                        fallback: 'Lead #${i + 1}',
+                      );
+                      final phone = _leadDisplayPhone(item);
+                      final status = _leadStatusLabel(item);
+                      final dialStatus = _leadDialStatusLabel(item);
+                      final leadIdValue = (item['leadId'] ?? item['_id'] ?? '')
+                          .toString();
+                      final leadId = leadIdValue.isEmpty ? null : leadIdValue;
+                      final lastUpdated =
+                          (item['updatedAt'] ??
+                          item['lastUpdated'] ??
+                          item['uploadDate'] ??
+                          item['created_at'] ??
+                          item['Last Updated']);
 
-                      final isDialed = dialStatus.toLowerCase().contains('dial') ||
-                          dialStatus.toLowerCase().contains('answered') ||
-                          dialStatus.toLowerCase().contains('completed');
+                      final isDialed = dialStatus != 'Not Dialed';
 
                       return Container(
                         padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(
                           color: cs.surfaceContainerLow,
                           borderRadius: BorderRadius.circular(16),
-                          border: Border.all(color: cs.outline.withValues(alpha: 0.2)),
+                          border: Border.all(
+                            color: cs.outline.withValues(alpha: 0.2),
+                          ),
                         ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1835,26 +2208,44 @@ class _DialpadScreenState extends State<DialpadScreen>
                                 CircleAvatar(
                                   radius: 20,
                                   backgroundColor: cs.primaryContainer,
-                                  child: Icon(Icons.person_rounded, size: 20, color: cs.onPrimaryContainer),
+                                  child: Icon(
+                                    Icons.person_rounded,
+                                    size: 20,
+                                    color: cs.onPrimaryContainer,
+                                  ),
                                 ),
                                 const SizedBox(width: 10),
                                 Expanded(
                                   child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
                                     children: [
                                       Text(
                                         name,
-                                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 15,
+                                        ),
                                         overflow: TextOverflow.ellipsis,
                                       ),
                                       const SizedBox(height: 2),
                                       Row(
                                         children: [
-                                          Icon(Icons.phone_rounded, size: 13, color: cs.onSurfaceVariant),
+                                          Icon(
+                                            Icons.phone_rounded,
+                                            size: 13,
+                                            color: cs.onSurfaceVariant,
+                                          ),
                                           const SizedBox(width: 4),
                                           Text(
-                                            phone.isNotEmpty ? phone : 'No phone number',
-                                            style: TextStyle(fontSize: 13, color: cs.onSurfaceVariant, fontWeight: FontWeight.w500),
+                                            phone.isNotEmpty
+                                                ? UserData.maskNumber(phone)
+                                                : 'No mobile number',
+                                            style: TextStyle(
+                                              fontSize: 13,
+                                              color: cs.onSurfaceVariant,
+                                              fontWeight: FontWeight.w500,
+                                            ),
                                           ),
                                         ],
                                       ),
@@ -1862,14 +2253,19 @@ class _DialpadScreenState extends State<DialpadScreen>
                                   ),
                                 ),
                                 IconButton(
-                                  icon: const Icon(Icons.phone_forwarded_rounded, color: Colors.green, size: 22),
+                                  icon: const Icon(
+                                    Icons.phone_forwarded_rounded,
+                                    color: Colors.green,
+                                    size: 22,
+                                  ),
                                   onPressed: phone.isEmpty
                                       ? null
-                                      : () {
-                                          _phoneController.text = phone;
-                                          setState(() => _tabIndex = 0);
-                                          _onCallPressed();
-                                        },
+                                      : () => unawaited(
+                                          _startCallForNumber(
+                                            _stripCountryCode(phone),
+                                            leadId: leadId,
+                                          ),
+                                        ),
                                   tooltip: 'Dial Lead',
                                 ),
                               ],
@@ -1884,7 +2280,10 @@ class _DialpadScreenState extends State<DialpadScreen>
                               crossAxisAlignment: WrapCrossAlignment.center,
                               children: [
                                 Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 3,
+                                  ),
                                   decoration: BoxDecoration(
                                     color: cs.primary.withValues(alpha: 0.12),
                                     borderRadius: BorderRadius.circular(6),
@@ -1894,19 +2293,31 @@ class _DialpadScreenState extends State<DialpadScreen>
                                     children: [
                                       Text(
                                         'Status: ',
-                                        style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          color: cs.onSurfaceVariant,
+                                        ),
                                       ),
                                       Text(
                                         status,
-                                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: cs.primary),
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.bold,
+                                          color: cs.primary,
+                                        ),
                                       ),
                                     ],
                                   ),
                                 ),
                                 Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 3,
+                                  ),
                                   decoration: BoxDecoration(
-                                    color: isDialed ? Colors.green.withValues(alpha: 0.12) : Colors.orange.withValues(alpha: 0.12),
+                                    color: isDialed
+                                        ? Colors.green.withValues(alpha: 0.12)
+                                        : Colors.orange.withValues(alpha: 0.12),
                                     borderRadius: BorderRadius.circular(6),
                                   ),
                                   child: Row(
@@ -1914,14 +2325,19 @@ class _DialpadScreenState extends State<DialpadScreen>
                                     children: [
                                       Text(
                                         'Dial Status: ',
-                                        style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant),
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          color: cs.onSurfaceVariant,
+                                        ),
                                       ),
                                       Text(
                                         dialStatus,
                                         style: TextStyle(
                                           fontSize: 11,
                                           fontWeight: FontWeight.bold,
-                                          color: isDialed ? Colors.green : Colors.orange,
+                                          color: isDialed
+                                              ? Colors.green
+                                              : Colors.orange,
                                         ),
                                       ),
                                     ],
@@ -1932,11 +2348,22 @@ class _DialpadScreenState extends State<DialpadScreen>
                             const SizedBox(height: 6),
                             Row(
                               children: [
-                                Icon(Icons.access_time_rounded, size: 12, color: cs.onSurfaceVariant.withValues(alpha: 0.6)),
+                                Icon(
+                                  Icons.access_time_rounded,
+                                  size: 12,
+                                  color: cs.onSurfaceVariant.withValues(
+                                    alpha: 0.6,
+                                  ),
+                                ),
                                 const SizedBox(width: 4),
                                 Text(
                                   'Last Updated: ${_formatLeadDate(lastUpdated)}',
-                                  style: TextStyle(fontSize: 11, color: cs.onSurfaceVariant.withValues(alpha: 0.7)),
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: cs.onSurfaceVariant.withValues(
+                                      alpha: 0.7,
+                                    ),
+                                  ),
                                 ),
                               ],
                             ),
@@ -2148,7 +2575,8 @@ class _DialpadScreenState extends State<DialpadScreen>
   String _formatLeadDate(dynamic raw) {
     if (raw == null || raw.toString().isEmpty) return 'N/A';
     try {
-      final dt = DateTime.tryParse(raw.toString()) ??
+      final dt =
+          DateTime.tryParse(raw.toString()) ??
           (raw is int ? DateTime.fromMillisecondsSinceEpoch(raw) : null);
       if (dt != null) {
         final months = [
@@ -2334,28 +2762,32 @@ class _DialpadScreenState extends State<DialpadScreen>
               !hasLeads
                   ? 'No leads available to auto-dial'
                   : isActive
-                      ? 'Auto Active — Automatically dials next lead'
-                      : 'Paused — Manual dialing required',
+                  ? 'Auto Active — Automatically dials next lead'
+                  : 'Paused — Manual dialing required',
               style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
             ),
             secondary: Icon(
               !hasLeads
                   ? Icons.block_rounded
                   : isActive
-                      ? Icons.play_circle_fill_rounded
-                      : Icons.pause_circle_filled_rounded,
+                  ? Icons.play_circle_fill_rounded
+                  : Icons.pause_circle_filled_rounded,
               color: !hasLeads
                   ? cs.onSurface.withValues(alpha: 0.38)
                   : isActive
-                      ? Colors.green
-                      : Colors.orange,
+                  ? Colors.green
+                  : Colors.orange,
             ),
             value: isActive,
             onChanged: !hasLeads
                 ? null
                 : (val) async {
+                    if (!val) _autoDialGeneration++;
                     await UserData.setAutoDialActive(val);
-                    if (mounted) setState(() {});
+                    if (mounted) {
+                      setState(() {});
+                      if (val) unawaited(_autoDialNextLead());
+                    }
                   },
           ),
           const Divider(height: 1),
@@ -2407,7 +2839,9 @@ class _DialpadScreenState extends State<DialpadScreen>
               title: Text('$sec Seconds ${sec == 3 ? '(Default)' : ''}'),
               leading: Icon(
                 isSelected ? Icons.check_circle_rounded : Icons.circle_outlined,
-                color: isSelected ? cs.primary : cs.onSurfaceVariant.withValues(alpha: 0.5),
+                color: isSelected
+                    ? cs.primary
+                    : cs.onSurfaceVariant.withValues(alpha: 0.5),
               ),
               onTap: () => Navigator.of(context).pop(sec),
             );
@@ -2903,10 +3337,7 @@ class _DialpadScreenState extends State<DialpadScreen>
     final keypadOpen = _showConferenceKeypad || _isShowingKeypad;
     return Column(
       children: [
-        if (keypadOpen)
-          const SizedBox(height: 24)
-        else
-          const Spacer(flex: 2),
+        if (keypadOpen) const SizedBox(height: 24) else const Spacer(flex: 2),
         Container(
           width: keypadOpen ? 84 : 120,
           height: keypadOpen ? 84 : 120,
@@ -2918,12 +3349,17 @@ class _DialpadScreenState extends State<DialpadScreen>
               width: 3,
             ),
           ),
-          child: Icon(Icons.person, size: keypadOpen ? 44 : 60, color: cs.primary),
+          child: Icon(
+            Icons.person,
+            size: keypadOpen ? 44 : 60,
+            color: cs.primary,
+          ),
         ),
         const SizedBox(height: 16),
         Builder(
           builder: (context) {
-            final merged = _isMerged &&
+            final merged =
+                _isMerged &&
                 _activeCallNumber.isNotEmpty &&
                 _conferenceNumber.isNotEmpty;
             String headerText;
@@ -3246,11 +3682,7 @@ class _DialpadScreenState extends State<DialpadScreen>
     } else if (_conferenceStatus) {
       // Match webphone conference controls: Hold is disabled, Transfer is
       // enabled only once merged, Merge is hidden after merging.
-      row1 = [
-        hold(disabled: true),
-        transfer(disabled: !_isMerged),
-        keypad(),
-      ];
+      row1 = [hold(disabled: true), transfer(disabled: !_isMerged), keypad()];
       row2 = [
         if (!_isMerged)
           _CallControlButton(
@@ -3265,11 +3697,7 @@ class _DialpadScreenState extends State<DialpadScreen>
       ];
     } else {
       row1 = [hold(), transfer(disabled: !_isMerged), keypad()];
-      row2 = [
-        addCall(disabled: !_sip.isConnected),
-        mute(),
-        speaker(),
-      ];
+      row2 = [addCall(disabled: !_sip.isConnected), mute(), speaker()];
     }
 
     Widget row(List<Widget> items) {
@@ -3454,14 +3882,10 @@ class _DialpadScreenState extends State<DialpadScreen>
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  _buildDialRow(['1', '2', '3'],
-                      onDigit: _onConferenceKey),
-                  _buildDialRow(['4', '5', '6'],
-                      onDigit: _onConferenceKey),
-                  _buildDialRow(['7', '8', '9'],
-                      onDigit: _onConferenceKey),
-                  _buildDialRow(['*', '0', '#'],
-                      onDigit: _onConferenceKey),
+                  _buildDialRow(['1', '2', '3'], onDigit: _onConferenceKey),
+                  _buildDialRow(['4', '5', '6'], onDigit: _onConferenceKey),
+                  _buildDialRow(['7', '8', '9'], onDigit: _onConferenceKey),
+                  _buildDialRow(['*', '0', '#'], onDigit: _onConferenceKey),
                 ],
               ),
             ),
@@ -3470,28 +3894,32 @@ class _DialpadScreenState extends State<DialpadScreen>
         const SizedBox(height: 16),
         GestureDetector(
           onTap: _conferenceNumber.isNotEmpty ? _startConferenceCall : null,
-            child: Container(
-              width: 56,
-              height: 56,
-              decoration: BoxDecoration(
-                color: _conferenceNumber.isNotEmpty
-                    ? Colors.green
-                    : cs.onSurface.withValues(alpha: 0.12),
-                shape: BoxShape.circle,
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.green.withValues(
-                      alpha: _conferenceNumber.isNotEmpty ? 0.4 : 0,
-                    ),
-                    blurRadius: 12,
-                    offset: const Offset(0, 6),
+          child: Container(
+            width: 56,
+            height: 56,
+            decoration: BoxDecoration(
+              color: _conferenceNumber.isNotEmpty
+                  ? Colors.green
+                  : cs.onSurface.withValues(alpha: 0.12),
+              shape: BoxShape.circle,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.green.withValues(
+                    alpha: _conferenceNumber.isNotEmpty ? 0.4 : 0,
                   ),
-                ],
-              ),
-              child: const Icon(Icons.call_rounded, color: Colors.white, size: 24),
+                  blurRadius: 12,
+                  offset: const Offset(0, 6),
+                ),
+              ],
+            ),
+            child: const Icon(
+              Icons.call_rounded,
+              color: Colors.white,
+              size: 24,
             ),
           ),
-        ],
+        ),
+      ],
     );
   }
 
@@ -3625,10 +4053,124 @@ String _stripCountryCode(String number) {
   return n;
 }
 
+/// Extracts a lead's phone number. Prefers the explicit number keys the
+/// webphone's `mapLeadRow` dials from (`number || phone || phone_number ||
+/// contactNumber`), then falls back to the `mapLeadData` scan: the first value
+/// that is exactly 10 digits.
+String _leadDisplayPhone(Map<String, dynamic> item) {
+  const keys = [
+    'number',
+    'phone',
+    'phone_number',
+    'contactNumber',
+    'mobileNumber',
+    'dialNumber',
+    'leadNumber',
+    'mobile',
+    'Lead Number',
+    'contact',
+  ];
+  for (final key in keys) {
+    final v = item[key];
+    if (v == null) continue;
+    final s = v.toString().trim();
+    if (s.isNotEmpty && s != '0') return s;
+  }
+  for (final value in item.values) {
+    if (value == null || value is bool) continue;
+    if (value is num && value == 0) continue;
+    final v = value.toString().trim();
+    if (v.isEmpty || v == '0') continue;
+    if (RegExp(r'^\d{10}$').hasMatch(v)) return v;
+  }
+  return '';
+}
+
+/// Extracts a lead's display name. Prefers the explicit contact-name keys the
+/// webphone uses (`patientName || fullName || customerName ...`), keeping
+/// generic `name`/`Name` last because `/leadswithdaterange` can put the LIST
+/// name in a bare `name` key. Falls back to the `mapLeadData` heuristic: the
+/// first value whose key contains "name" (excluding file/user/agent/list/
+/// campaign/queue keys) that isn't a 10-digit number or email.
+String _leadDisplayName(Map<String, dynamic> item, {required String fallback}) {
+  const keys = [
+    'patientName',
+    'PatientName',
+    'fullName',
+    'FullName',
+    'customerName',
+    'CustomerName',
+    'leadName',
+    'LeadName',
+    'contactName',
+    'ContactName',
+    'Lead Name',
+    'firstName',
+    'firstname',
+    'first_name',
+    'name',
+    'Name',
+  ];
+  for (final key in keys) {
+    final v = item[key];
+    if (v == null) continue;
+    final s = v.toString().trim();
+    if (s.isNotEmpty) return s;
+  }
+  for (final entry in item.entries) {
+    if (entry.value == null) continue;
+    final v = entry.value.toString().trim();
+    if (v.isEmpty) continue;
+    if (v.contains('@') && v.contains('.')) continue;
+    if (RegExp(r'^\d{10}$').hasMatch(v)) continue;
+    final k = entry.key.toLowerCase();
+    if (k.contains('name') &&
+        !k.contains('file') &&
+        !k.contains('user') &&
+        !k.contains('agent') &&
+        !k.contains('list') &&
+        !k.contains('campaign') &&
+        !k.contains('queue')) {
+      return v;
+    }
+  }
+  return fallback;
+}
+
+/// Mirrors the webphone lead queue (`mapLeadRow`): Dial Status is derived
+/// from `lastDialedStatus` (0 = Not Dialed, 1 = Dialed Not Picked,
+/// 2 = Answered).
+String _leadDialStatusLabel(Map<String, dynamic> item) {
+  final v = item['lastDialedStatus'];
+  final n = v is num ? v.toInt() : int.tryParse(v?.toString() ?? '');
+  switch (n) {
+    case 1:
+      return 'Dialed Not Picked';
+    case 2:
+      return 'Answered';
+    default:
+      return 'Not Dialed';
+  }
+}
+
+/// Mirrors the webphone lead queue (`mapLeadRow`): Status is derived from
+/// `lastDialedStatus` (2 = Completed, >0 = Contacted, else Pending).
+String _leadStatusLabel(Map<String, dynamic> item) {
+  final v = item['lastDialedStatus'];
+  final n = v is num ? v.toInt() : int.tryParse(v?.toString() ?? '');
+  if (n == null || n <= 0) return 'Pending';
+  return n >= 2 ? 'Completed' : 'Contacted';
+}
+
 /// Number shown in the call header. Matches the webphone: once a conference
 /// is dialled/in progress the conference number takes over the header, and
 /// when merged the label becomes "main Conference with conference".
-String _headerCallNumber(String main, String conference, {required bool conferenceActive, required bool merged}) {
+String _headerCallNumber(
+  String main,
+  String conference, {
+  required bool conferenceActive,
+  required bool merged,
+}) {
   if (merged && main.isNotEmpty && conference.isNotEmpty) {
     return '$main Conference with $conference';
   }
