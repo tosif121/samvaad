@@ -743,7 +743,9 @@ class SipSocketService implements sip.SipUaHelperListener {
     final call = _activeCall;
     if (call != null) {
       try {
-        call.session.terminate();
+        if (call.state != sip.CallStateEnum.ENDED) {
+          call.session.terminate();
+        }
       } catch (e) {
         _log('Exception during session.terminate: $e');
       }
@@ -2266,7 +2268,9 @@ class SipSocketService implements sip.SipUaHelperListener {
         if (channelId != null && channelId.isNotEmpty) {
           unawaited(hangupChannel(channelId));
         }
-        call.session.terminate();
+        if (call.state != sip.CallStateEnum.ENDED) {
+          call.session.terminate();
+        }
       } catch (e) {
         _log('Exception during reject/terminate: $e');
       }

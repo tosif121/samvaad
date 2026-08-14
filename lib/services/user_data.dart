@@ -14,7 +14,10 @@ class UserData {
   static Future<void> init() async {
     try {
       _prefs = await SharedPreferences.getInstance();
-      _autoDialActive = _prefs?.getBool('auto_dial_active') ?? false;
+      // Auto-dial always starts Paused each session (webphone behaviour), so
+      // the first tap on the toggle always starts it rather than pausing a
+      // state persisted from a previous run.
+      _autoDialActive = false;
       _autoDialCountdownSeconds = _prefs?.getInt('auto_dial_countdown_seconds') ?? 3;
       final tokenStr = _prefs?.getString('token');
       if (tokenStr == null || tokenStr.isEmpty) return;
@@ -54,8 +57,6 @@ class UserData {
 
   static Future<void> setAutoDialActive(bool value) async {
     _autoDialActive = value;
-    final prefs = _prefs ?? await SharedPreferences.getInstance();
-    await prefs.setBool('auto_dial_active', value);
   }
 
   /// Auto-dial countdown timer seconds (default 3s).

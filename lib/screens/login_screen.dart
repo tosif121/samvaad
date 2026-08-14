@@ -82,7 +82,7 @@ class _LoginScreenState extends State<LoginScreen> {
           setState(() {
             _connecting = false;
             _error = authFailed
-                ? 'Session expired. Please log in again.'
+                ? 'Username or password is wrong'
                 : 'Registration failed — check credentials';
           });
         }

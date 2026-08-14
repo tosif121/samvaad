@@ -14,12 +14,16 @@ class CallHistoryTile extends StatelessWidget {
     required this.onTap,
     this.onDelete,
     this.onCallBack,
+    this.count,
   });
 
   final CallLogEntry entry;
   final VoidCallback onTap;
   final Future<void> Function()? onDelete;
   final VoidCallback? onCallBack;
+
+  /// Number of times this caller was missed (shown as a badge when > 1).
+  final int? count;
 
   static String formatDuration(int seconds) {
     if (seconds <= 0) return '';
@@ -78,6 +82,29 @@ class CallHistoryTile extends StatelessWidget {
               child: Icon(icon, size: 13, color: color),
             ),
           ),
+          if (count != null && count! > 1)
+            Positioned(
+              left: -6,
+              top: -6,
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 5,
+                  vertical: 1,
+                ),
+                decoration: BoxDecoration(
+                  color: cs.error,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  '$count',
+                  style: TextStyle(
+                    fontSize: 9,
+                    fontWeight: FontWeight.w800,
+                    color: cs.onError,
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
       title: Text(

@@ -35,6 +35,9 @@ class DialpadScreen extends StatefulWidget {
 
 class _DialpadScreenState extends State<DialpadScreen>
     with WidgetsBindingObserver {
+  /// Diagnostic logging visible in `adb logcat` even without a VM service.
+  /// (`dart:developer.log` is not flushed to logcat in detached debug builds.)
+  static void debugLog(String message) => debugPrint(message);
   final _sip = SipSocketService();
   final _callLog = CallLogService();
   StreamSubscription? _sipSubscription;
@@ -52,6 +55,11 @@ class _DialpadScreenState extends State<DialpadScreen>
   String? _username;
 
   int _tabIndex = 0;
+  static const _tabNames = ['Dialer', 'Calls', 'Leads', 'Follow-ups', 'Settings'];
+  String get _currentTabName =>
+      _tabIndex >= 0 && _tabIndex < _tabNames.length
+          ? _tabNames[_tabIndex]
+          : 'Unknown($_tabIndex)';
   CallLogEntry? _activeLogEntry;
   bool _callWasAnswered = false;
   String _callBridgeId = '';
@@ -62,6 +70,7 @@ class _DialpadScreenState extends State<DialpadScreen>
   bool _isBreaksEnabled = true;
   int _autoDialGeneration = 0;
   bool _autoDialRunning = false;
+  bool _autoDialFromLeads = false;
   final Set<String> _autoDialedPhones = {};
 
   bool _conferenceStatus = false;
@@ -77,7 +86,7 @@ class _DialpadScreenState extends State<DialpadScreen>
 
   CallLogDirection? _lastCallDirection;
 
-  final Set<String> _callBackingCallers = {};
+  final Map<String, String> _dialingCallbackByPhone = {};
   final Set<String> _completingCallbacks = {};
   final Set<String> _activeCallbackIds = {};
 
@@ -303,6 +312,12 @@ class _DialpadScreenState extends State<DialpadScreen>
             _activeCallNumber = _sip.incomingNumber;
           }
           _callWasAnswered = true;
+          final cb = _dialingCallbackByPhone.remove(
+            _activeCallNumber.replaceAll(RegExp(r'[^0-9]'), ''),
+          );
+          if (cb != null && cb.isNotEmpty) {
+            _activeCallbackIds.add(cb);
+          }
           _callBridgeId = _callBridgeId.isEmpty ? _sip.bridgeID : _callBridgeId;
           _activeLogEntry ??= _createLogEntry(
             number: _activeCallNumber,
@@ -363,6 +378,9 @@ class _DialpadScreenState extends State<DialpadScreen>
           _lastHandledAt = DateTime.now();
           _activeCallNumber = '';
           _callBridgeId = '';
+          _dialingCallbackByPhone.remove(
+            endedNumber.replaceAll(RegExp(r'[^0-9]'), ''),
+          );
           _callTimer?.cancel();
           _callSeconds = 0;
           RingtoneService().stopRinging();
@@ -370,6 +388,12 @@ class _DialpadScreenState extends State<DialpadScreen>
             FlutterLocalNotificationsPlugin().cancelAll();
           } catch (_) {}
           if (mounted) setState(() {});
+          debugLog(
+            '[SCREEN] call $type ended (wasAnswered=$wasAnswered, '
+            'number=$endedNumber, autoDialActive=${UserData.isAutoDialActive()}, '
+            'autoDialFromLeads=$_autoDialFromLeads) → landing on '
+            '$_currentTabName (index $_tabIndex)',
+          );
           if (type == 'callEnded' && wasAnswered && mounted) {
             unawaited(
               _runPostCallFlow(
@@ -377,9 +401,13 @@ class _DialpadScreenState extends State<DialpadScreen>
                 number: endedNumber,
               ).whenComplete(() {
                 if (mounted) {
-                  if (UserData.isAutoDialActive()) {
+                  if (UserData.isAutoDialActive() && _autoDialFromLeads) {
                     setState(() => _tabIndex = 2);
                   }
+                  debugLog(
+                    '[SCREEN] post-call flow complete → landing on '
+                    '$_currentTabName (index $_tabIndex)',
+                  );
                   unawaited(_autoDialNextLead());
                 }
               }),
@@ -790,22 +818,23 @@ class _DialpadScreenState extends State<DialpadScreen>
         final phone = _leadDisplayPhone(lead);
         if (phone.isEmpty) continue;
         if (_autoDialedPhones.contains(_stripCountryCode(phone))) continue;
+        // Mirror the backend's buildEligibleLeadQuery: only exclude
+        // lastDialedStatus == 1 (dialed but not picked) plus completed/failed
+        // leads. Status 2 (picked up) is still dialable.
         final status = lead['lastDialedStatus'];
+        final leadState = (lead['leadState'] ?? '').toString().toLowerCase();
         final alreadyDialed =
             status == 1 ||
             status == '1' ||
-            status == 2 ||
-            status == '2' ||
-            (status is String &&
-                (status.toLowerCase().contains('dial') ||
-                    status.toLowerCase().contains('answered') ||
-                    status.toLowerCase().contains('completed')));
+            leadState == 'completed' ||
+            leadState == 'failed' ||
+            lead['isDeleted'] == true;
         if (alreadyDialed) continue;
         next = lead;
         nextPhone = phone;
         break;
       }
-      log(
+      debugLog(
         '[AUTO-DIAL] leads=${_sip.leads.length} '
         'dialedThisSession=${_autoDialedPhones.length} '
         'next=${nextPhone ?? 'none'}',
@@ -815,7 +844,7 @@ class _DialpadScreenState extends State<DialpadScreen>
       final cleanPhone = _stripCountryCode(nextPhone);
       _autoDialedPhones.add(cleanPhone);
 
-      if (mounted) setState(() => _tabIndex = 2);
+      if (mounted && _autoDialFromLeads) setState(() => _tabIndex = 2);
 
       final gen = ++_autoDialGeneration;
       final secs = UserData.autoDialCountdownSeconds();
@@ -1190,13 +1219,11 @@ class _DialpadScreenState extends State<DialpadScreen>
                 _followUpTabIndex = 0;
               }
             });
+            debugLog('[SCREEN] switched to $_currentTabName (index $index)');
             if (index == 1) {
               _callLog.markMissedSeen();
             } else if (index == 2) {
-              if (_leadDateFilterIndex != 0) {
-                setState(() => _leadDateFilterIndex = 0);
-              }
-              unawaited(_fetchLeadsForSelectedFilter(0));
+              unawaited(_fetchLeadsForSelectedFilter());
             }
           },
           destinations: [
@@ -1603,18 +1630,21 @@ class _DialpadScreenState extends State<DialpadScreen>
               Expanded(
                 flex: 1,
                 child: Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
 
-                      SizedBox(
-                        width: isTablet ? 400 : null,
-                        child: _buildNumberDisplay(),
-                      ),
-                      const SizedBox(height: 32),
-                      _buildCallButtons(),
-                    ],
+                        SizedBox(
+                          width: isTablet ? 400 : 320,
+                          child: _buildNumberDisplay(),
+                        ),
+                        const SizedBox(height: 32),
+                        _buildCallButtons(),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -1701,25 +1731,78 @@ class _DialpadScreenState extends State<DialpadScreen>
     );
   }
 
+  /// Mirrors the webphone's DropCallsModal: keep only missed calls belonging to
+  /// the user's campaign (or with no campaign), then group duplicates by caller
+  /// so each number appears once (with a count) sorted by latest call time.
+  bool _missedMatchesCampaign(dynamic raw, String userCampaign) {
+    if (raw is! Map) return false;
+    final campaign = (raw['campaign'] ?? '').toString();
+    return userCampaign.isEmpty || campaign.isEmpty || campaign == userCampaign;
+  }
+
+  List<({CallLogEntry entry, int count})> _buildGroupedMissedEntries(
+    List<dynamic> rawMissed,
+  ) {
+    final userCampaign = UserData.campaign();
+    final entries = <CallLogEntry>[];
+    for (var i = 0; i < rawMissed.length; i++) {
+      final raw = rawMissed[i];
+      if (!_missedMatchesCampaign(raw, userCampaign)) continue;
+      entries.add(_rawMissedCallToEntry(raw, i));
+    }
+    final byNumber = <String, List<CallLogEntry>>{};
+    for (final e in entries) {
+      final key = e.number.replaceAll(RegExp(r'[^0-9]'), '');
+      byNumber.putIfAbsent(key, () => []).add(e);
+    }
+    final grouped = <({CallLogEntry entry, int count})>[];
+    byNumber.forEach((key, list) {
+      list.sort((a, b) => b.startedAt.compareTo(a.startedAt));
+      grouped.add((entry: list.first, count: list.length));
+    });
+    grouped.sort((a, b) => b.entry.startedAt.compareTo(a.entry.startedAt));
+    return grouped;
+  }
+
   Widget _buildCallsTab() {
     final cs = Theme.of(context).colorScheme;
+    final isLandscape =
+        MediaQuery.of(context).size.width > MediaQuery.of(context).size.height;
     final allCalls = _sip.recentCalls;
     final rawMissed = _sip.missedCalls;
-    final missedCalls = rawMissed
-        .asMap()
-        .entries
-        .map((e) => _rawMissedCallToEntry(e.value, e.key))
-        .toList();
+    final groupedMissed = _buildGroupedMissedEntries(rawMissed);
+    final missedCalls = groupedMissed.map((g) => g.entry).toList();
+    final missedCountById = <String, int>{
+      for (final g in groupedMissed) g.entry.id: g.count,
+    };
+    final userCampaign = UserData.campaign();
+    final realMissedCount = rawMissed
+        .where((r) => _missedMatchesCampaign(r, userCampaign))
+        .length;
     final displayList = _callsFilterIndex == 0 ? allCalls : missedCalls;
 
-    final totalCalls = displayList.length;
-    final incomingCount = displayList
+    debugLog(
+      '[MISSED_CALLS] raw=${rawMissed.length} campaignFiltered=$realMissedCount '
+      'grouped=${groupedMissed.length} userCampaign=$userCampaign '
+      'groups=${groupedMissed.map((g) => '${g.entry.number}×${g.count}').join(', ')}',
+    );
+
+    final statsList = _callsFilterIndex == 0
+        ? allCalls
+        : [
+            for (var i = 0; i < rawMissed.length; i++)
+              if (_missedMatchesCampaign(rawMissed[i], userCampaign))
+                _rawMissedCallToEntry(rawMissed[i], i),
+          ];
+
+    final totalCalls = statsList.length;
+    final incomingCount = statsList
         .where((e) => e.direction == CallLogDirection.incoming)
         .length;
-    final outgoingCount = displayList
+    final outgoingCount = statsList
         .where((e) => e.direction == CallLogDirection.outgoing)
         .length;
-    final withDuration = displayList.where((e) => e.durationSec > 0).toList();
+    final withDuration = statsList.where((e) => e.durationSec > 0).toList();
     final avgSec = withDuration.isEmpty
         ? 0
         : withDuration.fold<int>(0, (sum, e) => sum + e.durationSec) ~/
@@ -1728,11 +1811,11 @@ class _DialpadScreenState extends State<DialpadScreen>
     return Column(
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(
+          padding: EdgeInsets.fromLTRB(
             AppSpacing.md,
-            AppSpacing.xs,
+            isLandscape ? 2 : AppSpacing.xs,
             AppSpacing.md,
-            AppSpacing.xs,
+            isLandscape ? 0 : AppSpacing.xs,
           ),
           child: Row(
             children: [
@@ -1761,16 +1844,16 @@ class _DialpadScreenState extends State<DialpadScreen>
           ),
         ),
         Padding(
-          padding: const EdgeInsets.fromLTRB(
+          padding: EdgeInsets.fromLTRB(
             AppSpacing.md,
-            2,
+            isLandscape ? 2 : 2,
             AppSpacing.md,
-            4,
+            isLandscape ? 2 : 4,
           ),
           child: Container(
-            padding: const EdgeInsets.symmetric(
+            padding: EdgeInsets.symmetric(
               horizontal: AppSpacing.sm,
-              vertical: AppSpacing.sm,
+              vertical: isLandscape ? 4 : AppSpacing.sm,
             ),
             decoration: BoxDecoration(
               color: cs.surfaceContainerLow,
@@ -1800,9 +1883,9 @@ class _DialpadScreenState extends State<DialpadScreen>
           ),
         ),
         Padding(
-          padding: const EdgeInsets.symmetric(
+          padding: EdgeInsets.symmetric(
             horizontal: AppSpacing.md,
-            vertical: 4,
+            vertical: isLandscape ? 2 : 4,
           ),
           child: Row(
             children: [
@@ -1816,7 +1899,7 @@ class _DialpadScreenState extends State<DialpadScreen>
                     ),
                     ButtonSegment<int>(
                       value: 1,
-                      label: Text('Missed (${missedCalls.length})'),
+                      label: Text('Missed ($realMissedCount)'),
                       icon: const Icon(Icons.phone_missed_rounded, size: 16),
                     ),
                   ],
@@ -1856,6 +1939,7 @@ class _DialpadScreenState extends State<DialpadScreen>
                     ),
                   )
                 : CustomScrollView(
+                    physics: const AlwaysScrollableScrollPhysics(),
                     slivers: [
                       for (final group in _groupEntriesByDay(displayList))
                         SliverMainAxisGroup(
@@ -1873,8 +1957,10 @@ class _DialpadScreenState extends State<DialpadScreen>
                                 final entry = group.value[i];
                                 return CallHistoryTile(
                                   entry: entry,
+                                  count: missedCountById[entry.id],
                                   onTap: () => _dialFromHistory(entry),
-                                  onCallBack: () => _dialFromHistory(entry),
+                                  onCallBack: () =>
+                                      _callBackNumber(entry.number),
                                 );
                               },
                             ),
@@ -1956,6 +2042,8 @@ class _DialpadScreenState extends State<DialpadScreen>
 
   Widget _buildLeadsTab() {
     final cs = Theme.of(context).colorScheme;
+    final isLandscape =
+        MediaQuery.of(context).size.width > MediaQuery.of(context).size.height;
     final allLeads = _sip.leads;
     final hasLeads = allLeads.isNotEmpty;
     final query = _leadSearchQuery.trim().toLowerCase();
@@ -2007,11 +2095,11 @@ class _DialpadScreenState extends State<DialpadScreen>
       child: Column(
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(
+            padding: EdgeInsets.fromLTRB(
               AppSpacing.md,
-              AppSpacing.xs,
+              isLandscape ? 2 : AppSpacing.xs,
               AppSpacing.md,
-              AppSpacing.xs,
+              isLandscape ? 0 : AppSpacing.xs,
             ),
             child: Row(
               children: [
@@ -2034,6 +2122,7 @@ class _DialpadScreenState extends State<DialpadScreen>
                           if (active) _autoDialGeneration++;
                           await UserData.setAutoDialActive(!active);
                           if (mounted) {
+                            _autoDialFromLeads = !active;
                             setState(() {});
                             if (!active) unawaited(_autoDialNextLead());
                           }
@@ -2094,16 +2183,16 @@ class _DialpadScreenState extends State<DialpadScreen>
             ),
           ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(
+            padding: EdgeInsets.fromLTRB(
               AppSpacing.md,
               2,
               AppSpacing.md,
-              4,
+              isLandscape ? 2 : 4,
             ),
             child: Container(
-              padding: const EdgeInsets.symmetric(
+              padding: EdgeInsets.symmetric(
                 horizontal: AppSpacing.sm,
-                vertical: AppSpacing.sm,
+                vertical: isLandscape ? 4 : AppSpacing.sm,
               ),
               decoration: BoxDecoration(
                 color: cs.surfaceContainerLow,
@@ -2133,9 +2222,9 @@ class _DialpadScreenState extends State<DialpadScreen>
             ),
           ),
           Padding(
-            padding: const EdgeInsets.symmetric(
+            padding: EdgeInsets.symmetric(
               horizontal: AppSpacing.md,
-              vertical: 4,
+              vertical: isLandscape ? 0 : 4,
             ),
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
@@ -2189,9 +2278,9 @@ class _DialpadScreenState extends State<DialpadScreen>
             ),
           ),
           Padding(
-            padding: const EdgeInsets.symmetric(
+            padding: EdgeInsets.symmetric(
               horizontal: AppSpacing.md,
-              vertical: 4,
+              vertical: isLandscape ? 0 : 4,
             ),
             child: TextField(
               decoration: InputDecoration(
@@ -2411,8 +2500,26 @@ class _DialpadScreenState extends State<DialpadScreen>
                               ],
                             ),
                             const SizedBox(height: 6),
-                            Row(
+                            Wrap(
+                              spacing: 10,
+                              runSpacing: 4,
+                              crossAxisAlignment: WrapCrossAlignment.center,
                               children: [
+                                const Icon(
+                                  Icons.folder_copy_outlined,
+                                  size: 12,
+                                ),
+                                Flexible(
+                                  child: Text(
+                                    'List: ${(item['listName'] ?? item['filename'] ?? '').toString()}',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                      color: cs.tertiary,
+                                    ),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
                                 Icon(
                                   Icons.access_time_rounded,
                                   size: 12,
@@ -2420,14 +2527,16 @@ class _DialpadScreenState extends State<DialpadScreen>
                                     alpha: 0.6,
                                   ),
                                 ),
-                                const SizedBox(width: 4),
-                                Text(
-                                  'Last Updated: ${_formatLeadDate(lastUpdated)}',
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    color: cs.onSurfaceVariant.withValues(
-                                      alpha: 0.7,
+                                Flexible(
+                                  child: Text(
+                                    'Last Updated: ${_formatLeadDate(lastUpdated)}',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      color: cs.onSurfaceVariant.withValues(
+                                        alpha: 0.7,
+                                      ),
                                     ),
+                                    overflow: TextOverflow.ellipsis,
                                   ),
                                 ),
                               ],
@@ -2453,7 +2562,7 @@ class _DialpadScreenState extends State<DialpadScreen>
   Widget _buildFollowUpsTab() {
     final cs = Theme.of(context).colorScheme;
     final followUps = _sip.followUps;
-    log(
+    debugLog(
       '[FOLLOW_UPS_SCREEN] rendering tab $_followUpTabIndex '
       'followUps=${followUps.length}',
     );
@@ -2470,7 +2579,7 @@ class _DialpadScreenState extends State<DialpadScreen>
 
     final now = DateTime.now();
     final buckets = _bucketFollowUps(followUps, now);
-    log(
+    debugLog(
       '[FOLLOW_UPS_SCREEN] buckets -> '
       'Pending=${buckets['Pending']?.length ?? 0} '
       'Active=${buckets['Active']?.length ?? 0}',
@@ -2575,12 +2684,8 @@ class _DialpadScreenState extends State<DialpadScreen>
 
       final scheduled = _resolveFollowUpTime(item) ?? now;
 
-      final isActive = (callbackId.isNotEmpty &&
-              _activeCallbackIds.contains(callbackId)) ||
-          _callBackingCallers.any(
-            (c) => c.replaceAll(RegExp(r'[^0-9]'), '') ==
-                phone.replaceAll(RegExp(r'[^0-9]'), ''),
-          );
+      final isActive =
+          callbackId.isNotEmpty && _activeCallbackIds.contains(callbackId);
       if (!isActive && scheduled.isBefore(startOfToday)) continue;
       if (!isActive && scheduled.isAfter(endOfToday)) continue;
 
@@ -2733,16 +2838,17 @@ class _DialpadScreenState extends State<DialpadScreen>
     );
     if (!mounted) return;
     final caller = number.trim();
-    if (caller.isNotEmpty) setState(() => _callBackingCallers.add(caller));
     if (callbackId != null && callbackId.isNotEmpty) {
-      setState(() => _activeCallbackIds.add(callbackId));
+      _dialingCallbackByPhone[caller.replaceAll(RegExp(r'[^0-9]'), '')] =
+          callbackId;
     }
     final ok = await _sip.dialMissedCall(number);
     if (!mounted) return;
-    if (caller.isNotEmpty) setState(() => _callBackingCallers.remove(caller));
     if (!ok) {
       if (callbackId != null && callbackId.isNotEmpty) {
-        setState(() => _activeCallbackIds.remove(callbackId));
+        _dialingCallbackByPhone.remove(
+          caller.replaceAll(RegExp(r'[^0-9]'), ''),
+        );
       }
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Could not call back the number')),
@@ -2890,6 +2996,7 @@ class _DialpadScreenState extends State<DialpadScreen>
                     if (!val) _autoDialGeneration++;
                     await UserData.setAutoDialActive(val);
                     if (mounted) {
+                      _autoDialFromLeads = false;
                       setState(() {});
                       if (val) unawaited(_autoDialNextLead());
                     }
