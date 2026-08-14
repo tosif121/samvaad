@@ -1025,7 +1025,15 @@ class _DialpadScreenState extends State<DialpadScreen>
     return Column(
       children: [
         _buildShellBar(),
-        Expanded(child: _buildTabs()),
+        Expanded(
+          child: Align(
+            alignment: Alignment.topCenter,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 1100),
+              child: _buildTabs(),
+            ),
+          ),
+        ),
       ],
     );
   }
