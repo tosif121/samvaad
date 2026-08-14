@@ -12,6 +12,7 @@ import 'package:device_info_plus/device_info_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'ringtone_service.dart';
 import 'sip_socket_service.dart';
+import 'toast_service.dart';
 import 'user_data.dart';
 
 @pragma('vm:entry-point')
@@ -160,9 +161,11 @@ class FcmService with WidgetsBindingObserver {
         log("[FCM_SERVICE] Token securely stored in MongoDB! Response: ${response.body}");
       } else {
         log("[FCM_SERVICE] Failed to store token: ${response.statusCode} - ${response.body}");
+        ToastService.show('Failed to register push token');
       }
     } catch (e) {
       log("[FCM_SERVICE] Error sending token to backend: $e");
+      ToastService.show('Failed to register push token');
     }
   }
 
@@ -213,9 +216,11 @@ class FcmService with WidgetsBindingObserver {
         log("[FCM_SERVICE] Token removed from backend successfully!");
       } else {
         log("[FCM_SERVICE] Failed to remove token: ${response.body}");
+        ToastService.show('Failed to remove push token');
       }
     } catch (e) {
       log("[FCM_SERVICE] Error removing token from backend: $e");
+      ToastService.show('Failed to remove push token');
     }
   }
 

@@ -7,6 +7,7 @@ import 'services/sip_socket_service.dart';
 import 'services/user_data.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'services/fcm_service.dart';
+import 'services/toast_service.dart';
 import 'ui/theme.dart';
 
 const _singleInstancePort = 56321;
@@ -57,6 +58,7 @@ class SamvaadApp extends StatelessWidget {
         return MaterialApp(
           title: 'Samvaad',
           debugShowCheckedModeBanner: false,
+          scaffoldMessengerKey: ToastService.messengerKey,
           theme: SamvaadTheme.light(),
           darkTheme: SamvaadTheme.dark(),
           themeMode: mode,

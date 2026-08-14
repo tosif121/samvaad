@@ -1,3 +1,5 @@
+import 'dart:developer';
+
 import 'package:flutter/material.dart';
 
 import '../tokens.dart';
@@ -137,6 +139,10 @@ class _ScheduleCallbackSheetState extends State<_ScheduleCallbackSheet> {
       );
       return;
     }
+    log(
+      '[SCHEDULE_CALLBACK] Scheduling callback for ${widget.number} → '
+      '${_formatDate(date)} ${_formatTime(_time)} | $details',
+    );
     Navigator.of(context).pop({
       'date': _formatDate(date),
       'time': _formatTime(_time),

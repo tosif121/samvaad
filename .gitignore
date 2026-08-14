@@ -43,3 +43,6 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Other-project vibe code (not part of Samvaad)
+lib/vibe_code/

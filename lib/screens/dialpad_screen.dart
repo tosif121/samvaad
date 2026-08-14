@@ -419,6 +419,7 @@ class _DialpadScreenState extends State<DialpadScreen>
           break;
 
         case 'followUpsUpdated':
+          log('[FOLLOW_UPS] UI refreshed with ${event['count']} callbacks');
           if (mounted) setState(() {});
           break;
 
@@ -431,16 +432,35 @@ class _DialpadScreenState extends State<DialpadScreen>
           break;
 
         case 'registrationFailed':
-          if (mounted) setState(() {});
+          final regCause = (event['cause'] ?? '').toString();
+          final authFailed = regCause.contains('401') ||
+              regCause.toLowerCase().contains('unauthorized');
+          if (authFailed) {
+            log('[DIALPAD] SIP registration failed with 401, clearing session...');
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.remove('token');
+            await prefs.remove('savedUsername');
+            await prefs.remove('savedPassword');
+            _sip.disconnect();
+            await _sip.clearCredentials();
+            if (mounted) {
+              Navigator.of(context).pushAndRemoveUntil(
+                MaterialPageRoute(builder: (_) => const LoginScreen()),
+                (route) => false,
+              );
+            }
+          } else if (mounted) {
+            setState(() {});
+          }
           break;
 
         case 'connectionLost':
           final reason = (event['reason'] ?? '').toString();
           if (reason == 'force_login' || reason == '401_unauthorized') {
             log(
-              '[DIALPAD] Unauthenticated session ($reason), triggering auto-logout...',
+              '[DIALPAD] Unauthenticated session ($reason), attempting auto-login...',
             );
-            _logout();
+            await _handleSessionLoss();
           }
           break;
 
@@ -1152,13 +1172,23 @@ class _DialpadScreenState extends State<DialpadScreen>
           height: 68,
           labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
           onDestinationSelected: (index) {
+            final tabChanged = index != _tabIndex;
             setState(() {
               _tabIndex = index;
+              if (tabChanged) {
+                _phoneController.clear();
+              }
+              if (index == 3 && _followUpTabIndex != 0) {
+                _followUpTabIndex = 0;
+              }
             });
             if (index == 1) {
               _callLog.markMissedSeen();
             } else if (index == 2) {
-              unawaited(_sip.fetchLeads());
+              if (_leadDateFilterIndex != 0) {
+                setState(() => _leadDateFilterIndex = 0);
+              }
+              unawaited(_fetchLeadsForSelectedFilter(0));
             }
           },
           destinations: [
@@ -1225,6 +1255,27 @@ class _DialpadScreenState extends State<DialpadScreen>
     Navigator.of(
       context,
     ).pushReplacement(MaterialPageRoute(builder: (_) => const LoginScreen()));
+  }
+
+  /// Re-authenticates with the saved username/password after a forced logout
+  /// or 401. Reconnects SIP on success, otherwise falls back to [LoginScreen].
+  Future<void> _handleSessionLoss() async {
+    final ok = await autoLoginWithSavedCredentials();
+    if (!mounted) return;
+    if (ok) {
+      log('[DIALPAD] Auto-login succeeded, reconnecting SIP...');
+      _sip.disconnect();
+      await _sip.loadCredentials();
+      await _sip.connect();
+      if (mounted) setState(() {});
+    } else {
+      log('[DIALPAD] Auto-login failed, clearing session and falling back to logout...');
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('token');
+      await prefs.remove('savedUsername');
+      await prefs.remove('savedPassword');
+      _logout();
+    }
   }
 
   Widget _buildQueueBadge() {
@@ -2389,11 +2440,15 @@ class _DialpadScreenState extends State<DialpadScreen>
   // ---------------------------------------------------------------------
 
   int _followUpTabIndex = 0;
-  static const _followUpTabs = ['Pending', 'Upcoming', 'Active'];
+  static const _followUpTabs = ['Pending', 'Active'];
 
   Widget _buildFollowUpsTab() {
     final cs = Theme.of(context).colorScheme;
     final followUps = _sip.followUps;
+    log(
+      '[FOLLOW_UPS_SCREEN] rendering tab $_followUpTabIndex '
+      'followUps=${followUps.length}',
+    );
     if (followUps.isEmpty) {
       return Padding(
         padding: const EdgeInsets.only(top: 64),
@@ -2407,6 +2462,11 @@ class _DialpadScreenState extends State<DialpadScreen>
 
     final now = DateTime.now();
     final buckets = _bucketFollowUps(followUps, now);
+    log(
+      '[FOLLOW_UPS_SCREEN] buckets -> '
+      'Pending=${buckets['Pending']?.length ?? 0} '
+      'Active=${buckets['Active']?.length ?? 0}',
+    );
     final counts = {
       for (final tab in _followUpTabs) tab: buckets[tab]?.length ?? 0,
     };
@@ -2421,14 +2481,24 @@ class _DialpadScreenState extends State<DialpadScreen>
             AppSpacing.md,
             AppSpacing.sm,
           ),
-          child: Text(
-            'Follow-up Calls',
-            style: TextStyle(
-              fontSize: AppType.heading,
-              fontWeight: FontWeight.w800,
-              letterSpacing: -0.3,
-              color: cs.onSurface,
-            ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Follow-up Calls',
+                style: TextStyle(
+                  fontSize: AppType.heading,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: -0.3,
+                  color: cs.onSurface,
+                ),
+              ),
+              IconButton(
+                tooltip: 'Fetch Recent Callbacks',
+                onPressed: () => unawaited(_sip.fetchAgentCallbacks()),
+                icon: const Icon(Icons.refresh_rounded),
+              ),
+            ],
           ),
         ),
         Padding(
@@ -2482,26 +2552,31 @@ class _DialpadScreenState extends State<DialpadScreen>
       final phone = field('phoneNumber').isNotEmpty
           ? field('phoneNumber')
           : field('contactNumber');
-      final comment = field('comment');
+      final comment = field('comment').isNotEmpty
+          ? field('comment')
+          : field('reason').isNotEmpty
+          ? field('reason')
+          : field('notes');
+      final user = field('user').isNotEmpty
+          ? field('user')
+          : field('agentName');
       final status = field('status').toLowerCase();
       final callbackId = field('_id').isNotEmpty ? field('_id') : field('id');
 
       if (status.contains('complete')) continue;
 
-      final scheduled = _resolveFollowUpTime(item);
-      if (scheduled == null) {
-        continue;
-      }
+      final scheduled = _resolveFollowUpTime(item) ?? now;
 
-      final isActive =
-          callbackId.isNotEmpty && _activeCallbackIds.contains(callbackId);
-      final tab = isActive
-          ? 'Active'
-          : scheduled.isBefore(startOfToday)
-          ? 'Pending'
-          : scheduled.isAfter(endOfToday)
-          ? 'Upcoming'
-          : 'Pending';
+      final isActive = (callbackId.isNotEmpty &&
+              _activeCallbackIds.contains(callbackId)) ||
+          _callBackingCallers.any(
+            (c) => c.replaceAll(RegExp(r'[^0-9]'), '') ==
+                phone.replaceAll(RegExp(r'[^0-9]'), ''),
+          );
+      if (!isActive && scheduled.isBefore(startOfToday)) continue;
+      if (!isActive && scheduled.isAfter(endOfToday)) continue;
+
+      final tab = isActive ? 'Active' : 'Pending';
 
       final isAlert =
           !isActive &&
@@ -2513,6 +2588,7 @@ class _DialpadScreenState extends State<DialpadScreen>
           item: item,
           phone: phone,
           comment: comment,
+          user: user,
           status: field('status'),
           callbackId: callbackId,
           scheduledAt: scheduled,
@@ -2617,6 +2693,7 @@ class _DialpadScreenState extends State<DialpadScreen>
       phone: entry.phone,
       scheduledAt: entry.scheduledAt,
       comment: entry.comment,
+      user: entry.user,
       status: entry.status,
       callbackId: entry.callbackId,
       overdue: overdue,
@@ -2625,13 +2702,27 @@ class _DialpadScreenState extends State<DialpadScreen>
       completing:
           entry.callbackId.isNotEmpty &&
           _completingCallbacks.contains(entry.callbackId),
+      onDone: entry.callbackId.isEmpty
+          ? null
+          : () => _markCallbackComplete(entry),
       onCallBack: entry.phone.isEmpty
           ? null
           : () => _callBackNumber(entry.phone, callbackId: entry.callbackId),
     );
   }
 
+  Future<void> _markCallbackComplete(_FollowUpEntry entry) async {
+    if (_completingCallbacks.contains(entry.callbackId)) return;
+    setState(() => _completingCallbacks.add(entry.callbackId));
+    await _sip.updateCallbackStatus(entry.callbackId, 'completed');
+    if (mounted) setState(() => _completingCallbacks.remove(entry.callbackId));
+  }
+
   Future<void> _callBackNumber(String number, {String? callbackId}) async {
+    log(
+      '[CALLBACK] Dialing back $number'
+      '${callbackId != null ? ' (callbackId=$callbackId)' : ''}',
+    );
     if (!mounted) return;
     final caller = number.trim();
     if (caller.isNotEmpty) setState(() => _callBackingCallers.add(caller));
@@ -2707,7 +2798,7 @@ class _DialpadScreenState extends State<DialpadScreen>
 
   void _dialFromHistory(CallLogEntry entry) {
     setState(() {
-      _phoneController.text = entry.number;
+      _phoneController.text = _stripCountryCode(entry.number);
       _tabIndex = 0;
     });
   }
@@ -4254,6 +4345,11 @@ class _DispositionSheetState extends State<_DispositionSheet> {
 
     final username = UserData.username();
     final campaign = UserData.campaign();
+    log(
+      '[SCHEDULE_CALLBACK] Disposition "$_selected" confirmed → follow-up '
+      '${callback['date']} ${callback['time']} | ${callback['details']} '
+      '| number=${widget.number} user=$username campaign=$campaign',
+    );
     Navigator.of(context).pop(
       _DispositionResult(
         disposition: _selected,
@@ -4652,6 +4748,7 @@ class _FollowUpEntry {
     required this.item,
     required this.phone,
     required this.comment,
+    required this.user,
     required this.status,
     required this.callbackId,
     required this.scheduledAt,
@@ -4662,6 +4759,7 @@ class _FollowUpEntry {
   final dynamic item;
   final String phone;
   final String comment;
+  final String user;
   final String status;
   final String callbackId;
   final DateTime? scheduledAt;

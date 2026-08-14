@@ -11,6 +11,7 @@ import '../models/call_log_entry.dart';
 import 'remote_audio_stub.dart' if (dart.library.html) 'remote_audio_web.dart';
 import 'call_lifecycle_service.dart';
 import 'fcm_service.dart';
+import 'toast_service.dart';
 import 'user_data.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
@@ -87,6 +88,13 @@ class SipSocketService implements sip.SipUaHelperListener {
 
   bool _connecting = false;
   bool _wasStarted = false;
+
+  // Auto-reconnect state: re-registers when the SIP WebSocket drops or gets
+  // stuck in CONNECTING, unless the disconnect was intentional (logout/401).
+  Timer? _reconnectTimer;
+  int _reconnectAttempt = 0;
+  bool _intentionalDisconnect = false;
+  bool _reconnectEnabled = true;
 
   // Guards _finishCall against being invoked twice for the same call
   // (e.g. once from callStateChanged's ENDED/FAILED branch and once from
@@ -209,6 +217,13 @@ class SipSocketService implements sip.SipUaHelperListener {
       );
       return;
     }
+
+    // A manual connect (fresh login / fastReconnect) re-enables auto-reconnect
+    // and cancels any pending reconnect timer.
+    _intentionalDisconnect = false;
+    _reconnectEnabled = true;
+    _reconnectAttempt = 0;
+    _reconnectTimer?.cancel();
 
     creds ??= _credentials;
     if (creds == null) {
@@ -390,9 +405,14 @@ class SipSocketService implements sip.SipUaHelperListener {
     _log("Transport State : ${state.state}");
     switch (state.state) {
       case sip.TransportStateEnum.NONE:
+        break;
       case sip.TransportStateEnum.CONNECTING:
+        // If the socket spends too long stuck mid-connect, force a retry.
+        _scheduleConnectingWatchdog();
         break;
       case sip.TransportStateEnum.CONNECTED:
+        _reconnectTimer?.cancel();
+        _reconnectAttempt = 0;
         final wasDisconnected = !_isConnected;
         _isConnected = true;
         if (wasDisconnected) {
@@ -401,14 +421,54 @@ class SipSocketService implements sip.SipUaHelperListener {
         break;
       case sip.TransportStateEnum.DISCONNECTED:
         _log('WebSocket DISCONNECTED', data: StackTrace.current.toString());
+        _reconnectTimer?.cancel();
         final wasConnected = _isConnected;
         _isConnected = false;
         _isRegistered = false;
         if (wasConnected) {
           _emit(SipEvent.connectionLost);
         }
+        _scheduleReconnect();
         break;
     }
+  }
+
+  /// Schedules an automatic re-registration after a SIP disconnection, with
+  /// exponential-ish backoff so flapping sockets don't hammer the server.
+  /// Skipped when the disconnect was intentional (logout / 401 / shutdown).
+  void _scheduleReconnect() {
+    if (_intentionalDisconnect || !_reconnectEnabled) {
+      _log('Auto-reconnect skipped (intentional disconnect)');
+      return;
+    }
+    _reconnectTimer?.cancel();
+    const backoffs = [3, 5, 10, 15, 30];
+    final idx = _reconnectAttempt > 4 ? 4 : _reconnectAttempt;
+    _reconnectAttempt++;
+    _log('Scheduling auto-reconnect in ${backoffs[idx]}s (attempt $_reconnectAttempt)...');
+    _reconnectTimer = Timer(
+      Duration(seconds: backoffs[idx]),
+      _performReconnect,
+    );
+  }
+
+  /// Flips the transport back on when it stays in CONNECTING for 15s.
+  void _scheduleConnectingWatchdog() {
+    if (_intentionalDisconnect || !_reconnectEnabled) return;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = Timer(const Duration(seconds: 15), _performReconnect);
+  }
+
+  Future<void> _performReconnect() async {
+    if (_intentionalDisconnect || !_reconnectEnabled) return;
+    if (_isRegistered || _isConnected) {
+      _reconnectAttempt = 0;
+      return;
+    }
+    final creds = _credentials;
+    if (creds == null) return;
+    _log('Performing auto-reconnect...');
+    await connect(creds);
   }
 
   @override
@@ -1182,6 +1242,7 @@ class SipSocketService implements sip.SipUaHelperListener {
         '+91$rawNumber',
       }.toList();
 
+      var cleared = false;
       for (final num in variants) {
         _log('Requesting clearRejectedCallFromAgent for $num...');
         final headers = await _getAuthHeaders();
@@ -1195,8 +1256,14 @@ class SipSocketService implements sip.SipUaHelperListener {
         _log('clearRejectedCallFromAgent response: ${response.body}');
         if (response.statusCode == 200) {
           final data = jsonDecode(response.body);
-          if (data is Map && data['success'] == true) break;
+          if (data is Map && data['success'] == true) {
+            cleared = true;
+            break;
+          }
         }
+      }
+      if (!cleared) {
+        _log('clearRejectedCallFromAgent: no variant cleared for $callerNumber');
       }
     } catch (e) {
       _log('Error calling clearRejectedCallFromAgent: $e');
@@ -1219,6 +1286,12 @@ class SipSocketService implements sip.SipUaHelperListener {
           )
           .timeout(const Duration(seconds: 8));
       if (_checkResponseForAuthFailure(response)) return _missedCalls;
+      if (response.statusCode != 200) {
+        _log(
+          'fetchMissedCalls: unexpected status ${response.statusCode} ${response.body}',
+        );
+        return _missedCalls;
+      }
       final data = jsonDecode(response.body);
       final result = data is Map ? data['result'] : null;
       if (result is List) {
@@ -1321,6 +1394,7 @@ class SipSocketService implements sip.SipUaHelperListener {
       }
     } catch (e) {
       _log('Error fetching leads: $e');
+      ToastService.show('Failed to load leads');
     }
     return _leads;
   }
@@ -1445,9 +1519,11 @@ class SipSocketService implements sip.SipUaHelperListener {
         return true;
       }
       shouldAutoAnswerNextCall = false;
+      ToastService.show('Failed to dial missed call');
     } catch (e) {
       shouldAutoAnswerNextCall = false;
       _log('Error calling /dialmissedcall: $e');
+      ToastService.show('Failed to dial missed call');
     }
     return false;
   }
@@ -1458,15 +1534,19 @@ class SipSocketService implements sip.SipUaHelperListener {
     try {
       _log('Updating callback $callbackId → $status...');
       final headers = await _getAuthHeaders();
-      await http
+      final response = await http
           .post(
             Uri.parse('https://devapp.iotcom.io/callback/update-status'),
             headers: headers,
             body: jsonEncode({'callbackId': callbackId, 'status': status}),
           )
           .timeout(const Duration(seconds: 5));
+      _log(
+        '[CALLBACK] update-status response: ${response.statusCode} ${response.body}',
+      );
     } catch (e) {
       _log('Error updating callback status: $e');
+      ToastService.show('Failed to update callback');
     }
   }
 
@@ -1485,6 +1565,7 @@ class SipSocketService implements sip.SipUaHelperListener {
       _log('hangupChannel response: ${response.body}');
     } catch (e) {
       _log('Error calling hangupChannel: $e');
+      ToastService.show('Failed to hang up channel');
     }
   }
 
@@ -1503,10 +1584,17 @@ class SipSocketService implements sip.SipUaHelperListener {
           .timeout(const Duration(seconds: 5));
       if (_checkResponseForAuthFailure(response)) return null;
       if (response.statusCode == 200) {
-        return jsonDecode(response.body) as Map<String, dynamic>?;
+        final body = jsonDecode(response.body) as Map<String, dynamic>?;
+        _log(
+          '[USERCONNECTION] response keys: ${body?.keys.toList()} '
+          'followUpDispoes=${body?['followUpDispoes']}',
+        );
+        return body;
       }
+      ToastService.show('Connection check failed');
     } catch (e) {
       _log('Error in userconnection check: $e');
+      ToastService.show('Connection check failed');
     }
     return null;
   }
@@ -1516,6 +1604,10 @@ class SipSocketService implements sip.SipUaHelperListener {
   /// fallback when a queued call for this agent's campaign is visible but the
   /// SIP INVITE/FCM path has not surfaced it yet.
   void _processUserconnection(Map<String, dynamic> data) {
+    final followUps = data['followUpDispoes'];
+    _log(
+      '[FOLLOW_UPS] userconnection followUpDispoes=${followUps is List ? 'list(${followUps.length})' : '${followUps?.runtimeType ?? 'ABSENT'}'}',
+    );
     final count = data['currentCallqueueCount'];
     if (count is int && count != _queueCount) {
       _queueCount = count;
@@ -1528,12 +1620,12 @@ class SipSocketService implements sip.SipUaHelperListener {
       _emit(SipEvent.agentStatusChanged, data: {'status': status});
     }
 
-    final followUps = data['followUpDispoes'];
     if (followUps is List) {
       final followUpsJson = followUps.join();
       if (followUpsJson != _lastFollowUpsJson) {
         _lastFollowUpsJson = followUpsJson;
         _followUps = followUps;
+        _log('[FOLLOW_UPS] Refreshed: ${followUps.length} scheduled callbacks');
         _emit(SipEvent.followUpsUpdated, data: {'count': followUps.length});
       }
     }
@@ -1633,6 +1725,7 @@ class SipSocketService implements sip.SipUaHelperListener {
       );
     } catch (e) {
       _log('Error calling agentAvailable: $e');
+      ToastService.show('Failed to set agent available');
     } finally {
       _agentAvailableInFlight = false;
     }
@@ -1662,8 +1755,10 @@ class SipSocketService implements sip.SipUaHelperListener {
       if (response.statusCode == 200) {
         return jsonDecode(response.body) as Map<String, dynamic>?;
       }
+      ToastService.show('Failed to check user on call');
     } catch (e) {
       _log('Error calling /useroncall: $e');
+      ToastService.show('Failed to check user on call');
     }
     return null;
   }
@@ -1692,6 +1787,7 @@ class SipSocketService implements sip.SipUaHelperListener {
           .timeout(const Duration(seconds: 5));
     } catch (e) {
       _log('Error in /user/callended: $e');
+      ToastService.show('Failed to send call ended');
     }
   }
 
@@ -1731,6 +1827,7 @@ class SipSocketService implements sip.SipUaHelperListener {
           .timeout(const Duration(seconds: 5));
     } catch (e) {
       _log('Error in /user/disposition: $e');
+      ToastService.show('Failed to submit disposition');
     }
   }
 
@@ -1855,6 +1952,7 @@ class SipSocketService implements sip.SipUaHelperListener {
       return DynamicFormConfigResult(webformEnabled: true, config: config);
     } catch (e) {
       _log('Error fetching dynamic form config: $e');
+      ToastService.show('Failed to load form config');
       return const DynamicFormConfigResult(webformEnabled: false, config: null);
     }
   }
@@ -1904,6 +2002,7 @@ class SipSocketService implements sip.SipUaHelperListener {
           .timeout(const Duration(seconds: 5));
     } catch (e) {
       _log('Error in /user/breakuser: $e');
+      ToastService.show('Failed to start break');
     }
   }
 
@@ -1924,10 +2023,49 @@ class SipSocketService implements sip.SipUaHelperListener {
           .timeout(const Duration(seconds: 5));
     } catch (e) {
       _log('Error in /user/removebreakuser: $e');
+      ToastService.show('Failed to end break');
     }
   }
 
   Timer? _heartbeatTimer;
+
+  /// Fetches scheduled callbacks via `POST /agent-callbacks` (webphone parity).
+  Future<void> fetchAgentCallbacks() async {
+    try {
+      final username = await _resolveApiUsername();
+      if (username.isEmpty) return;
+      _log('Sending /agent-callbacks for $username...');
+      final headers = await _getAuthHeaders();
+      final response = await http
+          .post(
+            Uri.parse('https://devapp.iotcom.io/agent-callbacks'),
+            headers: headers,
+            body: jsonEncode({'user': username}),
+          )
+          .timeout(const Duration(seconds: 8));
+      _log('[CALLBACK_API] /agent-callbacks status=${response.statusCode}');
+      if (_checkResponseForAuthFailure(response)) return;
+      final data = jsonDecode(response.body);
+      if (data is Map && data['success'] == true) {
+        final list = data['followUpDispoes'];
+        if (list is List) {
+          final jsonStr = list.join();
+          if (jsonStr != _lastFollowUpsJson) {
+            _lastFollowUpsJson = jsonStr;
+            _followUps = list;
+            _log('[CALLBACK_API] updated followUps=${list.length}');
+            _emit(SipEvent.followUpsUpdated, data: {'count': list.length});
+          } else {
+            _log('[CALLBACK_API] no change followUps=${list.length}');
+          }
+        }
+      } else {
+        _log('[CALLBACK_API] response not success: ${response.body}');
+      }
+    } catch (e) {
+      _log('Error in /agent-callbacks: $e');
+    }
+  }
 
   void _startHeartbeatTimer() {
     _heartbeatTimer?.cancel();
@@ -1938,6 +2076,7 @@ class SipSocketService implements sip.SipUaHelperListener {
       if (data != null) {
         _processUserconnection(data);
       }
+      fetchAgentCallbacks();
       if (tick % 6 == 0) {
         sendUserReady();
       }
@@ -1988,6 +2127,7 @@ class SipSocketService implements sip.SipUaHelperListener {
         }
       } catch (e) {
         _log('Error sending /userready: $e');
+        ToastService.show('Failed to send ready status');
       }
       if (attempt < 3) {
         await Future.delayed(const Duration(milliseconds: 500));
@@ -2073,6 +2213,7 @@ class SipSocketService implements sip.SipUaHelperListener {
     } catch (e) {
       shouldAutoAnswerNextCall = false;
       _log('Error calling /dialnumber: $e');
+      ToastService.show('Failed to place call');
     }
     return false;
   }
@@ -2103,6 +2244,7 @@ class SipSocketService implements sip.SipUaHelperListener {
       return response.statusCode == 200;
     } catch (e) {
       _log('Error calling /reqTransfer: $e');
+      ToastService.show('Failed to request transfer');
       return false;
     }
   }
@@ -2169,6 +2311,7 @@ class SipSocketService implements sip.SipUaHelperListener {
       return response.statusCode == 200;
     } catch (e) {
       _log('Error calling /reqConf: $e');
+      ToastService.show('Failed to start conference');
       return false;
     }
   }
@@ -2191,6 +2334,7 @@ class SipSocketService implements sip.SipUaHelperListener {
       return response.statusCode == 200;
     } catch (e) {
       _log('Error calling /reqUnHold: $e');
+      ToastService.show('Failed to unhold call');
       return false;
     }
   }
@@ -2214,6 +2358,7 @@ class SipSocketService implements sip.SipUaHelperListener {
       return response.statusCode == 200;
     } catch (e) {
       _log('Error calling /hangup/hostChannel/Conf: $e');
+      ToastService.show('Failed to hang up conference');
       return false;
     }
   }
@@ -2221,6 +2366,9 @@ class SipSocketService implements sip.SipUaHelperListener {
   void disconnect() {
     _log('disconnect() called', data: StackTrace.current.toString());
     _stopHeartbeatTimer();
+    _reconnectTimer?.cancel();
+    _intentionalDisconnect = true;
+    _reconnectEnabled = false;
     _helper.stop();
     _isConnected = false;
     _isRegistered = false;

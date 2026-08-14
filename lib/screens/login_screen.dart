@@ -13,6 +13,33 @@ import '../services/fcm_service.dart';
 const _defaultServer = 'wss://devapp.iotcom.io:8089/ws';
 const _defaultHost = 'devapp.iotcom.io:8089';
 
+/// Attempts a silent re-login using the credentials saved from the last
+/// successful login. Returns true when the token/session was refreshed and
+/// [UserData] reloaded; false when no saved credentials exist or the login
+/// request failed (the caller should fall back to the login screen).
+Future<bool> autoLoginWithSavedCredentials() async {
+  final prefs = await SharedPreferences.getInstance();
+  final username = prefs.getString('savedUsername') ?? '';
+  final password = prefs.getString('savedPassword') ?? '';
+  if (username.isEmpty || password.isEmpty) return false;
+  try {
+    final response = await http
+        .post(
+          Uri.parse('https://devapp.iotcom.io/userlogin/$username'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({'username': username, 'password': password}),
+        )
+        .timeout(const Duration(seconds: 10));
+    final data = jsonDecode(response.body);
+    if (response.statusCode != 200 || data['success'] == false) return false;
+    await prefs.setString('token', jsonEncode(data));
+    await UserData.init();
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
 
@@ -35,23 +62,42 @@ class _LoginScreenState extends State<LoginScreen> {
   void initState() {
     super.initState();
 
-    _sub = _sip.events.listen((event) {
+    _sub = _sip.events.listen((event) async {
       if (!mounted) return;
       final type = event['event'] as String;
       if (type == 'registered') {
         setState(() => _connecting = false);
-        FcmService()
-            .init(); // Re-initialize FCM to send token with new credentials
+        FcmService().init();
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(builder: (_) => const DialpadScreen()),
         );
       } else if (type == 'registrationFailed') {
-        setState(() {
-          _connecting = false;
-          _error = 'Registration failed — check credentials';
-        });
+        final cause = (event['cause'] ?? '').toString();
+        final authFailed = cause.contains('401') ||
+            cause.toLowerCase().contains('unauthorized');
+        if (authFailed) {
+          await _clearSavedSession();
+        }
+        if (mounted) {
+          setState(() {
+            _connecting = false;
+            _error = authFailed
+                ? 'Session expired. Please log in again.'
+                : 'Registration failed — check credentials';
+          });
+        }
       }
     });
+  }
+
+  /// Wipes the persisted token + saved credentials so a stale/expired SIP
+  /// session (401) never auto-reconnects with bad credentials again.
+  Future<void> _clearSavedSession() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('token');
+    await prefs.remove('savedUsername');
+    await prefs.remove('savedPassword');
+    await _sip.clearCredentials();
   }
 
   Future<void> _requestPermissions() async {
@@ -146,13 +192,12 @@ class _LoginScreenState extends State<LoginScreen> {
       await _sip.saveCredentials(creds);
       unawaited(_sip.connect(creds).then((_) {}));
     } catch (e) {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('savedUsername', rawUsername);
-      await prefs.setString('savedPassword', password);
-      final creds = _buildCreds();
-      await _requestPermissions();
-      await _sip.saveCredentials(creds);
-      unawaited(_sip.connect(creds).then((_) {}));
+      if (mounted) {
+        setState(() {
+          _connecting = false;
+          _error = 'Login failed. Please check your connection.';
+        });
+      }
     }
   }
 
