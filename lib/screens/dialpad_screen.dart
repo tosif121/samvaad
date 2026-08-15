@@ -1182,6 +1182,8 @@ class _DialpadScreenState extends State<DialpadScreen>
   }
 
   int _callsFilterIndex = 0;
+  int _callsDateFilterIndex =
+      0; // Default: Today (0: Today, 1: 7 Days, 2: 30 Days, 3: All Time)
   String _leadSearchQuery = '';
 
   Widget _buildTabs() {
@@ -1764,14 +1766,63 @@ class _DialpadScreenState extends State<DialpadScreen>
     return grouped;
   }
 
+  bool _callsInDateRange(CallLogEntry entry) {
+    final now = DateTime.now();
+    switch (_callsDateFilterIndex) {
+      case 0: // Today
+        final today = DateTime(now.year, now.month, now.day);
+        return entry.startedAt.isAfter(today);
+      case 1: // Last 7 Days
+        return entry.startedAt
+            .isAfter(now.subtract(const Duration(days: 7)));
+      case 2: // Last 30 Days
+        return entry.startedAt
+            .isAfter(now.subtract(const Duration(days: 30)));
+      default: // All Time
+        return true;
+    }
+  }
+
+  DateTime _callsFilterStartDate() {
+    final now = DateTime.now();
+    switch (_callsDateFilterIndex) {
+      case 0:
+        return DateTime(now.year, now.month, now.day);
+      case 1:
+        return now.subtract(const Duration(days: 7));
+      case 2:
+        return now.subtract(const Duration(days: 30));
+      default:
+        return DateTime(2000, 1, 1);
+    }
+  }
+
+  void _onCallsDateFilterTap(int idx) {
+    setState(() {
+      _callsDateFilterIndex = idx;
+    });
+    final start = _callsFilterStartDate();
+    unawaited(
+      Future.wait([
+        _sip.fetchRecentCalls(startDate: start, endDate: DateTime.now()),
+        _sip.fetchMissedCalls(),
+      ]),
+    );
+  }
+
   Widget _buildCallsTab() {
     final cs = Theme.of(context).colorScheme;
     final isLandscape =
         MediaQuery.of(context).size.width > MediaQuery.of(context).size.height;
-    final allCalls = _sip.recentCalls;
+    final allCalls = _sip.recentCalls
+        .where(_callsInDateRange)
+        .toList();
     final rawMissed = _sip.missedCalls;
     final groupedMissed = _buildGroupedMissedEntries(rawMissed);
-    final missedCalls = groupedMissed.map((g) => g.entry).toList();
+    final missedCalls = groupedMissed
+        .map((g) => g.entry)
+        .where(_callsInDateRange)
+        .toList();
     final missedCountById = <String, int>{
       for (final g in groupedMissed) g.entry.id: g.count,
     };
@@ -1792,7 +1843,9 @@ class _DialpadScreenState extends State<DialpadScreen>
         : [
             for (var i = 0; i < rawMissed.length; i++)
               if (_missedMatchesCampaign(rawMissed[i], userCampaign))
-                _rawMissedCallToEntry(rawMissed[i], i),
+                if (_callsInDateRange(
+                    _rawMissedCallToEntry(rawMissed[i], i)))
+                  _rawMissedCallToEntry(rawMissed[i], i),
           ];
 
     final totalCalls = statsList.length;
@@ -1833,7 +1886,10 @@ class _DialpadScreenState extends State<DialpadScreen>
               IconButton(
                 onPressed: () => unawaited(
                   Future.wait([
-                    _sip.fetchRecentCalls(),
+                    _sip.fetchRecentCalls(
+                      startDate: _callsFilterStartDate(),
+                      endDate: DateTime.now(),
+                    ),
                     _sip.fetchMissedCalls(),
                   ]),
                 ),
@@ -1905,9 +1961,50 @@ class _DialpadScreenState extends State<DialpadScreen>
                   ],
                   selected: {_callsFilterIndex},
                   onSelectionChanged: (val) {
-                    setState(() => _callsFilterIndex = val.first);
+                    setState(() {
+                      _callsFilterIndex = val.first;
+                    });
                   },
                 ),
+              ),
+            ],
+          ),
+        ),
+        Padding(
+          padding: EdgeInsets.symmetric(
+            horizontal: AppSpacing.md,
+            vertical: isLandscape ? 0 : 2,
+          ),
+          child: Row(
+            children: [
+              Icon(
+                Icons.calendar_month_rounded,
+                size: 16,
+                color: cs.onSurface.withValues(alpha: 0.5),
+              ),
+              const SizedBox(width: 8),
+              DropdownButton<int>(
+                value: _callsDateFilterIndex,
+                isDense: true,
+                underline: const SizedBox.shrink(),
+                borderRadius: BorderRadius.circular(8),
+                onChanged: (v) {
+                  if (v == null) return;
+                  _onCallsDateFilterTap(v);
+                },
+                items: const [
+                  (0, 'Today'),
+                  (1, 'Last 7 Days'),
+                  (2, 'Last 30 Days'),
+                  (3, 'All Time'),
+                ]
+                    .map(
+                      (o) => DropdownMenuItem<int>(
+                        value: o.$1,
+                        child: Text(o.$2),
+                      ),
+                    )
+                    .toList(),
               ),
             ],
           ),
@@ -1916,7 +2013,10 @@ class _DialpadScreenState extends State<DialpadScreen>
           child: RefreshIndicator(
             onRefresh: () async {
               await Future.wait([
-                _sip.fetchRecentCalls(),
+                _sip.fetchRecentCalls(
+                  startDate: _callsFilterStartDate(),
+                  endDate: DateTime.now(),
+                ),
                 _sip.fetchMissedCalls(),
               ]);
             },
@@ -1980,7 +2080,7 @@ class _DialpadScreenState extends State<DialpadScreen>
   // ---------------------------------------------------------------------
 
   int _leadDateFilterIndex =
-      0; // Default: Today (0: Today, 1: 7 Days, 2: 30 Days, 3: All Time)
+      0; // Default: Today (0: Today, 1: 7 Days, 2: 30 Days, 3: All Timex)
 
   Future<void> _fetchLeadsForSelectedFilter([int? filterIdx]) async {
     final idx = filterIdx ?? _leadDateFilterIndex;

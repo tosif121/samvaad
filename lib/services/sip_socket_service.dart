@@ -1310,22 +1310,27 @@ class SipSocketService implements sip.SipUaHelperListener {
   List<Map<String, dynamic>> get leads => _leads;
 
   /// Fetches the agent's recent call records from `POST /reports/calls/byAgent`
-  /// (agent + last 30 days) and maps them into [CallLogEntry] list.
-  Future<List<CallLogEntry>> fetchRecentCalls() async {
+  /// (agent + optional date range, defaults to all time) and maps them into
+  /// [CallLogEntry] list.
+  Future<List<CallLogEntry>> fetchRecentCalls({
+    DateTime? startDate,
+    DateTime? endDate,
+  }) async {
     try {
       final username = await _resolveApiUsername();
       if (username.isEmpty) return _recentCalls;
       _log('Fetching recent calls for $username...');
       final headers = await _getAuthHeaders();
       final now = DateTime.now();
-      final startDate = DateTime(2000, 1, 1);
+      final rangeStart = startDate ?? DateTime(2000, 1, 1);
+      final rangeEnd = endDate ?? now;
       final response = await http
           .post(
             Uri.parse('https://devapp.iotcom.io/reports/calls/byAgent'),
             headers: headers,
             body: jsonEncode({
-              'startDate': _formatDate(startDate),
-              'endDate': _formatDate(now),
+              'startDate': _formatDate(rangeStart),
+              'endDate': _formatDate(rangeEnd),
               'agentName': username,
             }),
           )
