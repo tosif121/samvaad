@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'dart:developer';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/material.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'incoming_call_screen.dart';
@@ -11,6 +10,7 @@ import '../services/fcm_service.dart';
 import 'login_screen.dart';
 import '../models/call_log_entry.dart';
 import '../services/call_log_service.dart';
+import '../services/permission_service.dart';
 import '../services/sip_socket_service.dart';
 import '../services/ringtone_service.dart';
 import '../services/user_data.dart';
@@ -173,16 +173,7 @@ class _DialpadScreenState extends State<DialpadScreen>
   }
 
   Future<bool> _requestPermissions({bool isVideo = false}) async {
-    if (isVideo) {
-      final statuses = await [
-        Permission.microphone,
-        Permission.camera,
-      ].request();
-      return (statuses[Permission.microphone]?.isGranted ?? false) &&
-          (statuses[Permission.camera]?.isGranted ?? false);
-    }
-    final status = await Permission.microphone.request();
-    return status.isGranted;
+    return PermissionService().ensureMicrophonePermission(context);
   }
 
   @override

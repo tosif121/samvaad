@@ -24,11 +24,13 @@ class RingtoneService {
 
   Future<void> startRinging() async {
     await stopRinging();
-    if (!kIsWeb && Platform.isAndroid) {
+    if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
       try {
         await _channel.invokeMethod('playRingtone');
         return;
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('[RingtoneService] Error invoking playRingtone: $e');
+      }
     }
     _fallbackTimer = Timer.periodic(const Duration(seconds: 2), (_) {
       HapticFeedback.heavyImpact();
@@ -47,7 +49,7 @@ class RingtoneService {
   }
 
   Future<void> clearNotification() async {
-    if (!kIsWeb && Platform.isAndroid) {
+    if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
       try {
         await _channel.invokeMethod('clearNotification');
       } catch (e) {
@@ -59,7 +61,7 @@ class RingtoneService {
   Future<void> stopRinging() async {
     _fallbackTimer?.cancel();
     _fallbackTimer = null;
-    if (!kIsWeb && Platform.isAndroid) {
+    if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
       try {
         await _channel.invokeMethod('stopRingtone');
       } catch (_) {}
@@ -67,7 +69,7 @@ class RingtoneService {
   }
 
   Future<void> cleanupForegroundService() async {
-    if (!kIsWeb && Platform.isAndroid) {
+    if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
       try {
         await _channel.invokeMethod('cleanupForeground');
       } catch (e) {

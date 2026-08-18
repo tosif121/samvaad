@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'callkit_service.dart';
 import 'ringtone_service.dart';
 import 'sip_socket_service.dart';
 import 'toast_service.dart';
@@ -44,6 +45,15 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       log('[FCM_SERVICE] Error connecting SIP socket in background: $e');
     }
 
+    try {
+      CallKitService().showIncomingCall(
+        callerName: callerName,
+        callerNumber: callerNumber,
+      );
+    } catch (e) {
+      log('[FCM_SERVICE] Error showing CallKit in background: $e');
+    }
+
     final flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
     const androidDetails = AndroidNotificationDetails(
       'incoming_calls_channel',
@@ -55,7 +65,16 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
       category: AndroidNotificationCategory.call,
       playSound: true,
     );
-    const notificationDetails = NotificationDetails(android: androidDetails);
+    const darwinDetails = DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: true,
+      presentSound: true,
+      interruptionLevel: InterruptionLevel.timeSensitive,
+    );
+    const notificationDetails = NotificationDetails(
+      android: androidDetails,
+      iOS: darwinDetails,
+    );
     await flutterLocalNotificationsPlugin.show(
       0,
       titleText,
@@ -71,7 +90,17 @@ class FcmService with WidgetsBindingObserver {
   factory FcmService() => _instance;
   FcmService._internal();
 
-  final FirebaseMessaging _messaging = FirebaseMessaging.instance;
+  FirebaseMessaging? get _messaging {
+    try {
+      if (Firebase.apps.isNotEmpty) {
+        return FirebaseMessaging.instance;
+      }
+    } catch (e) {
+      log('[FCM_SERVICE] Error accessing FirebaseMessaging: $e');
+    }
+    return null;
+  }
+
   final FlutterLocalNotificationsPlugin _localNotificationsPlugin =
       FlutterLocalNotificationsPlugin();
 
@@ -99,8 +128,9 @@ class FcmService with WidgetsBindingObserver {
 
   Future<void> sendTokenToBackend([String? token]) async {
     try {
+      final messaging = _messaging;
       if (token == null || token.isEmpty) {
-        token = await _messaging.getToken();
+        token = await messaging?.getToken();
       }
       if (token == null || token.isEmpty) {
         log("[FCM_SERVICE] FCM token is null, cannot send to backend.");
@@ -116,8 +146,6 @@ class FcmService with WidgetsBindingObserver {
       }
 
       final creds = jsonDecode(credsStr);
-      // Mirror the webphone: register under `userid` (e.g. demo@surya) so the
-      // backend finds the token when it sends a push for an incoming call.
       final username = UserData.userId().isNotEmpty
           ? UserData.userId()
           : UserData.username().isNotEmpty
@@ -176,7 +204,6 @@ class FcmService with WidgetsBindingObserver {
       if (credsStr == null) return;
 
       final creds = jsonDecode(credsStr);
-      // Mirror the webphone: register under `userid` (e.g. demo@surya).
       final username = UserData.userId().isNotEmpty
           ? UserData.userId()
           : UserData.username().isNotEmpty
@@ -193,7 +220,8 @@ class FcmService with WidgetsBindingObserver {
       }
       if (username.isEmpty) return;
 
-      String? token = await _messaging.getToken();
+      final messaging = _messaging;
+      String? token = await messaging?.getToken();
       if (token == null) return;
 
       final payload = {
@@ -227,44 +255,71 @@ class FcmService with WidgetsBindingObserver {
   Future<void> init() async {
     WidgetsBinding.instance.addObserver(this);
 
-    // Initialize local notifications
-    const AndroidInitializationSettings initializationSettingsAndroid =
-        AndroidInitializationSettings('@mipmap/ic_launcher');
-    const DarwinInitializationSettings initializationSettingsIOS =
-        DarwinInitializationSettings();
-    const InitializationSettings initializationSettings =
-        InitializationSettings(
-          android: initializationSettingsAndroid,
-          iOS: initializationSettingsIOS,
-        );
+    try {
+      // Initialize local notifications
+      const AndroidInitializationSettings initializationSettingsAndroid =
+          AndroidInitializationSettings('@mipmap/ic_launcher');
+      const DarwinInitializationSettings initializationSettingsIOS =
+          DarwinInitializationSettings();
+      const InitializationSettings initializationSettings =
+          InitializationSettings(
+            android: initializationSettingsAndroid,
+            iOS: initializationSettingsIOS,
+          );
 
-    await _localNotificationsPlugin.initialize(
-      initializationSettings,
-      onDidReceiveNotificationResponse: (details) {
-        log('[FCM_SERVICE] Local notification tapped: ${details.payload}');
-        RingtoneService().bringAppToForeground();
-        _localNotificationsPlugin.cancelAll();
-      },
-    );
+      await _localNotificationsPlugin.initialize(
+        initializationSettings,
+        onDidReceiveNotificationResponse: (details) {
+          log('[FCM_SERVICE] Local notification tapped: ${details.payload}');
+          RingtoneService().bringAppToForeground();
+          try {
+            SipSocketService().connect();
+          } catch (e) {
+            log('[FCM_SERVICE] Error connecting SIP on notification tap: $e');
+          }
+          _localNotificationsPlugin.cancelAll();
+        },
+      );
 
-    // Register high priority Android Notification Channel
-    const AndroidNotificationChannel channel = AndroidNotificationChannel(
-      'incoming_calls_channel',
-      'Incoming Calls',
-      description: 'Notifications for incoming call alerts',
-      importance: Importance.max,
-      playSound: true,
-    );
+      // Check if app was opened via notification tap from terminated state
+      final launchDetails =
+          await _localNotificationsPlugin.getNotificationAppLaunchDetails();
+      if (launchDetails?.didNotificationLaunchApp ?? false) {
+        log('[FCM_SERVICE] App launched from notification: ${launchDetails?.notificationResponse?.payload}');
+        try {
+          SipSocketService().connect();
+        } catch (e) {
+          log('[FCM_SERVICE] Error connecting SIP on launch notification: $e');
+        }
+      }
 
-    final androidPlugin = _localNotificationsPlugin
-        .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>();
-    if (androidPlugin != null) {
-      await androidPlugin.createNotificationChannel(channel);
+      // Register high priority Android Notification Channel
+      const AndroidNotificationChannel channel = AndroidNotificationChannel(
+        'incoming_calls_channel',
+        'Incoming Calls',
+        description: 'Notifications for incoming call alerts',
+        importance: Importance.max,
+        playSound: true,
+      );
+
+      final androidPlugin = _localNotificationsPlugin
+          .resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin>();
+      if (androidPlugin != null) {
+        await androidPlugin.createNotificationChannel(channel);
+      }
+
+      // Clear notifications on startup
+      await _localNotificationsPlugin.cancelAll();
+    } catch (e) {
+      log('[FCM_SERVICE] Error initializing local notifications: $e');
     }
 
-    // Clear notifications on startup
-    await _localNotificationsPlugin.cancelAll();
+    final messaging = _messaging;
+    if (messaging == null) {
+      log('[FCM_SERVICE] Firebase Messaging not available, skipping push setup.');
+      return;
+    }
 
     // Request permissions ONLY ONCE on initial launch/login
     final prefs = await SharedPreferences.getInstance();
@@ -274,34 +329,39 @@ class FcmService with WidgetsBindingObserver {
     if (!hasRequestedAll) {
       await prefs.setBool('has_requested_all_permissions', true);
 
-      // Request Firebase Messaging notification permission
-      NotificationSettings settings = await _messaging.requestPermission(
-        alert: true,
-        badge: true,
-        sound: true,
-        provisional: false,
-      );
-      log(
-        '[FCM_SERVICE] Notification permission status: ${settings.authorizationStatus}',
-      );
+      try {
+        NotificationSettings settings = await messaging.requestPermission(
+          alert: true,
+          badge: true,
+          sound: true,
+          provisional: false,
+        );
+        log(
+          '[FCM_SERVICE] Notification permission status: ${settings.authorizationStatus}',
+        );
+      } catch (e) {
+        log('[FCM_SERVICE] Error requesting permission: $e');
+      }
 
       if (Platform.isAndroid) {
-        // Request Microphone & Notification permissions in one prompt batch
-        await [
-          Permission.microphone,
-          Permission.notification,
-        ].request();
+        try {
+          await [
+            Permission.microphone,
+            Permission.notification,
+          ].request();
 
-        // Request Display over other apps (System Alert Window) once
-        if (!await Permission.systemAlertWindow.isGranted) {
-          await Permission.systemAlertWindow.request();
+          if (!await Permission.systemAlertWindow.isGranted) {
+            await Permission.systemAlertWindow.request();
+          }
+        } catch (e) {
+          log('[FCM_SERVICE] Error requesting Android permissions: $e');
         }
       }
     }
 
     // Fetch and send FCM token immediately on init
     try {
-      String? token = await _messaging.getToken();
+      String? token = await messaging.getToken();
       if (token != null) {
         log('[FCM_SERVICE] FCM Token retrieved: $token');
         sendTokenToBackend(token);
@@ -310,52 +370,72 @@ class FcmService with WidgetsBindingObserver {
       log('[FCM_SERVICE] Error getting FCM token: $e');
     }
 
-    _messaging.onTokenRefresh.listen((newToken) {
-      log('[FCM_SERVICE] FCM Token refreshed: $newToken');
-      sendTokenToBackend(newToken);
-    });
+    try {
+      messaging.onTokenRefresh.listen((newToken) {
+        log('[FCM_SERVICE] FCM Token refreshed: $newToken');
+        sendTokenToBackend(newToken);
+      });
+    } catch (e) {
+      log('[FCM_SERVICE] Error setting token refresh listener: $e');
+    }
 
     // Foreground messages (app is already open)
-    FirebaseMessaging.onMessage.listen((RemoteMessage message) {
-      log(
-        '[FCM_SERVICE] Foreground message received: ${message.messageId}, data: ${message.data}',
-      );
-      final type = message.data['type'];
-      if (type == 'incomingCall' || type == 'incoming_call' || type == 'call') {
-        log('[FCM_SERVICE] Ringing on foreground notification...');
-        RingtoneService().startRinging();
-
-        final callerName =
-            message.data['callerName'] ?? message.data['title'] ?? 'Incoming Call';
-        final callerNumber =
-            message.data['callerNumber'] ?? message.data['body'] ?? '';
-
-        const androidDetails = AndroidNotificationDetails(
-          'incoming_calls_channel',
-          'Incoming Calls',
-          channelDescription: 'Notifications for incoming call alerts',
-          importance: Importance.max,
-          priority: Priority.high,
-          fullScreenIntent: true,
-          category: AndroidNotificationCategory.call,
-          playSound: true,
+    try {
+      FirebaseMessaging.onMessage.listen((RemoteMessage message) {
+        log(
+          '[FCM_SERVICE] Foreground message received: ${message.messageId}, data: ${message.data}',
         );
-        const notificationDetails =
-            NotificationDetails(android: androidDetails);
+        final type = message.data['type'];
+        if (type == 'incomingCall' || type == 'incoming_call' || type == 'call') {
+          log('[FCM_SERVICE] Ringing on foreground notification...');
+          RingtoneService().startRinging();
 
-        _localNotificationsPlugin.show(
-          0,
-          callerName,
-          callerNumber.isNotEmpty
-              ? 'Incoming call from $callerNumber'
-              : 'Incoming call',
-          notificationDetails,
-          payload: jsonEncode(message.data),
-        );
-      }
-    });
+          final callerName =
+              message.data['callerName'] ?? message.data['title'] ?? 'Incoming Call';
+          final callerNumber =
+              message.data['callerNumber'] ?? message.data['body'] ?? '';
 
-    FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+          const androidDetails = AndroidNotificationDetails(
+            'incoming_calls_channel',
+            'Incoming Calls',
+            channelDescription: 'Notifications for incoming call alerts',
+            importance: Importance.max,
+            priority: Priority.high,
+            fullScreenIntent: true,
+            category: AndroidNotificationCategory.call,
+            playSound: true,
+          );
+          const darwinDetails = DarwinNotificationDetails(
+            presentAlert: true,
+            presentBadge: true,
+            presentSound: true,
+            interruptionLevel: InterruptionLevel.timeSensitive,
+          );
+          const notificationDetails = NotificationDetails(
+            android: androidDetails,
+            iOS: darwinDetails,
+          );
+
+          _localNotificationsPlugin.show(
+            0,
+            callerName,
+            callerNumber.isNotEmpty
+                ? 'Incoming call from $callerNumber'
+                : 'Incoming call',
+            notificationDetails,
+            payload: jsonEncode(message.data),
+          );
+        }
+      });
+    } catch (e) {
+      log('[FCM_SERVICE] Error listening to onMessage: $e');
+    }
+
+    try {
+      FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+    } catch (e) {
+      log('[FCM_SERVICE] Error registering background message handler: $e');
+    }
   }
 
   @override

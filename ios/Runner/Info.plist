@@ -32,6 +32,12 @@
 		<string>voip</string>
 		<string>remote-notification</string>
 	</array>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Samvaad requires microphone access to make and receive voice calls.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Samvaad requires camera access for video calling features.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Samvaad requires bluetooth access to connect audio calls to bluetooth headsets.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

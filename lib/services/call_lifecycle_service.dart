@@ -19,7 +19,11 @@ class CallLifecycleService with WidgetsBindingObserver {
     _isInitialized = true;
 
     WidgetsBinding.instance.addObserver(this);
-    await _configureAudioSession();
+    try {
+      await _configureAudioSession();
+    } catch (e) {
+      _log('Audio session init error: $e');
+    }
 
     _log('Initialized');
   }

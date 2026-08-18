@@ -7,6 +7,7 @@ import 'services/sip_socket_service.dart';
 import 'services/user_data.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'services/fcm_service.dart';
+import 'services/permission_service.dart';
 import 'services/toast_service.dart';
 import 'ui/theme.dart';
 
@@ -29,18 +30,59 @@ Future<void> _acquireSingleInstanceLock() async {
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  await _acquireSingleInstanceLock();
+  FlutterError.onError = (FlutterErrorDetails details) {
+    FlutterError.presentError(details);
+    debugPrint('[FlutterError] ${details.exceptionAsString()}');
+  };
 
-  await Firebase.initializeApp();
-  await UserData.init();
-  await FcmService().init();
+  try {
+    await _acquireSingleInstanceLock();
+  } catch (e) {
+    debugPrint('[SingleInstanceLock] Error: $e');
+  }
 
-  CallLifecycleService().init();
+  try {
+    await UserData.init();
+  } catch (e) {
+    debugPrint('[UserData] Init error: $e');
+  }
+
+  try {
+    await PermissionService().requestAppPermissions();
+  } catch (e) {
+    debugPrint('[PermissionService] Request error: $e');
+  }
+
+  try {
+    await Firebase.initializeApp();
+  } catch (e) {
+    debugPrint('[Firebase] Init skipped/error: $e');
+  }
+
+  try {
+    await FcmService().init();
+  } catch (e) {
+    debugPrint('[FcmService] Init skipped/error: $e');
+  }
+
+  try {
+    await CallLifecycleService().init();
+  } catch (e) {
+    debugPrint('[CallLifecycleService] Init error: $e');
+  }
 
   final sip = SipSocketService();
-  await sip.loadCredentials();
+  try {
+    await sip.loadCredentials();
+  } catch (e) {
+    debugPrint('[SipSocketService] Load credentials error: $e');
+  }
 
-  await ThemeController.instance.init();
+  try {
+    await ThemeController.instance.init();
+  } catch (e) {
+    debugPrint('[ThemeController] Init error: $e');
+  }
 
   runApp(SamvaadApp(hasCredentials: sip.hasCredentials));
 }
