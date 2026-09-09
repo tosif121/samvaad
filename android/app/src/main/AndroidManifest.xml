@@ -60,11 +60,11 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
-        <!-- Foreground service for keeping active call network & audio alive in background -->
+        <!-- Foreground service for keeping SIP connection, network & audio alive in background -->
         <service
             android:name=".CallForegroundService"
             android:exported="false"
-            android:foregroundServiceType="phoneCall|microphone" />
+            android:foregroundServiceType="dataSync|phoneCall|microphone" />
 
         <meta-data
             android:name="flutterEmbedding"

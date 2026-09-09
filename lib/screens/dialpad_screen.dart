@@ -14,6 +14,7 @@ import '../services/call_log_service.dart';
 import '../services/sip_socket_service.dart';
 import '../services/ringtone_service.dart';
 import '../services/user_data.dart';
+import '../services/oem_optimization_service.dart';
 import '../ui/theme.dart';
 import '../ui/tokens.dart';
 import '../ui/widgets/avatar.dart';
@@ -170,6 +171,9 @@ class _DialpadScreenState extends State<DialpadScreen>
         _phoneFocusNode.unfocus();
       }
     });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      unawaited(OemOptimizationService().requestIgnoreBatteryOptimization());
+    });
   }
 
   Future<void> _loadUserConfig() async {
@@ -209,10 +213,9 @@ class _DialpadScreenState extends State<DialpadScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     _appLifecycleState = state;
     if (state == AppLifecycleState.resumed) {
-      RingtoneService().clearNotification();
+      unawaited(RingtoneService().clearNotification());
       try {
-        FlutterLocalNotificationsPlugin()
-            .cancel(_dispositionReminderNotificationId);
+        FlutterLocalNotificationsPlugin().cancelAll();
       } catch (_) {}
 
       if (!_sip.isRegistered) {
@@ -501,6 +504,7 @@ class _DialpadScreenState extends State<DialpadScreen>
           _callTimer?.cancel();
           _callSeconds = 0;
           RingtoneService().stopRinging();
+          await RingtoneService().clearAllCallNotifications();
           await _clearOngoingCallNotification();
           try {
             FlutterLocalNotificationsPlugin().cancelAll();
@@ -979,6 +983,7 @@ class _DialpadScreenState extends State<DialpadScreen>
       _sip.isPostCallFlowActive = false;
       _lastContactData = null;
       _pendingPostCall = null;
+      _sip.scheduleCheckUserAvailability();
     }
   }
 
@@ -1389,6 +1394,9 @@ class _DialpadScreenState extends State<DialpadScreen>
   int _callsFilterIndex = 0;
   int _callsDateFilterIndex =
       0; // Default: Today (0: Today, 1: 7 Days, 2: 30 Days, 3: All Time)
+  int _callsCurrentPage = 1;
+  static const int _callsPerPageLimit = 10;
+  bool _isLoadingCallsPage = false;
   String _leadSearchQuery = '';
 
   Widget _buildTabs() {
@@ -2005,23 +2013,101 @@ class _DialpadScreenState extends State<DialpadScreen>
   void _onCallsDateFilterTap(int idx) {
     setState(() {
       _callsDateFilterIndex = idx;
+      _callsCurrentPage = 1;
+      _isLoadingCallsPage = true;
     });
     final start = _callsFilterStartDate();
     unawaited(
       Future.wait([
-        _sip.fetchRecentCalls(startDate: start, endDate: DateTime.now()),
+        _sip.fetchRecentCalls(
+          startDate: start,
+          endDate: DateTime.now(),
+          page: 1,
+          limit: _callsPerPageLimit,
+        ),
         _sip.fetchMissedCalls(),
-      ]),
+      ]).whenComplete(() {
+        if (mounted) {
+          setState(() {
+            _isLoadingCallsPage = false;
+          });
+        }
+      }),
     );
+  }
+
+  bool get _hasMoreCalls {
+    if (_sip.recentCalls.length < _callsPerPageLimit) return false;
+    final total = _sip.recentCallsTotal;
+    if (total != null) {
+      return _callsCurrentPage * _callsPerPageLimit < total;
+    }
+    return true;
+  }
+
+  Future<void> _goToNextCallsPage() async {
+    if (_isLoadingCallsPage || !_hasMoreCalls) return;
+    setState(() {
+      _isLoadingCallsPage = true;
+    });
+    final nextPage = _callsCurrentPage + 1;
+    final start = _callsFilterStartDate();
+    try {
+      await _sip.fetchRecentCalls(
+        startDate: start,
+        endDate: DateTime.now(),
+        page: nextPage,
+        limit: _callsPerPageLimit,
+      );
+      if (mounted) {
+        setState(() {
+          _callsCurrentPage = nextPage;
+          _isLoadingCallsPage = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isLoadingCallsPage = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _goToPreviousCallsPage() async {
+    if (_isLoadingCallsPage || _callsCurrentPage <= 1) return;
+    setState(() {
+      _isLoadingCallsPage = true;
+    });
+    final prevPage = _callsCurrentPage - 1;
+    final start = _callsFilterStartDate();
+    try {
+      await _sip.fetchRecentCalls(
+        startDate: start,
+        endDate: DateTime.now(),
+        page: prevPage,
+        limit: _callsPerPageLimit,
+      );
+      if (mounted) {
+        setState(() {
+          _callsCurrentPage = prevPage;
+          _isLoadingCallsPage = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _isLoadingCallsPage = false;
+        });
+      }
+    }
   }
 
   Widget _buildCallsTab() {
     final cs = Theme.of(context).colorScheme;
     final isLandscape =
         MediaQuery.of(context).size.width > MediaQuery.of(context).size.height;
-    final allCalls = _sip.recentCalls
-        .where(_callsInDateRange)
-        .toList();
+    final allCalls = _sip.recentCalls;
     final rawMissed = _sip.missedCalls;
     final groupedMissed = _buildGroupedMissedEntries(rawMissed);
     final missedCalls = groupedMissed
@@ -2094,6 +2180,8 @@ class _DialpadScreenState extends State<DialpadScreen>
                     _sip.fetchRecentCalls(
                       startDate: _callsFilterStartDate(),
                       endDate: DateTime.now(),
+                      page: _callsCurrentPage,
+                      limit: _callsPerPageLimit,
                     ),
                     _sip.fetchMissedCalls(),
                   ]),
@@ -2211,6 +2299,57 @@ class _DialpadScreenState extends State<DialpadScreen>
                     )
                     .toList(),
               ),
+              const Spacer(),
+              if (_callsFilterIndex == 0) ...[
+                if (_isLoadingCallsPage)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: cs.primary,
+                      ),
+                    ),
+                  ),
+                IconButton(
+                  icon: const Icon(Icons.chevron_left_rounded, size: 24),
+                  padding: EdgeInsets.zero,
+                  visualDensity: VisualDensity.compact,
+                  constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                  tooltip: 'Previous Page',
+                  onPressed: (_callsCurrentPage > 1 && !_isLoadingCallsPage)
+                      ? _goToPreviousCallsPage
+                      : null,
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: cs.surfaceContainerHigh,
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: cs.outline.withValues(alpha: 0.15)),
+                  ),
+                  child: Text(
+                    'Page $_callsCurrentPage',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: cs.onSurface,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.chevron_right_rounded, size: 24),
+                  padding: EdgeInsets.zero,
+                  visualDensity: VisualDensity.compact,
+                  constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                  tooltip: 'Next Page',
+                  onPressed: (_hasMoreCalls && !_isLoadingCallsPage)
+                      ? _goToNextCallsPage
+                      : null,
+                ),
+              ],
             ],
           ),
         ),
@@ -2221,6 +2360,8 @@ class _DialpadScreenState extends State<DialpadScreen>
                 _sip.fetchRecentCalls(
                   startDate: _callsFilterStartDate(),
                   endDate: DateTime.now(),
+                  page: _callsCurrentPage,
+                  limit: _callsPerPageLimit,
                 ),
                 _sip.fetchMissedCalls(),
               ]);

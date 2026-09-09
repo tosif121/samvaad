@@ -58,6 +58,14 @@ class MainActivity : FlutterActivity() {
     override fun onResume() {
         super.onResume()
         isInForeground = true
+        try {
+            IncomingCallService.stop(this)
+            val manager = getSystemService(android.content.Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+            manager.cancel(1001)
+            manager.cancel(1002)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error clearing notifications in onResume: $e")
+        }
     }
 
     override fun onPause() {
@@ -73,14 +81,35 @@ class MainActivity : FlutterActivity() {
         methodChannel = channel
         channel.setMethodCallHandler { call, result ->
             when (call.method) {
+                "startOnlineService" -> {
+                    val username = call.argument<String>("username") ?: "Agent"
+                    CallForegroundService.startOnline(this@MainActivity, username)
+                    result.success(true)
+                }
                 "startCallForeground" -> {
                     val callerName = call.argument<String>("callerName") ?: "Active Call"
                     val callerNumber = call.argument<String>("callerNumber") ?: ""
-                    CallForegroundService.start(this@MainActivity, callerName, callerNumber)
+                    CallForegroundService.startCall(this@MainActivity, callerName, callerNumber)
+                    result.success(true)
+                }
+                "endCallForeground" -> {
+                    CallForegroundService.stop(this@MainActivity)
+                    IncomingCallService.stop(this@MainActivity)
+                    val manager = getSystemService(android.content.Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+                    manager.cancelAll()
                     result.success(true)
                 }
                 "stopCallForeground" -> {
                     CallForegroundService.stop(this@MainActivity)
+                    IncomingCallService.stop(this@MainActivity)
+                    val manager = getSystemService(android.content.Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+                    manager.cancelAll()
+                    result.success(true)
+                }
+                "stopForegroundService" -> {
+                    CallForegroundService.stop(this@MainActivity)
+                    val manager = getSystemService(android.content.Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+                    manager.cancel(2001)
                     result.success(true)
                 }
                 "requestIgnoreBatteryOptimizations" -> {
@@ -100,12 +129,24 @@ class MainActivity : FlutterActivity() {
                     result.success(true)
                 }
                 "clearNotification" -> {
+                    IncomingCallService.stop(this@MainActivity)
+                    CallForegroundService.stop(this@MainActivity)
+                    val manager = getSystemService(android.content.Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+                    manager.cancelAll()
+                    result.success(true)
+                }
+                "clearCallNotification" -> {
+                    IncomingCallService.stop(this@MainActivity)
+                    CallForegroundService.stop(this@MainActivity)
                     val manager = getSystemService(android.content.Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
                     manager.cancelAll()
                     result.success(true)
                 }
                 "cleanupForeground" -> {
+                    IncomingCallService.stop(this@MainActivity)
                     CallForegroundService.stop(this@MainActivity)
+                    val manager = getSystemService(android.content.Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+                    manager.cancelAll()
                     result.success(true)
                 }
                 else -> result.notImplemented()

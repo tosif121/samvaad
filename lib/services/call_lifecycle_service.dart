@@ -87,8 +87,9 @@ class CallLifecycleService with WidgetsBindingObserver {
     }
     try {
       await RingtoneService().stopCallForeground();
+      await RingtoneService().clearNotification();
     } catch (e) {
-      _log('Failed to stop call foreground service: $e');
+      _log('Failed to stop call foreground service / clear notifications: $e');
     }
     try {
       final session = await AudioSession.instance;

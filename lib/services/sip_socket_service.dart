@@ -83,6 +83,8 @@ class SipSocketService implements sip.SipUaHelperListener {
   List<dynamic> _followUps = [];
   List<dynamic> _breakOptions = [];
   List<CallLogEntry> _recentCalls = [];
+  int _recentCallsPage = 1;
+  int? _recentCallsTotal;
 
   int get queueCount => _queueCount;
   List<dynamic> get currentCallqueue => _currentCallqueue;
@@ -97,6 +99,8 @@ class SipSocketService implements sip.SipUaHelperListener {
   List<dynamic> get followUps => _followUps;
   List<dynamic> get breakOptions => _breakOptions;
   List<CallLogEntry> get recentCalls => _recentCalls;
+  int get recentCallsPage => _recentCallsPage;
+  int? get recentCallsTotal => _recentCallsTotal;
 
   bool _connecting = false;
   bool _wasStarted = false;
@@ -484,19 +488,38 @@ class SipSocketService implements sip.SipUaHelperListener {
     await connect(creds);
   }
 
+  bool _isCallActive(sip.Call? call) {
+    if (call == null) return false;
+    final state = call.state;
+    if (state == sip.CallStateEnum.ENDED || state == sip.CallStateEnum.FAILED) {
+      return false;
+    }
+    if (call.session.state.toString().contains('terminated')) {
+      return false;
+    }
+    return true;
+  }
+
   @override
   void callStateChanged(sip.Call call, sip.CallState state) {
     _log(
       'callStateChanged: ${state.state} for call ID: ${call.id}'
       ' | direction=${call.direction} | sessionState=${call.session.state}',
     );
+    // If previous _activeCall session is terminated, clean it immediately
+    if (!_isCallActive(_activeCall)) {
+      _activeCall = null;
+    }
+
     // [CallGuard] Webphone parity (useJssip.js:1768): Auto-reject incoming calls with 486
     // Busy Here if the agent is already on another call, in post-call flow, or in Disposition.
     if (call.direction == sip.Direction.incoming &&
         state.state == sip.CallStateEnum.CALL_INITIATION) {
       final remoteNumber = call.remote_identity ?? 'Unknown';
       final hasOtherActiveCall =
-          _activeCall != null && _activeCall!.id != call.id;
+          _activeCall != null &&
+          _activeCall!.id != call.id &&
+          _isCallActive(_activeCall);
       final inProtectedPhase = hasOtherActiveCall ||
           _callState == CallState.onCall ||
           _callState == CallState.dialing ||
@@ -521,7 +544,7 @@ class SipSocketService implements sip.SipUaHelperListener {
     }
 
     if (state.state == sip.CallStateEnum.CALL_INITIATION ||
-        _activeCall == null) {
+        !_isCallActive(_activeCall)) {
       _activeCall = call;
     }
 
@@ -1371,7 +1394,7 @@ class SipSocketService implements sip.SipUaHelperListener {
     DateTime? startDate,
     DateTime? endDate,
     int page = 1,
-    int limit = 50,
+    int limit = 10,
   }) async {
     try {
       final username = await _resolveApiUsername();
@@ -1382,17 +1405,20 @@ class SipSocketService implements sip.SipUaHelperListener {
       final rangeStart = startDate ?? DateTime(2000, 1, 1);
       final rangeEnd = endDate ?? now;
 
+      final payload = {
+        'startDate': _formatDate(rangeStart),
+        'endDate': _formatDate(rangeEnd),
+        'agentName': username,
+        'page': page,
+        'limit': limit,
+      };
+      _log('[byAgent] request: ${jsonEncode(payload)}');
+
       final response = await http
           .post(
             Uri.parse('https://app.samvaad.io/reports/calls/byAgent'),
             headers: headers,
-            body: jsonEncode({
-              'startDate': _formatDate(rangeStart),
-              'endDate': _formatDate(rangeEnd),
-              'agentName': username,
-              'page': page,
-              'limit': limit,
-            }),
+            body: jsonEncode(payload),
           )
           .timeout(const Duration(seconds: 10));
       _log(
@@ -1400,12 +1426,37 @@ class SipSocketService implements sip.SipUaHelperListener {
       );
       if (_checkResponseForAuthFailure(response)) return _recentCalls;
       final data = jsonDecode(response.body);
+      if (data is Map) {
+        _log('[byAgent] response keys: ${data.keys.toList()}');
+        if (data['total'] is int) {
+          _recentCallsTotal = data['total'] as int;
+        } else if (data['totalRecords'] is int) {
+          _recentCallsTotal = data['totalRecords'] as int;
+        } else if (data['count'] is int) {
+          _recentCallsTotal = data['count'] as int;
+        } else if (data['summary'] is Map && data['summary']['totalCalls'] is int) {
+          _recentCallsTotal = data['summary']['totalCalls'] as int;
+        }
+      }
       final result = data is Map ? data['result'] : null;
       if (result is List) {
         final mapped = result.map(_callRecordToEntry).toList()
           ..sort((a, b) => b.startedAt.compareTo(a.startedAt));
         _recentCalls = mapped;
-        _emit(SipEvent.recentCallsUpdated, data: {'count': mapped.length});
+        _recentCallsPage = page;
+        _emit(SipEvent.recentCallsUpdated, data: {
+          'count': mapped.length,
+          'page': page,
+          'total': _recentCallsTotal,
+        });
+      } else {
+        _recentCalls = [];
+        _recentCallsPage = page;
+        _emit(SipEvent.recentCallsUpdated, data: {
+          'count': 0,
+          'page': page,
+          'total': _recentCallsTotal,
+        });
       }
     } catch (e) {
       _log('Error fetching recent calls: $e');
@@ -1712,6 +1763,12 @@ class SipSocketService implements sip.SipUaHelperListener {
       _log('[USERCONNECTION] Agent status updated: $_agentStatus -> $status');
       _agentStatus = status;
       _emit(SipEvent.agentStatusChanged, data: {'status': status});
+      if (status == 'UNAVAILABLE' &&
+          _callState == CallState.idle &&
+          !isPostCallFlowActive) {
+        _log('[USERCONNECTION] Agent UNAVAILABLE -> auto-syncing /userready');
+        unawaited(sendUserReady());
+      }
     }
 
     if (followUps is List) {
@@ -1739,7 +1796,8 @@ class SipSocketService implements sip.SipUaHelperListener {
       );
 
       // ── Step 6: Update queue details — skip if call already active (web step 6) ──
-      if (_activeCall == null && _callState == CallState.idle) {
+      final hasRealActiveCall = _isCallActive(_activeCall);
+      if (!hasRealActiveCall && _callState == CallState.idle) {
         if (queue.isNotEmpty) {
           final first = queue.first;
           if (first is Map) {
@@ -1781,7 +1839,7 @@ class SipSocketService implements sip.SipUaHelperListener {
           final inProtectedPhase = _agentStatus == 'Disposition' ||
               isPostCallFlowActive ||
               _callState != CallState.idle ||
-              _activeCall != null;
+              hasRealActiveCall;
 
           if (!inProtectedPhase && changed && caller.isNotEmpty) {
             _incomingChannelId = first is Map
@@ -1812,7 +1870,16 @@ class SipSocketService implements sip.SipUaHelperListener {
       }
     }
 
-    checkUserAvailability();
+    scheduleCheckUserAvailability();
+  }
+
+  Timer? _agentAvailableDebounceTimer;
+
+  void scheduleCheckUserAvailability() {
+    _agentAvailableDebounceTimer?.cancel();
+    _agentAvailableDebounceTimer = Timer(const Duration(milliseconds: 500), () {
+      unawaited(checkUserAvailability());
+    });
   }
 
   /// Mirrors the webphone's `checkUserAvailability` in Dashboard.jsx: when the
@@ -1820,65 +1887,92 @@ class SipSocketService implements sip.SipUaHelperListener {
   /// NOT_INUSE) and a queued call is waiting for this agent's campaign, ask the
   /// backend to dispatch the next queued call via `/user/agentAvailable`.
   Future<void> checkUserAvailability() async {
-    if (_callState != CallState.idle || _activeCall != null) {
+    final isCallLive = _callState != CallState.idle || _activeCall != null;
+    if (isCallLive) {
+      _log('[agentAvailable] skipped: call is live (callState=$_callState)');
+      return;
+    }
+
+    if (isPostCallFlowActive || _agentStatus == 'Disposition') {
+      _log('[agentAvailable] skipped: disposition phase active');
       return;
     }
 
     final prefs = await SharedPreferences.getInstance();
     final selectedBreak = prefs.getString('selectedBreak');
-    final isOnBreak =
-        selectedBreak != null &&
+    if (selectedBreak != null &&
         selectedBreak.isNotEmpty &&
-        selectedBreak != 'Break';
-    if (isOnBreak) {
+        selectedBreak != 'Break') {
+      _log('[agentAvailable] skipped: on break ($selectedBreak)');
       return;
     }
 
-    if (_agentAvailableInFlight) return;
+    if (_agentAvailableInFlight) {
+      _log('[agentAvailable] skipped: request in-flight');
+      return;
+    }
+
     final now = DateTime.now();
-    if (now.difference(_agentAvailableLastCalled) <
-        const Duration(seconds: 10)) {
+    final diffMs = now.difference(_agentAvailableLastCalled).inMilliseconds;
+    if (diffMs < 10000) {
+      _log('[agentAvailable] throttled: last called ${diffMs}ms ago (<10000ms)');
       return;
     }
 
-    final queue = _currentCallqueue;
-    if (queue.isEmpty) return;
+    final firstQueueCall = (_queueDetails.isNotEmpty ? _queueDetails.first : null) ??
+        _currentCallData ??
+        (_currentCallqueue.isNotEmpty && _currentCallqueue.first is Map
+            ? _currentCallqueue.first as Map
+            : null);
 
-    final first = queue.first is Map ? queue.first as Map : null;
-    if (first == null) return;
+    final queueCampaign = (firstQueueCall is Map ? firstQueueCall['campaign'] : null)?.toString() ??
+        (_currentCallData is Map ? _currentCallData!['campaign'] : null)?.toString() ??
+        '';
 
-    final queueCampaign = (first['campaign'] ?? '').toString();
+    final hasCallToProcess =
+        _queueDetails.isNotEmpty || _currentCallData != null || _currentCallqueue.isNotEmpty;
     final userCampaign = UserData.campaign();
-    if (userCampaign.isNotEmpty &&
-        queueCampaign.isNotEmpty &&
-        userCampaign != queueCampaign) {
-      return;
-    }
+    final campaignMatch = userCampaign.isEmpty ||
+        queueCampaign.isEmpty ||
+        userCampaign.toString() == queueCampaign.toString();
 
-    if (_agentStatus != 'NOT_INUSE') return;
+    _log(
+      '[agentAvailable] check -> userCampaign: "$userCampaign", queueCampaign: "$queueCampaign", '
+      'match: $campaignMatch, status: "$_agentStatus", hasCallToProcess: $hasCallToProcess',
+    );
 
-    _agentAvailableInFlight = true;
-    _agentAvailableLastCalled = now;
-    try {
-      final username = await _resolveApiUsername();
-      if (username.isEmpty) return;
-      _log('Sending /user/agentAvailable for $username...');
-      final headers = await _getAuthHeaders();
-      final response = await http
-          .post(
-            Uri.parse('https://app.samvaad.io/user/agentAvailable/$username'),
-            headers: headers,
-            body: jsonEncode({}),
-          )
-          .timeout(const Duration(seconds: 5));
-      _log(
-        'agentAvailable response (${response.statusCode}): ${response.body}',
-      );
-    } catch (e) {
-      _log('Error calling agentAvailable: $e');
-      ToastService.show('Failed to set agent available');
-    } finally {
-      _agentAvailableInFlight = false;
+    if (campaignMatch && _agentStatus == 'NOT_INUSE' && hasCallToProcess) {
+      _agentAvailableInFlight = true;
+      _agentAvailableLastCalled = now;
+      try {
+        final username = await _resolveApiUsername();
+        if (username.isEmpty) {
+          _log('[agentAvailable] Aborted: username is empty');
+          return;
+        }
+        _log('[agentAvailable] POST /user/agentAvailable/$username ...');
+        final headers = await _getAuthHeaders();
+        final response = await http
+            .post(
+              Uri.parse('https://app.samvaad.io/user/agentAvailable/$username'),
+              headers: headers,
+              body: jsonEncode({}),
+            )
+            .timeout(const Duration(seconds: 5));
+        _log(
+          '[agentAvailable] response (${response.statusCode}): ${response.body}',
+        );
+        final data = jsonDecode(response.body);
+        if (data is Map && data['message'] == 'User is not live.') {
+          ToastService.show(
+            'You are not available for calls. Please make yourself available to handle conference calls.',
+          );
+        }
+      } catch (e) {
+        _log('[agentAvailable] error: $e');
+      } finally {
+        _agentAvailableInFlight = false;
+      }
     }
   }
 
@@ -2345,6 +2439,8 @@ class SipSocketService implements sip.SipUaHelperListener {
     _heartbeatTimer = null;
     _sipHeartbeatTimer?.cancel();
     _sipHeartbeatTimer = null;
+    _agentAvailableDebounceTimer?.cancel();
+    _agentAvailableDebounceTimer = null;
   }
 
   Future<bool> sendUserReady() async {
@@ -2631,6 +2727,7 @@ class SipSocketService implements sip.SipUaHelperListener {
     _isRegistered = false;
     _callState = CallState.idle;
     _activeCall = null;
+    unawaited(RingtoneService().stopForegroundService());
   }
 
   void dispose() {

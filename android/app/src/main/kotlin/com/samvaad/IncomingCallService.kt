@@ -172,6 +172,19 @@ class IncomingCallService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+            } else {
+                @Suppress("DEPRECATION")
+                stopForeground(true)
+            }
+            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            notificationManager.cancel(1001)
+            notificationManager.cancel(NOTIFICATION_ID)
+        } catch (e: Exception) {
+            Log.e(TAG, "Error cancelling notifications in onDestroy: $e")
+        }
         Log.d(TAG, "IncomingCallService destroyed")
     }
 
@@ -188,6 +201,19 @@ class IncomingCallService : Service() {
                 ContextCompat.startForegroundService(context, intent)
             } catch (e: Exception) {
                 Log.e(TAG, "Error starting foreground service: $e")
+            }
+        }
+
+        fun stop(context: Context) {
+            try {
+                val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                notificationManager.cancel(1001)
+                notificationManager.cancel(NOTIFICATION_ID)
+                val intent = Intent(context, IncomingCallService::class.java)
+                context.stopService(intent)
+                Log.d(TAG, "IncomingCallService stopped and notifications cancelled")
+            } catch (e: Exception) {
+                Log.e(TAG, "Error stopping IncomingCallService: $e")
             }
         }
     }

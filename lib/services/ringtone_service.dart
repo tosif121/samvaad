@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io' show Platform;
 import 'package:flutter/services.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
 class RingtoneService {
   static final RingtoneService _instance = RingtoneService._internal();
@@ -62,6 +63,10 @@ class RingtoneService {
   }
 
   Future<void> clearNotification() async {
+    try {
+      final flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+      await flutterLocalNotificationsPlugin.cancelAll();
+    } catch (_) {}
     if (!kIsWeb && Platform.isAndroid) {
       try {
         await _channel.invokeMethod('clearNotification');
@@ -71,6 +76,11 @@ class RingtoneService {
     }
   }
 
+  Future<void> clearAllCallNotifications() async {
+    await clearNotification();
+    await stopCallForeground();
+  }
+
   Future<void> stopRinging() async {
     _fallbackTimer?.cancel();
     _fallbackTimer = null;
@@ -78,6 +88,16 @@ class RingtoneService {
       try {
         await _channel.invokeMethod('stopRingtone');
       } catch (_) {}
+    }
+  }
+
+  Future<void> startOnlineService({String username = 'Agent'}) async {
+    if (!kIsWeb && Platform.isAndroid) {
+      try {
+        await _channel.invokeMethod('startOnlineService', {'username': username});
+      } catch (e) {
+        debugPrint('Error starting online foreground service: $e');
+      }
     }
   }
 
@@ -97,12 +117,30 @@ class RingtoneService {
     }
   }
 
-  Future<void> stopCallForeground() async {
-    if (!kIsWebPlatform() && Platform.isAndroid) {
+  Future<void> endCallForeground() async {
+    try {
+      final flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+      await flutterLocalNotificationsPlugin.cancelAll();
+    } catch (_) {}
+    if (!kIsWeb && Platform.isAndroid) {
       try {
-        await _channel.invokeMethod('stopCallForeground');
+        await _channel.invokeMethod('endCallForeground');
       } catch (e) {
-        debugPrint('Error stopping CallForegroundService: $e');
+        debugPrint('Error ending call foreground service: $e');
+      }
+    }
+  }
+
+  Future<void> stopCallForeground() async {
+    await endCallForeground();
+  }
+
+  Future<void> stopForegroundService() async {
+    if (!kIsWeb && Platform.isAndroid) {
+      try {
+        await _channel.invokeMethod('stopForegroundService');
+      } catch (e) {
+        debugPrint('Error stopping foreground service: $e');
       }
     }
   }
