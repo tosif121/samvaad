@@ -12,8 +12,8 @@ import '../services/fcm_service.dart';
 
 import '../services/toast_service.dart';
 
-const _defaultServer = 'wss://devapp.iotcom.io:8089/ws';
-const _defaultHost = 'devapp.iotcom.io:8089';
+const _defaultServer = 'wss://app.samvaad.io:8089/ws';
+const _defaultHost = 'app.samvaad.io:8089';
 
 /// Attempts a silent re-login using the credentials saved from the last
 /// successful login. Returns true when the token/session was refreshed and
@@ -25,7 +25,7 @@ Future<bool> autoLoginWithSavedCredentials() async {
   final password = prefs.getString('savedPassword') ?? '';
   if (username.isEmpty || password.isEmpty) return false;
   try {
-    final url = Uri.parse('https://devapp.iotcom.io/userlogin/$username');
+    final url = Uri.parse('https://app.samvaad.io/userlogin/$username');
     debugPrint('[AUTO_LOGIN] Checking saved credentials -> URL: $url | username: $username');
     final response = await http
         .post(
@@ -157,7 +157,7 @@ class _LoginScreenState extends State<LoginScreen> {
     });
 
     try {
-      final url = Uri.parse('https://devapp.iotcom.io/userlogin/$rawUsername');
+      final url = Uri.parse('https://app.samvaad.io/userlogin/$rawUsername');
       debugPrint('[LOGIN] Request -> POST $url | username: $rawUsername');
       final response = await http
           .post(

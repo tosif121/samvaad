@@ -4,7 +4,7 @@
 ```
 https://app.samvaad.io
 ```
-> **Note:** The Flutter app currently uses `https://devapp.iotcom.io` (see `lib/services/sip_socket_service.dart`).
+> **Note:** The Flutter app uses `https://app.samvaad.io` (see `lib/services/sip_socket_service.dart`).
 
 ## Authentication
 All authenticated endpoints require:
