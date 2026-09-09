@@ -2167,6 +2167,41 @@ class SipSocketService implements sip.SipUaHelperListener {
   Timer? _heartbeatTimer;
 
   /// SIP MESSAGE heartbeat mirroring the webphone's useJssip.js (`sendMessage('heartbeat')`).
+  /// Keeps the WebSocket/Asterisk truth-check alive independent of REST polling.
+  static const int _sipHeartbeatSendIntervalMs = 4000;
+  static const int _sipHeartbeatMinGapMs = 2500;
+  Timer? _sipHeartbeatTimer;
+  DateTime? _lastSipHeartbeatAt;
+
+  /// Sends a SIP `MESSAGE heartbeat` with a [body] payload (webphone parity).
+  /// Enforces a min-gap throttle; only skips sending if the last attempt is
+  /// too recent. Returns false if not ready / throttled / not connected.
+  Future<bool> _sendSipHeartbeat() async {
+    final now = DateTime.now();
+    final last = _lastSipHeartbeatAt;
+    if (last != null &&
+        now.difference(last).inMilliseconds < _sipHeartbeatMinGapMs) {
+      return false;
+    }
+    if (!_isConnected || !_isRegistered) return false;
+    _lastSipHeartbeatAt = now;
+
+    try {
+      final dynamic message = _helper.sendMessage(
+        'heartbeat',
+        jsonEncode({
+          'body': 'webphone-heartbeat',
+          'source': 'interval',
+          'timestamp': now.millisecondsSinceEpoch,
+        }),
+      );
+      return message != null;
+    } catch (e) {
+      _log('SIP heartbeat error: $e');
+      return false;
+    }
+  }
+
   /// Fetches scheduled callbacks via `POST /agent-callbacks` (webphone parity).
   Future<void> fetchAgentCallbacks() async {
     try {
@@ -2223,11 +2258,21 @@ class SipSocketService implements sip.SipUaHelperListener {
         fetchRecentCalls();
       }
     });
+
+    _sipHeartbeatTimer?.cancel();
+    unawaited(_sendSipHeartbeat());
+    _sipHeartbeatTimer =
+        Timer.periodic(
+          Duration(milliseconds: _sipHeartbeatSendIntervalMs),
+          (_) => unawaited(_sendSipHeartbeat()),
+        );
   }
 
   void _stopHeartbeatTimer() {
     _heartbeatTimer?.cancel();
     _heartbeatTimer = null;
+    _sipHeartbeatTimer?.cancel();
+    _sipHeartbeatTimer = null;
   }
 
   Future<bool> sendUserReady() async {
