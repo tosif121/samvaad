@@ -10,6 +10,8 @@ import '../services/user_data.dart';
 import 'dialpad_screen.dart';
 import '../services/fcm_service.dart';
 
+import '../services/toast_service.dart';
+
 const _defaultServer = 'wss://devapp.iotcom.io:8089/ws';
 const _defaultHost = 'devapp.iotcom.io:8089';
 
@@ -23,19 +25,38 @@ Future<bool> autoLoginWithSavedCredentials() async {
   final password = prefs.getString('savedPassword') ?? '';
   if (username.isEmpty || password.isEmpty) return false;
   try {
+    final url = Uri.parse('https://devapp.iotcom.io/userlogin/$username');
+    debugPrint('[AUTO_LOGIN] Checking saved credentials -> URL: $url | username: $username');
     final response = await http
         .post(
-          Uri.parse('https://devapp.iotcom.io/userlogin/$username'),
+          url,
           headers: {'Content-Type': 'application/json'},
           body: jsonEncode({'username': username, 'password': password}),
         )
         .timeout(const Duration(seconds: 10));
+
+    debugPrint('[AUTO_LOGIN] Response (${response.statusCode}) -> body: ${response.body}');
     final data = jsonDecode(response.body);
-    if (response.statusCode != 200 || data['success'] == false) return false;
+    final message = (data is Map ? data['message'] : null)?.toString();
+    final isAlreadyLoggedIn = message != null &&
+        message.toLowerCase().contains('already login');
+    final isWrongInfo = message != null &&
+        message.toLowerCase().contains('wrong login');
+
+    if (response.statusCode != 200 ||
+        data is! Map ||
+        data['success'] == false ||
+        data['token'] == null ||
+        isAlreadyLoggedIn ||
+        isWrongInfo) {
+      debugPrint('[AUTO_LOGIN] Auto-login failed: $message (isAlreadyLoggedIn=$isAlreadyLoggedIn)');
+      return false;
+    }
     await prefs.setString('token', jsonEncode(data));
     await UserData.init();
     return true;
-  } catch (_) {
+  } catch (e) {
+    debugPrint('[AUTO_LOGIN] Error: $e');
     return false;
   }
 }
@@ -137,6 +158,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
     try {
       final url = Uri.parse('https://devapp.iotcom.io/userlogin/$rawUsername');
+      debugPrint('[LOGIN] Request -> POST $url | username: $rawUsername');
       final response = await http
           .post(
             url,
@@ -145,11 +167,29 @@ class _LoginScreenState extends State<LoginScreen> {
           )
           .timeout(const Duration(seconds: 10));
 
-      final data = jsonDecode(response.body);
+      debugPrint('[LOGIN] Response -> status: ${response.statusCode} | body: ${response.body}');
 
-      if (response.statusCode != 200 || data['success'] == false) {
-        final msg =
-            data['message'] ?? 'Login failed. Please check credentials.';
+      final data = jsonDecode(response.body);
+      final message = (data is Map ? data['message'] : null)?.toString();
+      final isAlreadyLoggedIn = message != null &&
+          message.toLowerCase().contains('already login');
+      final isWrongInfo = message != null &&
+          message.toLowerCase().contains('wrong login');
+
+      debugPrint('[LOGIN] Check -> message: "$message" | isAlreadyLoggedIn: $isAlreadyLoggedIn | isWrongInfo: $isWrongInfo | hasToken: ${data is Map && data['token'] != null}');
+
+      if (response.statusCode != 200 ||
+          data is! Map ||
+          data['success'] == false ||
+          data['token'] == null ||
+          isAlreadyLoggedIn ||
+          isWrongInfo ||
+          (message != null && message != 'success' && data['userData'] == null)) {
+        final msg = message ?? 'Login failed. Please check credentials.';
+        debugPrint('[LOGIN] Login REJECTED: $msg (alreadyLoggedIn=$isAlreadyLoggedIn)');
+        if (isAlreadyLoggedIn) {
+          ToastService.show('User already login somewhere else');
+        }
         setState(() {
           _connecting = false;
           _error = msg;
