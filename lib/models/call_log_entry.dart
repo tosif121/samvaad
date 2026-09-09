@@ -13,6 +13,7 @@ class CallLogEntry {
     this.endedAt,
     this.durationSec = 0,
     this.bridgeId,
+    this.disposition,
   });
 
   final String id;
@@ -24,6 +25,7 @@ class CallLogEntry {
   final DateTime? endedAt;
   final int durationSec;
   final String? bridgeId;
+  final String? disposition;
 
   bool get isMissed => direction == CallLogDirection.missed;
 
@@ -34,6 +36,7 @@ class CallLogEntry {
     DateTime? endedAt,
     int? durationSec,
     String? bridgeId,
+    String? disposition,
   }) {
     return CallLogEntry(
       id: id,
@@ -45,6 +48,7 @@ class CallLogEntry {
       endedAt: endedAt ?? this.endedAt,
       durationSec: durationSec ?? this.durationSec,
       bridgeId: bridgeId ?? this.bridgeId,
+      disposition: disposition ?? this.disposition,
     );
   }
 
@@ -61,6 +65,7 @@ class CallLogEntry {
           : null,
       durationSec: json['durationSec'] as int? ?? 0,
       bridgeId: json['bridgeId'] as String?,
+      disposition: json['disposition'] as String?,
     );
   }
 
@@ -75,6 +80,7 @@ class CallLogEntry {
       'endedAt': endedAt?.toUtc().toIso8601String(),
       'durationSec': durationSec,
       'bridgeId': bridgeId,
+      'disposition': disposition,
     };
   }
 }

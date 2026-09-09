@@ -30,12 +30,14 @@ class CallLifecycleService with WidgetsBindingObserver {
       AudioSessionConfiguration(
         avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
         avAudioSessionCategoryOptions:
-            AVAudioSessionCategoryOptions.allowBluetooth,
+            AVAudioSessionCategoryOptions.allowBluetooth |
+            AVAudioSessionCategoryOptions.allowBluetoothA2dp |
+            AVAudioSessionCategoryOptions.defaultToSpeaker,
         avAudioSessionMode: AVAudioSessionMode.voiceChat,
         avAudioSessionRouteSharingPolicy:
             AVAudioSessionRouteSharingPolicy.defaultPolicy,
         avAudioSessionSetActiveOptions: AVAudioSessionSetActiveOptions.none,
-        androidAudioAttributes: AndroidAudioAttributes(
+        androidAudioAttributes: const AndroidAudioAttributes(
           contentType: AndroidAudioContentType.speech,
           usage: AndroidAudioUsage.voiceCommunication,
         ),
@@ -43,20 +45,40 @@ class CallLifecycleService with WidgetsBindingObserver {
         androidWillPauseWhenDucked: true,
       ),
     );
-    _log('Audio session configured');
+    _log('Audio session configured with Bluetooth & speaker support');
   }
 
   Future<void> onCallStarted() async {
     if (_isCallActive) return;
     _isCallActive = true;
-    await WakelockPlus.enable();
-    _log('Call started - wakelock acquired');
+    try {
+      final session = await AudioSession.instance;
+      await session.setActive(true);
+    } catch (e) {
+      _log('Failed to activate audio session: $e');
+    }
+    try {
+      await WakelockPlus.enable();
+    } catch (e) {
+      _log('Failed to enable wakelock: $e');
+    }
+    _log('Call started - audio session activated and wakelock acquired');
   }
 
-  void onCallEnded() {
+  Future<void> onCallEnded() async {
     if (!_isCallActive) return;
     _isCallActive = false;
-    WakelockPlus.disable();
+    try {
+      await WakelockPlus.disable();
+    } catch (e) {
+      _log('Failed to disable wakelock: $e');
+    }
+    try {
+      final session = await AudioSession.instance;
+      await session.setActive(false);
+    } catch (e) {
+      _log('Failed to deactivate audio session: $e');
+    }
     _log('Call ended - resources released');
   }
 

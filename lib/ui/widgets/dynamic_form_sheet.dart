@@ -68,6 +68,7 @@ Future<bool> showDynamicFormSheet(
   required Map<String, dynamic> formConfig,
   required String callType, // 'outgoing' | 'incoming'
   required String contactNumber,
+  Map<String, dynamic>? initialData,
   required Future<bool> Function(Map<String, dynamic> payload) onSubmit,
 }) {
   return showModalBottomSheet<bool>(
@@ -82,6 +83,7 @@ Future<bool> showDynamicFormSheet(
         formConfig: formConfig,
         callType: callType,
         contactNumber: contactNumber,
+        initialData: initialData,
         onSubmit: onSubmit,
       ),
     ),
@@ -93,12 +95,14 @@ class _DynamicFormSheet extends StatefulWidget {
     required this.formConfig,
     required this.callType,
     required this.contactNumber,
+    this.initialData,
     required this.onSubmit,
   });
 
   final Map<String, dynamic> formConfig;
   final String callType;
   final String contactNumber;
+  final Map<String, dynamic>? initialData;
   final Future<bool> Function(Map<String, dynamic> payload) onSubmit;
 
   @override
@@ -109,6 +113,34 @@ class _DynamicFormSheetState extends State<_DynamicFormSheet> {
   final Map<String, dynamic> _values = {};
   final Map<String, String> _errors = {};
   bool _submitting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Pre-fill form values from existing contact data (mirrors web DynamicForm.jsx)
+    final d = widget.initialData;
+    if (d != null) {
+      for (final field in _allFields) {
+        if (field is! Map) continue;
+        final name = _fieldName(field);
+        if (name.isEmpty) continue;
+        dynamic val = d[name];
+        if (val == null || val.toString().trim().isEmpty) {
+          final normalizedName = name.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '').toLowerCase();
+          for (final entry in d.entries) {
+            final k = entry.key.toString().replaceAll(RegExp(r'[^a-zA-Z0-9]'), '').toLowerCase();
+            if (k == normalizedName) {
+              val = entry.value;
+              break;
+            }
+          }
+        }
+        if (val != null && val.toString().trim().isNotEmpty) {
+          _values[name] = val;
+        }
+      }
+    }
+  }
 
   Map<String, dynamic> get _formConfig => widget.formConfig;
 
@@ -206,8 +238,10 @@ class _DynamicFormSheetState extends State<_DynamicFormSheet> {
         .toList();
   }
 
-  String? _optionLabel(Map option) =>
-      ((option['label'] ?? option['value']) ?? '').toString();
+  String? _optionLabel(Map option) {
+    final raw = (option['label'] ?? option['value'])?.toString().trim();
+    return (raw != null && raw.isNotEmpty) ? raw : null;
+  }
 
   void _setValue(String name, dynamic value) {
     setState(() {
@@ -696,6 +730,31 @@ class _DynamicFormSheetState extends State<_DynamicFormSheet> {
     final cs = Theme.of(context).colorScheme;
     final options = _filteredOptions(field);
     final err = _errors[name];
+
+    final uniqueItems = <String>[];
+    final seen = <String>{};
+    for (final o in options) {
+      final l = _optionLabel(o);
+      if (l != null && seen.add(l)) {
+        uniqueItems.add(l);
+      }
+    }
+
+    final rawValue = _values[name]?.toString().trim();
+    String? selectedValue;
+    if (rawValue != null && rawValue.isNotEmpty) {
+      if (seen.contains(rawValue)) {
+        selectedValue = rawValue;
+      } else {
+        // If current value was previously selected or prefilled from lead data
+        // but is absent in filtered options, preserve it in the list to prevent
+        // Flutter's DropdownButton assertion error.
+        uniqueItems.insert(0, rawValue);
+        seen.add(rawValue);
+        selectedValue = rawValue;
+      }
+    }
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: Column(
@@ -706,15 +765,17 @@ class _DynamicFormSheetState extends State<_DynamicFormSheet> {
             icon: _fieldIcon(label, name, 'select'),
           ),
           DropdownButtonFormField<String>(
-            initialValue: _values[name]?.toString(),
+            key: ValueKey('$name-$selectedValue-${uniqueItems.length}'),
+            initialValue: selectedValue,
             isExpanded: true,
             hint: Text(label),
-            items: [for (final o in options) _optionLabel(o)]
-                .whereType<String>()
-                .map((v) => DropdownMenuItem(value: v, child: Text(v)))
+            items: uniqueItems
+                .map((v) => DropdownMenuItem<String>(value: v, child: Text(v)))
                 .toList(),
             onChanged: (v) {
-              if (v != null) _setValue(name, v);
+              if (v != null) {
+                _setValue(name, v);
+              }
             },
             decoration: InputDecoration(
               filled: true,
@@ -737,6 +798,16 @@ class _DynamicFormSheetState extends State<_DynamicFormSheet> {
     final options = _filteredOptions(field);
     final err = _errors[name];
     final selected = _values[name]?.toString();
+
+    final uniqueOptions = <String>[];
+    final seen = <String>{};
+    for (final o in options) {
+      final l = _optionLabel(o);
+      if (l != null && seen.add(l)) {
+        uniqueOptions.add(l);
+      }
+    }
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: Column(
@@ -758,11 +829,11 @@ class _DynamicFormSheetState extends State<_DynamicFormSheet> {
               },
               child: Column(
                 children: [
-                  for (final o in options)
+                  for (final v in uniqueOptions)
                     RadioListTile<String>(
                       dense: true,
-                      value: _optionLabel(o)!,
-                      title: Text(_optionLabel(o)!),
+                      value: v,
+                      title: Text(v),
                     ),
                 ],
               ),
@@ -780,6 +851,16 @@ class _DynamicFormSheetState extends State<_DynamicFormSheet> {
     final options = _filteredOptions(field);
     final err = _errors[name];
     final selected = (_values[name] as List?) ?? <String>[];
+
+    final uniqueOptions = <String>[];
+    final seen = <String>{};
+    for (final o in options) {
+      final l = _optionLabel(o);
+      if (l != null && seen.add(l)) {
+        uniqueOptions.add(l);
+      }
+    }
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: Column(
@@ -796,15 +877,14 @@ class _DynamicFormSheetState extends State<_DynamicFormSheet> {
             ),
             child: Column(
               children: [
-                for (final o in options)
+                for (final v in uniqueOptions)
                   CheckboxListTile(
                     dense: true,
                     controlAffinity: ListTileControlAffinity.leading,
-                    value: selected.contains(_optionLabel(o)),
-                    title: Text(_optionLabel(o)!),
+                    value: selected.contains(v),
+                    title: Text(v),
                     onChanged: (checked) {
                       final next = List<String>.from(selected);
-                      final v = _optionLabel(o)!;
                       if (checked == true) {
                         if (!next.contains(v)) next.add(v);
                       } else {

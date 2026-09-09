@@ -25,6 +25,7 @@ Future<bool> showUserCallFormSheet(
   BuildContext context, {
   required String callType,
   required String contactNumber,
+  Map<String, dynamic>? initialData,
   required Future<bool> Function(Map<String, dynamic> payload) onSubmit,
 }) {
   return showModalBottomSheet<bool>(
@@ -37,6 +38,7 @@ Future<bool> showUserCallFormSheet(
       child: _UserCallFormSheet(
         callType: callType,
         contactNumber: _normalizeContactNumber(contactNumber),
+        initialData: initialData,
         onSubmit: onSubmit,
       ),
     ),
@@ -47,11 +49,13 @@ class _UserCallFormSheet extends StatefulWidget {
   const _UserCallFormSheet({
     required this.callType,
     required this.contactNumber,
+    this.initialData,
     required this.onSubmit,
   });
 
   final String callType;
   final String contactNumber;
+  final Map<String, dynamic>? initialData;
   final Future<bool> Function(Map<String, dynamic> payload) onSubmit;
 
   @override
@@ -77,6 +81,60 @@ class _UserCallFormSheetState extends State<_UserCallFormSheet> {
   void initState() {
     super.initState();
     _contactNumber = TextEditingController(text: widget.contactNumber);
+
+    // Pre-fill from existing contact data (mirrors web UserCall.jsx)
+    final d = widget.initialData;
+    if (d != null) {
+      var first = (d['firstName'] ?? d['first_name'] ?? '').toString().trim();
+      var last = (d['lastName'] ?? d['last_name'] ?? '').toString().trim();
+      if (first.isEmpty && last.isEmpty && (d['Name'] ?? d['name']) != null) {
+        final fullName = (d['Name'] ?? d['name']).toString().trim();
+        final parts = fullName.split(' ');
+        if (parts.length > 1) {
+          first = parts.first;
+          last = parts.sublist(1).join(' ');
+        } else {
+          first = fullName;
+        }
+      }
+      _firstName.text = first;
+      _lastName.text = last;
+      _emailId.text =
+          (d['emailId'] ?? d['Email'] ?? d['email'] ?? d['EmailId'] ?? '')
+              .toString()
+              .trim();
+      _alternateNumber.text = _normalizeContactNumber(
+          (d['alternateNumber'] ?? d['AlternateNumber'] ?? d['alternate_number'] ?? '')
+              .toString());
+      _comment.text =
+          (d['comment'] ?? d['Remarks'] ?? d['remarks'] ?? d['comments'] ?? '')
+              .toString()
+              .trim();
+      _address.text =
+          (d['Contactaddress'] ?? d['address'] ?? d['Address'] ?? '')
+              .toString()
+              .trim();
+      _district.text =
+          (d['ContactDistrict'] ?? d['district'] ?? d['District'] ?? '')
+              .toString()
+              .trim();
+      _city.text =
+          (d['ContactCity'] ?? d['city'] ?? d['CIty'] ?? d['City'] ?? '')
+              .toString()
+              .trim();
+      _state.text =
+          (d['ContactState'] ?? d['state'] ?? d['State'] ?? '')
+              .toString()
+              .trim();
+      _pincode.text = (d['ContactPincode'] ??
+              d['postalCode'] ??
+              d['Pincode '] ??
+              d['pincode'] ??
+              d['Pincode'] ??
+              '')
+          .toString()
+          .trim();
+    }
   }
 
   @override

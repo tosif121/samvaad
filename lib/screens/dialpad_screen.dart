@@ -85,6 +85,66 @@ class _DialpadScreenState extends State<DialpadScreen>
   final Map<String, DateTime> _recentlyRejected = {};
 
   CallLogDirection? _lastCallDirection;
+  Map<String, dynamic>? _lastContactData;
+  Map<String, String>? _pendingPostCall;
+
+  static const int _ongoingCallNotificationId = 8888;
+  static const int _dispositionReminderNotificationId = 8889;
+
+  Future<void> _showOngoingCallNotification(String number) async {
+    try {
+      const androidDetails = AndroidNotificationDetails(
+        'ongoing_calls_channel',
+        'Active Calls',
+        channelDescription: 'Notifications while a call is active',
+        importance: Importance.low,
+        priority: Priority.low,
+        ongoing: true,
+        autoCancel: false,
+        category: AndroidNotificationCategory.call,
+        showWhen: true,
+        usesChronometer: true,
+      );
+      const notificationDetails = NotificationDetails(android: androidDetails);
+      await FlutterLocalNotificationsPlugin().show(
+        _ongoingCallNotificationId,
+        'Call in progress',
+        number.isNotEmpty ? 'Connected with $number' : 'Call in progress',
+        notificationDetails,
+      );
+    } catch (e) {
+      debugPrint('[NOTIFICATION] Error showing ongoing notification: $e');
+    }
+  }
+
+  Future<void> _clearOngoingCallNotification() async {
+    try {
+      await FlutterLocalNotificationsPlugin().cancel(_ongoingCallNotificationId);
+    } catch (_) {}
+  }
+
+  Future<void> _notifyDispositionRequired(String number) async {
+    try {
+      const androidDetails = AndroidNotificationDetails(
+        'incoming_calls_channel',
+        'Incoming Calls',
+        channelDescription: 'Notifications for call alerts and disposition',
+        importance: Importance.high,
+        priority: Priority.high,
+        autoCancel: true,
+        category: AndroidNotificationCategory.status,
+      );
+      const notificationDetails = NotificationDetails(android: androidDetails);
+      await FlutterLocalNotificationsPlugin().show(
+        _dispositionReminderNotificationId,
+        'Call Ended - Disposition Required',
+        number.isNotEmpty
+            ? 'Call with $number ended. Tap to complete disposition.'
+            : 'Call ended. Tap to complete disposition.',
+        notificationDetails,
+      );
+    } catch (_) {}
+  }
 
   final Map<String, String> _dialingCallbackByPhone = {};
   final Set<String> _completingCallbacks = {};
@@ -150,9 +210,32 @@ class _DialpadScreenState extends State<DialpadScreen>
     _appLifecycleState = state;
     if (state == AppLifecycleState.resumed) {
       RingtoneService().clearNotification();
+      try {
+        FlutterLocalNotificationsPlugin()
+            .cancel(_dispositionReminderNotificationId);
+      } catch (_) {}
 
       if (!_sip.isRegistered) {
         _sip.connect();
+      }
+
+      // If call ended while app was minimized and disposition hasn't started yet
+      final pending = _pendingPostCall;
+      if (pending != null && !_dispositionShowing) {
+        unawaited(
+          _runPostCallFlow(
+            bridgeId: pending['bridgeId'] ?? '',
+            number: pending['number'] ?? '',
+          ).whenComplete(() {
+            _pendingPostCall = null;
+            if (mounted) {
+              if (UserData.isAutoDialActive() && _autoDialFromLeads) {
+                setState(() => _tabIndex = 2);
+              }
+              unawaited(_autoDialNextLead());
+            }
+          }),
+        );
       }
 
       final recentlyHandledSameNumber =
@@ -162,9 +245,15 @@ class _DialpadScreenState extends State<DialpadScreen>
           DateTime.now().difference(_lastHandledAt!) <
               const Duration(seconds: 3);
 
+      final inProtectedPhase = _dispositionShowing ||
+          _sip.agentStatus == 'Disposition' ||
+          _sip.isPostCallFlowActive ||
+          _pendingPostCall != null;
+
       if (_sip.callState == CallState.ringing &&
           !_isShowingIncomingDialog &&
           !_isOnCall &&
+          !inProtectedPhase &&
           !recentlyHandledSameNumber &&
           _sip.isRegistered) {
         _showIncomingCall(_sip.incomingNumber);
@@ -213,6 +302,7 @@ class _DialpadScreenState extends State<DialpadScreen>
             if (_activeCallNumber.isEmpty) {
               _activeCallNumber = number;
             }
+            _callBridgeId = _callBridgeId.isEmpty ? _sip.bridgeID : _callBridgeId;
             _callWasAnswered = true;
             _activeLogEntry ??= _createLogEntry(
               number: number,
@@ -223,14 +313,36 @@ class _DialpadScreenState extends State<DialpadScreen>
             if (!mounted) return;
             _isOnCall = true;
             _startCallTimer();
+            _fetchContactDataForCall(number);
+            _showOngoingCallNotification(number);
             setState(() {});
             break;
           }
 
-          if (_isOnCall) break;
+          if (_isOnCall || _activeCallNumber.isNotEmpty) {
+            debugLog(
+              '[DIALPAD] Suppressing incoming call $number because agent is already on call '
+              '(_isOnCall=$_isOnCall, _activeCallNumber=$_activeCallNumber)',
+            );
+            break;
+          }
           if (_isShowingIncomingDialog) break;
 
           final isQueueFallback = event['fromQueue'] == true;
+
+          // Never surface incoming call while agent is in disposition, dynamic form, or post-call flow
+          if (_dispositionShowing ||
+              _sip.agentStatus == 'Disposition' ||
+              _sip.isPostCallFlowActive) {
+            debugLog(
+              '[DIALPAD] Suppressing incoming call $number because agent is in disposition/post-call flow '
+              '(_dispositionShowing=$_dispositionShowing, agentStatus=${_sip.agentStatus}, postCallFlowActive=${_sip.isPostCallFlowActive})',
+            );
+            if (!isQueueFallback) {
+              await _sip.rejectCall();
+            }
+            break;
+          }
 
           // Never surface the incoming call screen while on break: reject any
           // real SIP session (so it stops ringing), but ignore queue fallbacks
@@ -326,6 +438,9 @@ class _DialpadScreenState extends State<DialpadScreen>
           );
           RingtoneService().stopRinging();
           _startCallTimer();
+          // Fetch contact data for form pre-fill (like web's /useroncall → setUserCall)
+          _fetchContactDataForCall(_activeCallNumber);
+          _showOngoingCallNotification(_activeCallNumber);
           if (mounted) setState(() {});
           break;
 
@@ -357,7 +472,9 @@ class _DialpadScreenState extends State<DialpadScreen>
           final endedNumber = _activeCallNumber.isNotEmpty
               ? _activeCallNumber
               : _sip.incomingNumber;
-          final endedBridge = _callBridgeId;
+          final endedBridge = _callBridgeId.isNotEmpty
+              ? _callBridgeId
+              : (_sip.bridgeID.isNotEmpty ? _sip.bridgeID : '');
           try {
             await _finalizeActiveCall(failed: type == 'callFailed');
           } catch (e, st) {
@@ -384,6 +501,7 @@ class _DialpadScreenState extends State<DialpadScreen>
           _callTimer?.cancel();
           _callSeconds = 0;
           RingtoneService().stopRinging();
+          await _clearOngoingCallNotification();
           try {
             FlutterLocalNotificationsPlugin().cancelAll();
           } catch (_) {}
@@ -394,12 +512,26 @@ class _DialpadScreenState extends State<DialpadScreen>
             'autoDialFromLeads=$_autoDialFromLeads) → landing on '
             '$_currentTabName (index $_tabIndex)',
           );
-          if (type == 'callEnded' && wasAnswered && mounted) {
+          final shouldRunPostCall =
+              wasAnswered && (type == 'callEnded' || type == 'callFailed');
+          if (shouldRunPostCall && mounted) {
+            _pendingPostCall = {
+              'bridgeId': endedBridge,
+              'number': endedNumber,
+            };
+            if (_appLifecycleState != AppLifecycleState.resumed) {
+              _notifyDispositionRequired(endedNumber);
+            }
             unawaited(
               _runPostCallFlow(
                 bridgeId: endedBridge,
                 number: endedNumber,
               ).whenComplete(() {
+                _pendingPostCall = null;
+                try {
+                  FlutterLocalNotificationsPlugin()
+                      .cancel(_dispositionReminderNotificationId);
+                } catch (_) {}
                 if (mounted) {
                   if (UserData.isAutoDialActive() && _autoDialFromLeads) {
                     setState(() => _tabIndex = 2);
@@ -716,65 +848,118 @@ class _DialpadScreenState extends State<DialpadScreen>
     );
   }
 
+  /// Fetches contact data from `/useroncall` when a call is answered,
+  /// mirroring the web's `setUserCall(response.data.contactData)` flow.
+  /// Stores the result in [_lastContactData] for form pre-fill.
+  void _fetchContactDataForCall(String phoneNumber) {
+    unawaited(() async {
+      try {
+        final response = await _sip.fetchUserOnCall(phoneNumber);
+        if (response == null) return;
+
+        // Store bridgeID if returned (web: bridgeIDRef.current = newBridgeID)
+        final callData = response['currentcalldata'];
+        if (callData is Map) {
+          final newBridgeId = (callData['bridgeID'] ?? '').toString();
+          if (newBridgeId.isNotEmpty && _callBridgeId.isEmpty) {
+            _callBridgeId = newBridgeId;
+          }
+        }
+
+        // Store contact data for form pre-fill (web: setUserCall)
+        final contactData = response['contactData'];
+        if (contactData is Map) {
+          _lastContactData = Map<String, dynamic>.from(contactData);
+          debugPrint('[PREFILL] Contact data loaded for $phoneNumber: '
+              '${_lastContactData?.keys.toList()}');
+        }
+      } catch (e) {
+        debugPrint('[PREFILL] Error fetching contact data: $e');
+      }
+    }());
+  }
+
   Future<void> _runPostCallFlow({
     required String bridgeId,
     required String number,
   }) async {
-    await _sip.sendCallEnded();
-    await Future.delayed(const Duration(milliseconds: 600));
-    if (_activeCallbackIds.isNotEmpty) {
-      for (final id in _activeCallbackIds.toList()) {
-        unawaited(_sip.updateCallbackStatus(id, 'completed'));
-      }
-      if (mounted) setState(() => _activeCallbackIds.clear());
-    }
     if (!mounted || _dispositionShowing) return;
-
-    final callType = _lastCallDirection == CallLogDirection.incoming
-        ? 'incoming'
-        : 'outgoing';
-    final formResult = await _sip.fetchDynamicFormConfig(callType: callType);
-    if (formResult.webformEnabled && mounted) {
-      final formConfig = formResult.config;
-      if (formConfig != null) {
-        // Dynamic form is mandatory and cannot be dismissed: keep showing it
-        // until the user submits a valid form.
-        bool submitted = false;
-        while (mounted && !submitted) {
-          submitted = await showDynamicFormSheet(
-            context,
-            formConfig: formConfig,
-            callType: callType,
-            contactNumber: number,
-            onSubmit: (payload) => _sip.addModifyContact(payload),
-          );
+    _dispositionShowing = true;
+    _sip.isPostCallFlowActive = true;
+    try {
+      await _sip.sendCallEnded();
+      await Future.delayed(const Duration(milliseconds: 600));
+      if (_activeCallbackIds.isNotEmpty) {
+        for (final id in _activeCallbackIds.toList()) {
+          unawaited(_sip.updateCallbackStatus(id, 'completed'));
         }
-      } else {
-        // Webforms enabled but no dynamic form resolved: show the static
-        // UserCall contact form (webphone UserCall.jsx fallback). Also
-        // mandatory — keep showing until submitted.
-        bool submitted = false;
-        while (mounted && !submitted) {
-          submitted = await showUserCallFormSheet(
-            context,
-            callType: callType,
-            contactNumber: number,
-            onSubmit: (payload) => _sip.addModifyContact(payload),
-          );
-        }
+        if (mounted) setState(() => _activeCallbackIds.clear());
       }
       if (!mounted) return;
-    }
 
-    if (!UserData.isDispositionEnabled()) {
-      await _sip.submitDisposition(
-        bridgeId: bridgeId,
-        disposition: 'Auto Disposed',
-        contactNumber: number,
-      );
-      return;
+      final callType = _lastCallDirection == CallLogDirection.incoming
+          ? 'incoming'
+          : 'outgoing';
+      var contactData = _lastContactData;
+      if (contactData == null && number.isNotEmpty) {
+        try {
+          final res = await _sip.fetchUserOnCall(number);
+          if (res != null && res['contactData'] is Map) {
+            contactData = Map<String, dynamic>.from(res['contactData'] as Map);
+            _lastContactData = contactData;
+          }
+        } catch (_) {}
+      }
+      final formResult = await _sip.fetchDynamicFormConfig(callType: callType);
+      if (formResult.webformEnabled && mounted) {
+        final formConfig = formResult.config;
+        if (formConfig != null) {
+          // Dynamic form is mandatory and cannot be dismissed: keep showing it
+          // until the user submits a valid form.
+          bool submitted = false;
+          while (mounted && !submitted) {
+            submitted = await showDynamicFormSheet(
+              context,
+              formConfig: formConfig,
+              callType: callType,
+              contactNumber: number,
+              initialData: contactData,
+              onSubmit: (payload) => _sip.addModifyContact(payload),
+            );
+          }
+        } else {
+          // Webforms enabled but no dynamic form resolved: show the static
+          // UserCall contact form (webphone UserCall.jsx fallback). Also
+          // mandatory — keep showing until submitted.
+          bool submitted = false;
+          while (mounted && !submitted) {
+            submitted = await showUserCallFormSheet(
+              context,
+              callType: callType,
+              contactNumber: number,
+              initialData: contactData,
+              onSubmit: (payload) => _sip.addModifyContact(payload),
+            );
+          }
+        }
+        if (!mounted) return;
+      }
+
+      if (!UserData.isDispositionEnabled()) {
+        await _sip.submitDisposition(
+          bridgeId: bridgeId,
+          disposition: 'Auto Disposed',
+          contactNumber: number,
+        );
+        return;
+      }
+      await _showDispositionSheet(bridgeId: bridgeId, number: number);
+    } finally {
+      _dispositionShowing = false;
+      _sip.isPostCallFlowActive = false;
+      _lastContactData = null;
+      _pendingPostCall = null;
     }
-    await _showDispositionSheet(bridgeId: bridgeId, number: number);
   }
 
   /// Starts a call for [phone] by populating the keypad and reusing the

@@ -256,11 +256,21 @@ class FcmService with WidgetsBindingObserver {
       playSound: true,
     );
 
+    const AndroidNotificationChannel ongoingChannel =
+        AndroidNotificationChannel(
+      'ongoing_calls_channel',
+      'Active Calls',
+      description: 'Notifications while a call is active',
+      importance: Importance.low,
+      playSound: false,
+    );
+
     final androidPlugin = _localNotificationsPlugin
         .resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin>();
     if (androidPlugin != null) {
       await androidPlugin.createNotificationChannel(channel);
+      await androidPlugin.createNotificationChannel(ongoingChannel);
     }
 
     // Clear notifications on startup

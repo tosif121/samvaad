@@ -122,11 +122,15 @@ class CallHistoryTile extends StatelessWidget {
             time,
             if (duration.isNotEmpty) duration,
             if (entry.type == CallLogType.video) 'Video',
+            if (entry.disposition != null && entry.disposition!.isNotEmpty)
+              entry.disposition!,
           ].join('  ·  '),
           style: TextStyle(
             fontSize: AppType.caption - 1,
             color: cs.onSurface.withValues(alpha: 0.45),
           ),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
         ),
       ),
       trailing: onCallBack == null
