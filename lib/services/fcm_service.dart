@@ -149,7 +149,7 @@ class FcmService with WidgetsBindingObserver {
       log("[FCM_SERVICE] Sending payload to backend: ${jsonEncode(payload)}");
 
       final url = Uri.parse(
-        'https://app.samvaad.io/storeFirebaseTokenMobile',
+        'https://devapp.iotcom.io/storeFirebaseTokenMobile',
       );
       final response = await http.post(
         url,
@@ -204,7 +204,7 @@ class FcmService with WidgetsBindingObserver {
       };
 
       final url = Uri.parse(
-        'https://app.samvaad.io/removeFirebaseTokenMobile',
+        'https://devapp.iotcom.io/removeFirebaseTokenMobile',
       );
       final response = await http.post(
         url,

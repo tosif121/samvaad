@@ -1291,7 +1291,7 @@ class SipSocketService implements sip.SipUaHelperListener {
         final headers = await _getAuthHeaders();
         final response = await http
             .post(
-              Uri.parse('https://app.samvaad.io/clearRejectedCallFromAgent'),
+              Uri.parse('https://devapp.iotcom.io/clearRejectedCallFromAgent'),
               headers: headers,
               body: jsonEncode({'caller': num}),
             )
@@ -1323,7 +1323,7 @@ class SipSocketService implements sip.SipUaHelperListener {
       final headers = await _getAuthHeaders();
       final response = await http
           .post(
-            Uri.parse('https://app.samvaad.io/userMissedCalls/$username'),
+            Uri.parse('https://devapp.iotcom.io/userMissedCalls/$username'),
             headers: headers,
             body: jsonEncode({}),
           )
@@ -1370,7 +1370,7 @@ class SipSocketService implements sip.SipUaHelperListener {
 
       final response = await http
           .post(
-            Uri.parse('https://app.samvaad.io/reports/calls/byAgent'),
+            Uri.parse('https://devapp.iotcom.io/reports/calls/byAgent'),
             headers: headers,
             body: jsonEncode({
               'startDate': _formatDate(rangeStart),
@@ -1416,7 +1416,7 @@ class SipSocketService implements sip.SipUaHelperListener {
       final headers = await _getAuthHeaders();
       final response = await http
           .post(
-            Uri.parse('https://app.samvaad.io/leadswithdaterange'),
+            Uri.parse('https://devapp.iotcom.io/leadswithdaterange'),
             headers: headers,
             body: jsonEncode({
               'startDate': _formatDate(startDate),
@@ -1559,7 +1559,7 @@ class SipSocketService implements sip.SipUaHelperListener {
       final headers = await _getAuthHeaders();
       final response = await http
           .post(
-            Uri.parse('https://app.samvaad.io/dialmissedcall'),
+            Uri.parse('https://devapp.iotcom.io/dialmissedcall'),
             headers: headers,
             body: jsonEncode({'receiver': cleanNum}),
           )
@@ -1593,7 +1593,7 @@ class SipSocketService implements sip.SipUaHelperListener {
       final headers = await _getAuthHeaders();
       final response = await http
           .post(
-            Uri.parse('https://app.samvaad.io/callback/update-status'),
+            Uri.parse('https://devapp.iotcom.io/callback/update-status'),
             headers: headers,
             body: jsonEncode({'callbackId': callbackId, 'status': status}),
           )
@@ -1614,7 +1614,7 @@ class SipSocketService implements sip.SipUaHelperListener {
       final headers = await _getAuthHeaders();
       final response = await http
           .post(
-            Uri.parse('https://app.samvaad.io/hangupChannel'),
+            Uri.parse('https://devapp.iotcom.io/hangupChannel'),
             headers: headers,
             body: jsonEncode({'channelId': channelId}),
           )
@@ -1637,11 +1637,11 @@ class SipSocketService implements sip.SipUaHelperListener {
       final headers = await _getAuthHeaders();
       final payload = {'user': username};
       _log(
-        '[USERCONNECTION] Request -> URL: https://app.samvaad.io/userconnection | user: $username | payload: ${jsonEncode(payload)}',
+        '[USERCONNECTION] Request -> URL: https://devapp.iotcom.io/userconnection | user: $username | payload: ${jsonEncode(payload)}',
       );
       final response = await http
           .post(
-            Uri.parse('https://app.samvaad.io/userconnection'),
+            Uri.parse('https://devapp.iotcom.io/userconnection'),
             headers: headers,
             body: jsonEncode(payload),
           )
@@ -1852,7 +1852,7 @@ class SipSocketService implements sip.SipUaHelperListener {
       final headers = await _getAuthHeaders();
       final response = await http
           .post(
-            Uri.parse('https://app.samvaad.io/user/agentAvailable/$username'),
+            Uri.parse('https://devapp.iotcom.io/user/agentAvailable/$username'),
             headers: headers,
             body: jsonEncode({}),
           )
@@ -1879,7 +1879,7 @@ class SipSocketService implements sip.SipUaHelperListener {
       final headers = await _getAuthHeaders();
       final response = await http
           .post(
-            Uri.parse('https://app.samvaad.io/useroncall/$username'),
+            Uri.parse('https://devapp.iotcom.io/useroncall/$username'),
             headers: headers,
             body: jsonEncode({
               'user': username,
@@ -1912,7 +1912,7 @@ class SipSocketService implements sip.SipUaHelperListener {
       final headers = await _getAuthHeaders();
       await http
           .post(
-            Uri.parse('https://app.samvaad.io/user/callended$username'),
+            Uri.parse('https://devapp.iotcom.io/user/callended$username'),
             headers: headers,
             body: jsonEncode({
               'callType': callType,
@@ -1944,7 +1944,7 @@ class SipSocketService implements sip.SipUaHelperListener {
       final headers = await _getAuthHeaders();
       await http
           .post(
-            Uri.parse('https://app.samvaad.io/user/disposition$username'),
+            Uri.parse('https://devapp.iotcom.io/user/disposition$username'),
             headers: headers,
             body: jsonEncode({
               'bridgeID': bridgeId.isNotEmpty ? bridgeId : 'deadCallId',
@@ -1998,7 +1998,7 @@ class SipSocketService implements sip.SipUaHelperListener {
       final listRes = await http
           .get(
             Uri.parse(
-              'https://app.samvaad.io/getDynamicFormDataAgent/$campaign',
+              'https://devapp.iotcom.io/getDynamicFormDataAgent/$campaign',
             ),
             headers: headers,
           )
@@ -2066,7 +2066,7 @@ class SipSocketService implements sip.SipUaHelperListener {
 
       final formRes = await http
           .get(
-            Uri.parse('https://app.samvaad.io/getDynamicFormData/$formId'),
+            Uri.parse('https://devapp.iotcom.io/getDynamicFormData/$formId'),
             headers: headers,
           )
           .timeout(const Duration(seconds: 8));
@@ -2103,7 +2103,7 @@ class SipSocketService implements sip.SipUaHelperListener {
       final headers = await _getAuthHeaders();
       final response = await http
           .post(
-            Uri.parse('https://app.samvaad.io/addModifyContact'),
+            Uri.parse('https://devapp.iotcom.io/addModifyContact'),
             headers: headers,
             body: jsonEncode(payload),
           )
@@ -2132,7 +2132,7 @@ class SipSocketService implements sip.SipUaHelperListener {
       final headers = await _getAuthHeaders();
       await http
           .post(
-            Uri.parse('https://app.samvaad.io/user/breakuser:$username'),
+            Uri.parse('https://devapp.iotcom.io/user/breakuser:$username'),
             headers: headers,
             body: jsonEncode({'breakType': breakType}),
           )
@@ -2152,7 +2152,7 @@ class SipSocketService implements sip.SipUaHelperListener {
       await http
           .post(
             Uri.parse(
-              'https://app.samvaad.io/user/removebreakuser:$username',
+              'https://devapp.iotcom.io/user/removebreakuser:$username',
             ),
             headers: headers,
             body: jsonEncode({}),
@@ -2211,7 +2211,7 @@ class SipSocketService implements sip.SipUaHelperListener {
       final headers = await _getAuthHeaders();
       final response = await http
           .post(
-            Uri.parse('https://app.samvaad.io/agent-callbacks'),
+            Uri.parse('https://devapp.iotcom.io/agent-callbacks'),
             headers: headers,
             body: jsonEncode({'user': username}),
           )
@@ -2295,7 +2295,7 @@ class SipSocketService implements sip.SipUaHelperListener {
         final headers = await _getAuthHeaders();
         final response = await http
             .post(
-              Uri.parse('https://app.samvaad.io/userready/$username/Web'),
+              Uri.parse('https://devapp.iotcom.io/userready/$username/Web'),
               headers: headers,
               body: jsonEncode({}),
             )
@@ -2352,7 +2352,7 @@ class SipSocketService implements sip.SipUaHelperListener {
 
       var response = await http
           .post(
-            Uri.parse('https://app.samvaad.io/dialnumber'),
+            Uri.parse('https://devapp.iotcom.io/dialnumber'),
             headers: headers,
             body: jsonEncode(payload),
           )
@@ -2373,7 +2373,7 @@ class SipSocketService implements sip.SipUaHelperListener {
           await Future.delayed(const Duration(milliseconds: 500));
           response = await http
               .post(
-                Uri.parse('https://app.samvaad.io/dialnumber'),
+                Uri.parse('https://devapp.iotcom.io/dialnumber'),
                 headers: headers,
                 body: jsonEncode(payload),
               )
@@ -2418,7 +2418,7 @@ class SipSocketService implements sip.SipUaHelperListener {
       final headers = await _getAuthHeaders();
       final response = await http
           .post(
-            Uri.parse('https://app.samvaad.io/reqTransfer/$username'),
+            Uri.parse('https://devapp.iotcom.io/reqTransfer/$username'),
             headers: headers,
             body: jsonEncode({'bridgeID': bridgeId}),
           )
@@ -2483,7 +2483,7 @@ class SipSocketService implements sip.SipUaHelperListener {
       final headers = await _getAuthHeaders();
       final response = await http
           .post(
-            Uri.parse('https://app.samvaad.io/reqConf/$username'),
+            Uri.parse('https://devapp.iotcom.io/reqConf/$username'),
             headers: headers,
             body: jsonEncode({
               'confNumber': confNumber,
@@ -2511,7 +2511,7 @@ class SipSocketService implements sip.SipUaHelperListener {
       final headers = await _getAuthHeaders();
       final response = await http
           .post(
-            Uri.parse('https://app.samvaad.io/reqUnHold/$username'),
+            Uri.parse('https://devapp.iotcom.io/reqUnHold/$username'),
             headers: headers,
           )
           .timeout(const Duration(seconds: 10));
@@ -2534,7 +2534,7 @@ class SipSocketService implements sip.SipUaHelperListener {
       final headers = await _getAuthHeaders();
       final response = await http
           .post(
-            Uri.parse('https://app.samvaad.io/hangup/hostChannel/Conf'),
+            Uri.parse('https://devapp.iotcom.io/hangup/hostChannel/Conf'),
             headers: headers,
             body: jsonEncode({'user': username, 'hostNumber': hostNumber}),
           )
