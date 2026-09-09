@@ -23,10 +23,17 @@ Future<bool> autoLoginWithSavedCredentials() async {
   final prefs = await SharedPreferences.getInstance();
   final username = prefs.getString('savedUsername') ?? '';
   final password = prefs.getString('savedPassword') ?? '';
-  if (username.isEmpty || password.isEmpty) return false;
+  if (username.isEmpty || password.isEmpty) {
+    debugPrint('[AUTO_LOGIN] ℹ️ No saved credentials found (username empty: ${username.isEmpty}, password empty: ${password.isEmpty})');
+    return false;
+  }
   try {
     final url = Uri.parse('https://app.samvaad.io/userlogin/$username');
-    debugPrint('[AUTO_LOGIN] Checking saved credentials -> URL: $url | username: $username');
+    debugPrint('[AUTO_LOGIN] 🚀 Requesting auto-login:');
+    debugPrint('[AUTO_LOGIN]   URL: $url');
+    debugPrint('[AUTO_LOGIN]   Username: $username');
+    debugPrint('[AUTO_LOGIN]   Password length: ${password.length}');
+    final stopwatch = Stopwatch()..start();
     final response = await http
         .post(
           url,
@@ -34,8 +41,11 @@ Future<bool> autoLoginWithSavedCredentials() async {
           body: jsonEncode({'username': username, 'password': password}),
         )
         .timeout(const Duration(seconds: 10));
+    stopwatch.stop();
 
-    debugPrint('[AUTO_LOGIN] Response (${response.statusCode}) -> body: ${response.body}');
+    debugPrint('[AUTO_LOGIN] 📥 Response received in ${stopwatch.elapsedMilliseconds}ms:');
+    debugPrint('[AUTO_LOGIN]   Status Code: ${response.statusCode}');
+    debugPrint('[AUTO_LOGIN]   Body: ${response.body}');
     final data = jsonDecode(response.body);
     final message = (data is Map ? data['message'] : null)?.toString();
     final isAlreadyLoggedIn = message != null &&
@@ -49,14 +59,16 @@ Future<bool> autoLoginWithSavedCredentials() async {
         data['token'] == null ||
         isAlreadyLoggedIn ||
         isWrongInfo) {
-      debugPrint('[AUTO_LOGIN] Auto-login failed: $message (isAlreadyLoggedIn=$isAlreadyLoggedIn)');
+      debugPrint('[AUTO_LOGIN] ❌ Auto-login rejected: message="$message", success=${data is Map ? data['success'] : 'null'}, hasToken=${data is Map && data['token'] != null}, isAlreadyLoggedIn=$isAlreadyLoggedIn, isWrongInfo=$isWrongInfo');
       return false;
     }
+    debugPrint('[AUTO_LOGIN] ✅ Auto-login successful for user: $username');
     await prefs.setString('token', jsonEncode(data));
     await UserData.init();
+    debugPrint('[AUTO_LOGIN] 👤 UserData loaded: username=${UserData.username()}, campaign=${UserData.campaign()}, campaignName=${UserData.campaignName()}');
     return true;
-  } catch (e) {
-    debugPrint('[AUTO_LOGIN] Error: $e');
+  } catch (e, st) {
+    debugPrint('[AUTO_LOGIN] ❌ Exception during auto-login: $e\n$st');
     return false;
   }
 }
@@ -158,16 +170,24 @@ class _LoginScreenState extends State<LoginScreen> {
 
     try {
       final url = Uri.parse('https://app.samvaad.io/userlogin/$rawUsername');
-      debugPrint('[LOGIN] Request -> POST $url | username: $rawUsername');
+      final payload = {'username': rawUsername, 'password': password};
+      debugPrint('[LOGIN_API] 🚀 Starting login request:');
+      debugPrint('[LOGIN_API]   Endpoint: POST $url');
+      debugPrint('[LOGIN_API]   Username: "$rawUsername"');
+      debugPrint('[LOGIN_API]   Password length: ${password.length}');
+      final stopwatch = Stopwatch()..start();
       final response = await http
           .post(
             url,
             headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({'username': rawUsername, 'password': password}),
+            body: jsonEncode(payload),
           )
           .timeout(const Duration(seconds: 10));
+      stopwatch.stop();
 
-      debugPrint('[LOGIN] Response -> status: ${response.statusCode} | body: ${response.body}');
+      debugPrint('[LOGIN_API] 📥 Response received in ${stopwatch.elapsedMilliseconds}ms:');
+      debugPrint('[LOGIN_API]   Status Code: ${response.statusCode}');
+      debugPrint('[LOGIN_API]   Body: ${response.body}');
 
       final data = jsonDecode(response.body);
       final message = (data is Map ? data['message'] : null)?.toString();
@@ -176,7 +196,13 @@ class _LoginScreenState extends State<LoginScreen> {
       final isWrongInfo = message != null &&
           message.toLowerCase().contains('wrong login');
 
-      debugPrint('[LOGIN] Check -> message: "$message" | isAlreadyLoggedIn: $isAlreadyLoggedIn | isWrongInfo: $isWrongInfo | hasToken: ${data is Map && data['token'] != null}');
+      debugPrint('[LOGIN_API] 🔍 Response Check:');
+      debugPrint('[LOGIN_API]   data is Map: ${data is Map}');
+      debugPrint('[LOGIN_API]   success: ${data is Map ? data['success'] : null}');
+      debugPrint('[LOGIN_API]   message: "$message"');
+      debugPrint('[LOGIN_API]   hasToken: ${data is Map && data['token'] != null}');
+      debugPrint('[LOGIN_API]   isAlreadyLoggedIn: $isAlreadyLoggedIn');
+      debugPrint('[LOGIN_API]   isWrongInfo: $isWrongInfo');
 
       if (response.statusCode != 200 ||
           data is! Map ||
@@ -186,7 +212,7 @@ class _LoginScreenState extends State<LoginScreen> {
           isWrongInfo ||
           (message != null && message != 'success' && data['userData'] == null)) {
         final msg = message ?? 'Login failed. Please check credentials.';
-        debugPrint('[LOGIN] Login REJECTED: $msg (alreadyLoggedIn=$isAlreadyLoggedIn)');
+        debugPrint('[LOGIN_API] ❌ Login REJECTED: $msg (alreadyLoggedIn=$isAlreadyLoggedIn)');
         if (isAlreadyLoggedIn) {
           ToastService.show('User already login somewhere else');
         }
@@ -198,15 +224,19 @@ class _LoginScreenState extends State<LoginScreen> {
       }
 
       final userData = data['userData'];
+      debugPrint('[LOGIN_API] 📋 userData: $userData');
       if (userData is Map) {
         final expiryRaw = userData['ExpiryDate'];
+        debugPrint('[LOGIN_API]   ExpiryDate raw: $expiryRaw');
         if (expiryRaw != null) {
           final expiry = DateTime.tryParse(expiryRaw.toString());
           if (expiry != null) {
             final daysLeft = expiry.difference(DateTime.now()).inDays;
+            debugPrint('[LOGIN_API]   Subscription days left: $daysLeft');
             if (daysLeft < 0) {
               final daysExpired = -daysLeft;
               if (daysExpired > 5) {
+                debugPrint('[LOGIN_API] ❌ Subscription expired by $daysExpired days');
                 setState(() {
                   _connecting = false;
                   _error =
@@ -224,14 +254,20 @@ class _LoginScreenState extends State<LoginScreen> {
       await prefs.setString('token', jsonEncode(data));
       await prefs.setString('savedUsername', rawUsername);
       await prefs.setString('savedPassword', password);
+      debugPrint('[LOGIN_API] 💾 Saved token, savedUsername, and savedPassword');
 
       await UserData.init();
+      debugPrint('[LOGIN_API] 👤 UserData loaded: username=${UserData.username()}, campaign=${UserData.campaign()}, campaignName=${UserData.campaignName()}');
 
       final creds = _buildCreds();
+      debugPrint('[LOGIN_API] 🔑 Built SIP credentials: uri=${creds.sipUri}, user=${creds.username}, server=${creds.serverUrl}');
       await _requestPermissions();
       await _sip.saveCredentials(creds);
+      debugPrint('[LOGIN_API] 🔌 Connecting SIP WebSocket...');
       unawaited(_sip.connect(creds).then((_) {}));
-    } catch (e) {
+      debugPrint('[LOGIN_API] ✅ Login process completed successfully');
+    } catch (e, st) {
+      debugPrint('[LOGIN_API] ❌ Exception during login: $e\n$st');
       if (mounted) {
         setState(() {
           _connecting = false;

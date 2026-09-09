@@ -14,7 +14,6 @@ import '../services/call_log_service.dart';
 import '../services/sip_socket_service.dart';
 import '../services/ringtone_service.dart';
 import '../services/user_data.dart';
-import '../services/oem_optimization_service.dart';
 import '../ui/theme.dart';
 import '../ui/tokens.dart';
 import '../ui/widgets/avatar.dart';
@@ -171,9 +170,6 @@ class _DialpadScreenState extends State<DialpadScreen>
         _phoneFocusNode.unfocus();
       }
     });
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      unawaited(OemOptimizationService().requestIgnoreBatteryOptimization());
-    });
   }
 
   Future<void> _loadUserConfig() async {
@@ -182,6 +178,7 @@ class _DialpadScreenState extends State<DialpadScreen>
     setState(() {
       _isBreaksEnabled = UserData.isBreaksEnabled();
     });
+    debugPrint('[USER_CONFIG] _isBreaksEnabled: $_isBreaksEnabled | breakOptions: ${_sip.breakOptions}');
   }
 
   Future<void> _restoreBreakState() async {
@@ -1372,12 +1369,14 @@ class _DialpadScreenState extends State<DialpadScreen>
   }
 
   Future<void> _showBreakQuickSheet() async {
+    final options = UserData.breakOptions();
+    debugPrint('[BREAKS] Opening break sheet with API options: $options | currentBreak: $_currentBreak');
     await showModalBottomSheet<void>(
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
       builder: (context) => _BreakQuickSheet(
-        breakOptions: List<dynamic>.from(_sip.breakOptions),
+        breakOptions: options,
         currentBreak: _currentBreak,
         onSetBreak: (type) {
           Navigator.of(context).pop();
@@ -3648,9 +3647,7 @@ class _DialpadScreenState extends State<DialpadScreen>
   }
 
   Widget _buildBreakCard(ColorScheme cs) {
-    final options = _sip.breakOptions.isNotEmpty
-        ? List<dynamic>.from(_sip.breakOptions)
-        : const <dynamic>['General Break'];
+    final options = UserData.breakOptions();
     final onBreak = _currentBreak != null;
     final breakIcon = onBreak
         ? breakIconFor(_currentBreak!)
@@ -3695,11 +3692,20 @@ class _DialpadScreenState extends State<DialpadScreen>
           ],
         ),
         const SizedBox(height: AppSpacing.md),
-        Wrap(
-          spacing: AppSpacing.xs,
-          runSpacing: AppSpacing.xs,
-          children: [for (final option in options) _buildBreakChip(option, cs)],
-        ),
+        if (options.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: Text(
+              'No break options available',
+              style: TextStyle(color: cs.onSurface.withValues(alpha: 0.6)),
+            ),
+          )
+        else
+          Wrap(
+            spacing: AppSpacing.xs,
+            runSpacing: AppSpacing.xs,
+            children: [for (final option in options) _buildBreakChip(option, cs)],
+          ),
         const SizedBox(height: AppSpacing.sm),
         SizedBox(
           width: double.infinity,

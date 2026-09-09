@@ -24,7 +24,16 @@ class UserData {
       final decoded = jsonDecode(tokenStr);
       if (decoded is Map) {
         final ud = decoded['userData'];
-        if (ud is Map) _userData = Map<String, dynamic>.from(ud);
+        if (ud is Map) {
+          _userData = Map<String, dynamic>.from(ud);
+          for (final key in ['breakoptions', 'breakOptions', 'BreakOptions', 'breaks']) {
+            if (!_userData!.containsKey(key) && decoded.containsKey(key)) {
+              _userData![key] = decoded[key];
+            }
+          }
+        } else {
+          _userData = Map<String, dynamic>.from(decoded);
+        }
       }
     } catch (_) {}
   }
@@ -44,7 +53,21 @@ class UserData {
   static bool isDispositionEnabled() => _bool('disposition', fallback: true);
 
   /// Gates whether the agent can take breaks.
-  static bool isBreaksEnabled() => _bool('isBreaksEnabled', fallback: true);
+  static bool isBreaksEnabled() {
+    final val = _userData?['isBreaksEnabled'] ??
+        _userData?['isBreakEnabled'] ??
+        _userData?['breaksEnabled'] ??
+        _userData?['breakEnabled'] ??
+        _userData?['break'];
+    if (val is bool) return val;
+    if (val is num) return val != 0;
+    if (val is String) {
+      final lower = val.trim().toLowerCase();
+      if (lower == 'false' || lower == '0' || lower == 'no') return false;
+      return true;
+    }
+    return true;
+  }
 
   /// When true, phone numbers are masked (webphone `numberMasking`).
   static bool isNumberMasking() => _bool('numberMasking', fallback: false);
@@ -93,8 +116,24 @@ class UserData {
   static List<dynamic> dispositionOptions() =>
       (_userData?['dispostionOptions'] as List?) ?? const [];
 
-  static List<dynamic> breakOptions() =>
-      (_userData?['breakoptions'] as List?) ?? const [];
+  static List<dynamic> breakOptions() {
+    dynamic options = _userData?['breakoptions'] ??
+        _userData?['breakOptions'] ??
+        _userData?['BreakOptions'] ??
+        _userData?['break_options'] ??
+        _userData?['breaks'];
+
+    if (options is String && options.trim().isNotEmpty) {
+      try {
+        options = jsonDecode(options);
+      } catch (_) {}
+    }
+
+    if (options is List) {
+      return options;
+    }
+    return const [];
+  }
 
   /// Strips +91, 0091, 91 (for 12-digit Indian numbers), or leading +
   /// so numbers are uniformly handled and displayed without any prefix.

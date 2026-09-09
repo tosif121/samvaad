@@ -97,7 +97,8 @@ class SipSocketService implements sip.SipUaHelperListener {
   String get incomingChannelId => _incomingChannelId;
   List<dynamic> get missedCalls => _missedCalls;
   List<dynamic> get followUps => _followUps;
-  List<dynamic> get breakOptions => _breakOptions;
+  List<dynamic> get breakOptions =>
+      _breakOptions.isNotEmpty ? _breakOptions : UserData.breakOptions();
   List<CallLogEntry> get recentCalls => _recentCalls;
   int get recentCallsPage => _recentCallsPage;
   int? get recentCallsTotal => _recentCallsTotal;
@@ -221,17 +222,11 @@ class SipSocketService implements sip.SipUaHelperListener {
     // a second call would call _helper.stop() on an already-registered
     // UA and tear the transport down seconds after it registered.
     if (_isRegistered) {
-      _log(
-        'connect() ignored — already registered',
-        data: StackTrace.current.toString(),
-      );
+      _log('connect() ignored — already registered');
       return;
     }
     if (_connecting) {
-      _log(
-        'connect() ignored — already connecting',
-        data: StackTrace.current.toString(),
-      );
+      _log('connect() ignored — already connecting');
       return;
     }
 
@@ -348,15 +343,28 @@ class SipSocketService implements sip.SipUaHelperListener {
       if (tokenStr != null && tokenStr.isNotEmpty) {
         final decoded = jsonDecode(tokenStr);
         if (decoded is Map) {
-          final userData = decoded['userData'];
+          final userData = decoded['userData'] ?? decoded;
           if (userData is Map) {
-            final options = userData['breakoptions'];
+            dynamic options = userData['breakoptions'] ??
+                userData['breakOptions'] ??
+                userData['BreakOptions'] ??
+                userData['break_options'] ??
+                userData['breaks'];
+            if (options is String && options.trim().isNotEmpty) {
+              try {
+                options = jsonDecode(options);
+              } catch (_) {}
+            }
             if (options is List && options.isNotEmpty) {
               _breakOptions = options;
             }
           }
         }
       }
+      if (_breakOptions.isEmpty) {
+        _breakOptions = UserData.breakOptions();
+      }
+      _log('[BREAKS] Loaded break options: $_breakOptions');
     } catch (e) {
       _log('Error loading break options: $e');
     }
@@ -369,6 +377,7 @@ class SipSocketService implements sip.SipUaHelperListener {
       'sip_credentials',
       const JsonEncoder().convert(creds.toJson()),
     );
+    await _loadBreakOptions();
   }
 
   Future<void> clearCredentials() async {
