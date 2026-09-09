@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 
 import '../../services/user_data.dart';
@@ -71,6 +72,7 @@ Future<bool> showDynamicFormSheet(
   Map<String, dynamic>? initialData,
   required Future<bool> Function(Map<String, dynamic> payload) onSubmit,
 }) {
+  final cleanNumber = UserData.cleanPhoneNumber(contactNumber);
   return showModalBottomSheet<bool>(
     context: context,
     backgroundColor: Colors.transparent,
@@ -82,7 +84,7 @@ Future<bool> showDynamicFormSheet(
       child: _DynamicFormSheet(
         formConfig: formConfig,
         callType: callType,
-        contactNumber: contactNumber,
+        contactNumber: cleanNumber,
         initialData: initialData,
         onSubmit: onSubmit,
       ),
@@ -117,8 +119,9 @@ class _DynamicFormSheetState extends State<_DynamicFormSheet> {
   @override
   void initState() {
     super.initState();
-    // Pre-fill form values from existing contact data (mirrors web DynamicForm.jsx)
     final d = widget.initialData;
+    debugPrint('[DYNAMIC_FORM] initState: contactNumber="${widget.contactNumber}", initialData keys=${d?.keys.toList()}');
+    debugPrint('[DYNAMIC_FORM] Full initialData: $d');
     if (d != null) {
       for (final field in _allFields) {
         if (field is! Map) continue;
@@ -137,8 +140,12 @@ class _DynamicFormSheetState extends State<_DynamicFormSheet> {
         }
         if (val != null && val.toString().trim().isNotEmpty) {
           _values[name] = val;
+          debugPrint('[DYNAMIC_FORM] Pre-filled field "$name" => "$val"');
         }
       }
+      debugPrint('[DYNAMIC_FORM] Finished prefill. Total _values count: ${_values.length}, values: $_values');
+    } else {
+      debugPrint('[DYNAMIC_FORM] initialData is null: cannot pre-fill form');
     }
   }
 
@@ -294,13 +301,14 @@ class _DynamicFormSheetState extends State<_DynamicFormSheet> {
       final err = _validateField(f, _values[name]);
       if (err != null) errors[name] = err;
     }
-    final callerNumber =
+    final rawCallerNumber =
         (widget.contactNumber.isNotEmpty
                 ? widget.contactNumber
                 : _values['contactNumber'])
             ?.toString()
             .trim() ??
         '';
+    final callerNumber = UserData.cleanPhoneNumber(rawCallerNumber);
     if (callerNumber.isEmpty) {
       errors['contactNumber'] = 'Caller number is required';
     }
@@ -308,6 +316,7 @@ class _DynamicFormSheetState extends State<_DynamicFormSheet> {
     if (errors.isNotEmpty) return;
 
     final payload = _buildPayload(callerNumber);
+    debugPrint('[DYNAMIC_FORM] Submitting payload for clean callerNumber "$callerNumber": ${jsonEncode(payload)}');
     setState(() => _submitting = true);
     final ok = await widget.onSubmit(payload);
     if (!mounted) return;

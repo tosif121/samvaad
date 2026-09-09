@@ -96,13 +96,30 @@ class UserData {
   static List<dynamic> breakOptions() =>
       (_userData?['breakoptions'] as List?) ?? const [];
 
+  /// Strips +91, 0091, 91 (for 12-digit Indian numbers), or leading +
+  /// so numbers are uniformly handled and displayed without any prefix.
+  static String cleanPhoneNumber(String number) {
+    var n = number.trim();
+    if (n.startsWith('sip:')) {
+      n = n.substring(4).split('@').first;
+    }
+    if (n.startsWith('+91')) {
+      n = n.substring(3);
+    } else if (n.startsWith('0091')) {
+      n = n.substring(4);
+    } else if (n.startsWith('91') && n.length == 12 && RegExp(r'^\d+$').hasMatch(n)) {
+      n = n.substring(2);
+    } else if (n.startsWith('+')) {
+      n = n.substring(1);
+    }
+    return n.trim();
+  }
+
   /// Webphone-compatible number masking: keep the last two digits, `*` the
   /// rest, never mask 1-2 digit numbers, and drop the country prefix so the
   /// UI never shows +91/0091.
   static String maskNumber(String number) {
-    var n = number.trim();
-    if (n.startsWith('+91')) n = n.substring(3);
-    if (n.startsWith('0091')) n = n.substring(4);
+    var n = cleanPhoneNumber(number);
     if (n.isEmpty) return n;
     if (!isNumberMasking()) return n;
     if (n.length <= 2) return n;

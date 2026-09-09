@@ -10,6 +10,7 @@ import '../models/sip_credentials.dart';
 import '../models/call_log_entry.dart';
 import 'remote_audio_stub.dart' if (dart.library.html) 'remote_audio_web.dart';
 import 'call_lifecycle_service.dart';
+import 'ringtone_service.dart';
 import 'fcm_service.dart';
 import 'toast_service.dart';
 import 'user_data.dart';
@@ -142,6 +143,7 @@ class SipSocketService implements sip.SipUaHelperListener {
   SipSocketService._internal() {
     _helper.addSipUaHelperListener(this);
     _platform.setMethodCallHandler(_handleNativeMethodCall);
+    RingtoneService().onNativeEndCall = endCall;
   }
 
   void _log(String msg, {Object? data}) {
@@ -532,9 +534,10 @@ class SipSocketService implements sip.SipUaHelperListener {
       case sip.CallStateEnum.CALL_INITIATION:
         _callEndedHandled = false;
         if (call.direction == sip.Direction.incoming) {
-          final remoteNumber = call.remote_identity ?? 'Unknown';
-          _log('INCOMING CALL from: $remoteNumber');
-          _incomingNumber = remoteNumber;
+          final rawRemote = call.remote_identity ?? 'Unknown';
+          final cleanRemote = UserData.cleanPhoneNumber(rawRemote);
+          _log('INCOMING CALL from: $rawRemote (cleaned: $cleanRemote)');
+          _incomingNumber = cleanRemote;
           _callState = CallState.ringing;
           isVideoCall = call.remote_has_video;
           try {
@@ -552,7 +555,7 @@ class SipSocketService implements sip.SipUaHelperListener {
           // null and this is a no-op on the native side.
           _notifyNative('bindIncomingCall', {
             'callId': _pendingPushCallId ?? '',
-            'number': remoteNumber,
+            'number': cleanRemote,
           });
         }
         break;
@@ -584,7 +587,15 @@ class SipSocketService implements sip.SipUaHelperListener {
         _log('Call CONFIRMED');
         _callState = CallState.onCall;
         _emit(SipEvent.callAnswered);
-        CallLifecycleService().onCallStarted();
+        final displayName = call.remote_display_name;
+        final identity = UserData.cleanPhoneNumber(call.remote_identity ?? _incomingNumber);
+        final callerTitle = (displayName != null && displayName.isNotEmpty)
+            ? UserData.cleanPhoneNumber(displayName)
+            : (identity.isNotEmpty ? identity : 'Active Call');
+        CallLifecycleService().onCallStarted(
+          callerName: callerTitle,
+          callerNumber: identity,
+        );
         _notifyNative('callActive', {'callId': _pendingPushCallId ?? ''});
         unawaited(
           Helper.setSpeakerphoneOn(isVideoCall)
@@ -860,7 +871,10 @@ class SipSocketService implements sip.SipUaHelperListener {
       _isAnswering = false;
       return;
     }
-    CallLifecycleService().onCallStarted();
+    CallLifecycleService().onCallStarted(
+      callerName: _incomingNumber.isNotEmpty ? _incomingNumber : 'Active Call',
+      callerNumber: _incomingNumber,
+    );
   }
 
   Future<void> makeCall(String number) async {
@@ -1874,28 +1888,85 @@ class SipSocketService implements sip.SipUaHelperListener {
   }) async {
     try {
       final username = await _resolveApiUsername();
-      if (username.isEmpty) return null;
-      _log('Sending /useroncall/$username for $phoneNumber...');
+      if (username.isEmpty) {
+        _log('[USERONCALL] Aborted: username is empty');
+        return null;
+      }
+      final cleanNum = UserData.cleanPhoneNumber(phoneNumber);
+      _log('[USERONCALL] Requesting /useroncall/$username for raw: "$phoneNumber", clean: "$cleanNum"');
       final headers = await _getAuthHeaders();
-      final response = await http
+
+      // Primary attempt: clean number without prefix
+      final payload = {
+        'user': username,
+        'phoneNumber': cleanNum,
+        if (leadLockToken != null && leadLockToken.isNotEmpty)
+          'leadLockToken': leadLockToken,
+      };
+      _log('[USERONCALL] Sending POST body: ${jsonEncode(payload)}');
+      var response = await http
           .post(
             Uri.parse('https://app.samvaad.io/useroncall/$username'),
             headers: headers,
-            body: jsonEncode({
-              'user': username,
-              'phoneNumber': phoneNumber,
-              if (leadLockToken != null && leadLockToken.isNotEmpty)
-                'leadLockToken': leadLockToken,
-            }),
+            body: jsonEncode(payload),
           )
           .timeout(const Duration(seconds: 5));
+      _log('[USERONCALL] Response status=${response.statusCode}, body=${response.body}');
+
+      Map<String, dynamic>? data;
       if (response.statusCode == 200) {
-        return jsonDecode(response.body) as Map<String, dynamic>?;
+        try {
+          data = jsonDecode(response.body) as Map<String, dynamic>?;
+        } catch (e) {
+          _log('[USERONCALL] JSON decode error: $e');
+        }
       }
-      ToastService.show('Failed to check user on call');
+
+      // Check if contactData was found
+      final hasContactData = data != null &&
+          data['contactData'] is Map &&
+          (data['contactData'] as Map).isNotEmpty;
+
+      if (!hasContactData) {
+        // Fallback: If not found with cleanNum, try with raw phoneNumber (if different) or +91 prefix
+        final fallbackNum = (phoneNumber != cleanNum && phoneNumber.isNotEmpty)
+            ? phoneNumber
+            : (cleanNum.length == 10 ? '+91$cleanNum' : '');
+        if (fallbackNum.isNotEmpty) {
+          _log('[USERONCALL] contactData not found for "$cleanNum", attempting fallback lookup with "$fallbackNum"...');
+          final fallbackPayload = {
+            'user': username,
+            'phoneNumber': fallbackNum,
+            if (leadLockToken != null && leadLockToken.isNotEmpty)
+              'leadLockToken': leadLockToken,
+          };
+          final fallbackRes = await http
+              .post(
+                Uri.parse('https://app.samvaad.io/useroncall/$username'),
+                headers: headers,
+                body: jsonEncode(fallbackPayload),
+              )
+              .timeout(const Duration(seconds: 5));
+          _log('[USERONCALL] Fallback response status=${fallbackRes.statusCode}, body=${fallbackRes.body}');
+          if (fallbackRes.statusCode == 200) {
+            try {
+              final fallbackData = jsonDecode(fallbackRes.body) as Map<String, dynamic>?;
+              if (fallbackData != null &&
+                  fallbackData['contactData'] is Map &&
+                  (fallbackData['contactData'] as Map).isNotEmpty) {
+                _log('[USERONCALL] Found contactData via fallback: ${fallbackData['contactData']}');
+                data = fallbackData;
+              }
+            } catch (_) {}
+          }
+        }
+      }
+
+      final finalContact = data?['contactData'];
+      _log('[USERONCALL] Final resolved contactData: $finalContact');
+      return data;
     } catch (e) {
-      _log('Error calling /useroncall: $e');
-      ToastService.show('Failed to check user on call');
+      _log('[USERONCALL] Error calling /useroncall: $e');
     }
     return null;
   }
@@ -2099,16 +2170,18 @@ class SipSocketService implements sip.SipUaHelperListener {
   /// static forms submit to.
   Future<bool> addModifyContact(Map<String, dynamic> payload) async {
     try {
-      _log('Submitting /addModifyContact...');
+      final jsonPayload = jsonEncode(payload);
+      _log('[ADD_MODIFY_CONTACT] Submitting payload: $jsonPayload');
       final headers = await _getAuthHeaders();
       final response = await http
           .post(
             Uri.parse('https://app.samvaad.io/addModifyContact'),
             headers: headers,
-            body: jsonEncode(payload),
+            body: jsonPayload,
           )
           .timeout(const Duration(seconds: 8));
       final body = response.body;
+      _log('[ADD_MODIFY_CONTACT] Response status=${response.statusCode}, body=$body');
       var success = false;
       try {
         final decoded = jsonDecode(body);
@@ -2116,10 +2189,9 @@ class SipSocketService implements sip.SipUaHelperListener {
       } catch (_) {
         success = body.contains('"success"') && body.contains('true');
       }
-      _log('addModifyContact response: $body');
       return success;
     } catch (e) {
-      _log('Error in /addModifyContact: $e');
+      _log('[ADD_MODIFY_CONTACT] Error in /addModifyContact: $e');
       return false;
     }
   }

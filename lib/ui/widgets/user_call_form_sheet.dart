@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 
 import '../../services/user_data.dart';
@@ -7,10 +8,7 @@ import '../tokens.dart';
 /// `normalizePhone` util does (`^\+91`), falling back to the app's
 /// `_stripCountryCode` behaviour for `0091` prefixed numbers.
 String _normalizeContactNumber(String value) {
-  var n = value.trim();
-  if (n.startsWith('+91')) n = n.substring(3);
-  if (n.startsWith('0091')) n = n.substring(4);
-  return n;
+  return UserData.cleanPhoneNumber(value);
 }
 
 /// `showUserCallFormSheet` shows the static UserCall contact form that the
@@ -84,6 +82,8 @@ class _UserCallFormSheetState extends State<_UserCallFormSheet> {
 
     // Pre-fill from existing contact data (mirrors web UserCall.jsx)
     final d = widget.initialData;
+    debugPrint('[USER_CALL_FORM] initState: contactNumber="${widget.contactNumber}", initialData keys=${d?.keys.toList()}');
+    debugPrint('[USER_CALL_FORM] Full initialData: $d');
     if (d != null) {
       var first = (d['firstName'] ?? d['first_name'] ?? '').toString().trim();
       var last = (d['lastName'] ?? d['last_name'] ?? '').toString().trim();
@@ -134,6 +134,9 @@ class _UserCallFormSheetState extends State<_UserCallFormSheet> {
               '')
           .toString()
           .trim();
+      debugPrint('[USER_CALL_FORM] Pre-filled static form: firstName="$first", lastName="$last", email="${_emailId.text}", address="${_address.text}"');
+    } else {
+      debugPrint('[USER_CALL_FORM] initialData is null: no static form pre-fill');
     }
   }
 
@@ -191,8 +194,10 @@ class _UserCallFormSheetState extends State<_UserCallFormSheet> {
 
   Future<void> _submit() async {
     if (_submitting) return;
+    final payload = _buildPayload();
+    debugPrint('[USER_CALL_FORM] Submitting static form payload: ${jsonEncode(payload)}');
     setState(() => _submitting = true);
-    final ok = await widget.onSubmit(_buildPayload());
+    final ok = await widget.onSubmit(payload);
     if (!mounted) return;
     if (ok) {
       Navigator.of(context).pop(true);

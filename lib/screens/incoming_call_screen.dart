@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import '../services/sip_socket_service.dart';
 import '../services/ringtone_service.dart';
+import '../services/user_data.dart';
 
 class IncomingCallScreen extends StatefulWidget {
   final String phoneNumber;
@@ -298,8 +299,5 @@ class _IncomingCallScreenState extends State<IncomingCallScreen>
 }
 
 String _stripCountryCode(String number) {
-  var n = number.trim();
-  if (n.startsWith('+91')) n = n.substring(3);
-  if (n.startsWith('0091')) n = n.substring(4);
-  return n;
+  return UserData.cleanPhoneNumber(number);
 }

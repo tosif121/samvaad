@@ -854,8 +854,13 @@ class _DialpadScreenState extends State<DialpadScreen>
   void _fetchContactDataForCall(String phoneNumber) {
     unawaited(() async {
       try {
-        final response = await _sip.fetchUserOnCall(phoneNumber);
-        if (response == null) return;
+        final cleanPhone = UserData.cleanPhoneNumber(phoneNumber);
+        debugPrint('[PREFILL] _fetchContactDataForCall started for raw="$phoneNumber", clean="$cleanPhone"');
+        final response = await _sip.fetchUserOnCall(cleanPhone);
+        if (response == null) {
+          debugPrint('[PREFILL] _fetchContactDataForCall: response is null for $cleanPhone');
+          return;
+        }
 
         // Store bridgeID if returned (web: bridgeIDRef.current = newBridgeID)
         final callData = response['currentcalldata'];
@@ -868,10 +873,12 @@ class _DialpadScreenState extends State<DialpadScreen>
 
         // Store contact data for form pre-fill (web: setUserCall)
         final contactData = response['contactData'];
-        if (contactData is Map) {
+        if (contactData is Map && contactData.isNotEmpty) {
           _lastContactData = Map<String, dynamic>.from(contactData);
-          debugPrint('[PREFILL] Contact data loaded for $phoneNumber: '
-              '${_lastContactData?.keys.toList()}');
+          debugPrint('[PREFILL] Contact data successfully loaded for $cleanPhone: '
+              'keys=${_lastContactData?.keys.toList()} | values=$_lastContactData');
+        } else {
+          debugPrint('[PREFILL] contactData from /useroncall is empty or not Map: $contactData');
         }
       } catch (e) {
         debugPrint('[PREFILL] Error fetching contact data: $e');
@@ -886,6 +893,10 @@ class _DialpadScreenState extends State<DialpadScreen>
     if (!mounted || _dispositionShowing) return;
     _dispositionShowing = true;
     _sip.isPostCallFlowActive = true;
+    final cleanNumber = UserData.cleanPhoneNumber(number);
+    debugPrint('[POST_CALL_FLOW] _runPostCallFlow starting for raw="$number", clean="$cleanNumber"');
+    debugPrint('[POST_CALL_FLOW] Existing _lastContactData in post-call flow: $_lastContactData');
+
     try {
       await _sip.sendCallEnded();
       await Future.delayed(const Duration(milliseconds: 600));
@@ -901,14 +912,21 @@ class _DialpadScreenState extends State<DialpadScreen>
           ? 'incoming'
           : 'outgoing';
       var contactData = _lastContactData;
-      if (contactData == null && number.isNotEmpty) {
+      if (contactData == null && cleanNumber.isNotEmpty) {
         try {
-          final res = await _sip.fetchUserOnCall(number);
-          if (res != null && res['contactData'] is Map) {
+          debugPrint('[POST_CALL_FLOW] _lastContactData is null, fetching /useroncall for $cleanNumber...');
+          final res = await _sip.fetchUserOnCall(cleanNumber);
+          debugPrint('[POST_CALL_FLOW] /useroncall response in post-call flow: $res');
+          if (res != null && res['contactData'] is Map && (res['contactData'] as Map).isNotEmpty) {
             contactData = Map<String, dynamic>.from(res['contactData'] as Map);
             _lastContactData = contactData;
+            debugPrint('[POST_CALL_FLOW] Loaded contactData: $contactData');
+          } else {
+            debugPrint('[POST_CALL_FLOW] No contactData found in /useroncall response');
           }
-        } catch (_) {}
+        } catch (e) {
+          debugPrint('[POST_CALL_FLOW] Error fetching useroncall in postCallFlow: $e');
+        }
       }
       final formResult = await _sip.fetchDynamicFormConfig(callType: callType);
       if (formResult.webformEnabled && mounted) {
@@ -918,11 +936,12 @@ class _DialpadScreenState extends State<DialpadScreen>
           // until the user submits a valid form.
           bool submitted = false;
           while (mounted && !submitted) {
+            debugPrint('[POST_CALL_FLOW] Showing DynamicFormSheet with cleanNumber="$cleanNumber", contactData=$contactData');
             submitted = await showDynamicFormSheet(
               context,
               formConfig: formConfig,
               callType: callType,
-              contactNumber: number,
+              contactNumber: cleanNumber,
               initialData: contactData,
               onSubmit: (payload) => _sip.addModifyContact(payload),
             );
@@ -933,10 +952,11 @@ class _DialpadScreenState extends State<DialpadScreen>
           // mandatory — keep showing until submitted.
           bool submitted = false;
           while (mounted && !submitted) {
+            debugPrint('[POST_CALL_FLOW] Showing UserCallFormSheet with cleanNumber="$cleanNumber", contactData=$contactData');
             submitted = await showUserCallFormSheet(
               context,
               callType: callType,
-              contactNumber: number,
+              contactNumber: cleanNumber,
               initialData: contactData,
               onSubmit: (payload) => _sip.addModifyContact(payload),
             );
@@ -949,11 +969,11 @@ class _DialpadScreenState extends State<DialpadScreen>
         await _sip.submitDisposition(
           bridgeId: bridgeId,
           disposition: 'Auto Disposed',
-          contactNumber: number,
+          contactNumber: cleanNumber,
         );
         return;
       }
-      await _showDispositionSheet(bridgeId: bridgeId, number: number);
+      await _showDispositionSheet(bridgeId: bridgeId, number: cleanNumber);
     } finally {
       _dispositionShowing = false;
       _sip.isPostCallFlowActive = false;
@@ -4544,10 +4564,7 @@ class _CallControlButtonState extends State<_CallControlButton> {
 }
 
 String _stripCountryCode(String number) {
-  var n = number.trim();
-  if (n.startsWith('+91')) n = n.substring(3);
-  if (n.startsWith('0091')) n = n.substring(4);
-  return n;
+  return UserData.cleanPhoneNumber(number);
 }
 
 /// Extracts a lead's phone number. Prefers the explicit number keys the

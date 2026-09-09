@@ -6,11 +6,26 @@ import 'package:flutter/foundation.dart';
 class RingtoneService {
   static final RingtoneService _instance = RingtoneService._internal();
   factory RingtoneService() => _instance;
-  RingtoneService._internal();
+  RingtoneService._internal() {
+    _initMethodCallHandler();
+  }
 
   static const _channel = MethodChannel('com.example.samvaad/ringtone');
   Timer? _fallbackTimer;
   static bool _channelCreated = false;
+  VoidCallback? onNativeEndCall;
+
+  void _initMethodCallHandler() {
+    if (!kIsWeb && Platform.isAndroid) {
+      _channel.setMethodCallHandler((call) async {
+        if (call.method == 'nativeEndCall') {
+          debugPrint('[RingtoneService] Received nativeEndCall from notification');
+          onNativeEndCall?.call();
+        }
+        return null;
+      });
+    }
+  }
 
   Future<void> createRingtoneChannel() async {
     if (_channelCreated) return;
@@ -66,7 +81,46 @@ class RingtoneService {
     }
   }
 
+  Future<void> startCallForeground({
+    String callerName = 'Active Call',
+    String callerNumber = '',
+  }) async {
+    if (!kIsWeb && Platform.isAndroid) {
+      try {
+        await _channel.invokeMethod('startCallForeground', {
+          'callerName': callerName,
+          'callerNumber': callerNumber,
+        });
+      } catch (e) {
+        debugPrint('Error starting CallForegroundService: $e');
+      }
+    }
+  }
+
+  Future<void> stopCallForeground() async {
+    if (!kIsWebPlatform() && Platform.isAndroid) {
+      try {
+        await _channel.invokeMethod('stopCallForeground');
+      } catch (e) {
+        debugPrint('Error stopping CallForegroundService: $e');
+      }
+    }
+  }
+
+  bool kIsWebPlatform() => kIsWeb;
+
+  Future<void> requestIgnoreBatteryOptimizations() async {
+    if (!kIsWeb && Platform.isAndroid) {
+      try {
+        await _channel.invokeMethod('requestIgnoreBatteryOptimizations');
+      } catch (e) {
+        debugPrint('Error requesting ignore battery optimizations: $e');
+      }
+    }
+  }
+
   Future<void> cleanupForegroundService() async {
+    await stopCallForeground();
     if (!kIsWeb && Platform.isAndroid) {
       try {
         await _channel.invokeMethod('cleanupForeground');

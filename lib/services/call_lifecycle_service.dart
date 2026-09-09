@@ -3,6 +3,7 @@ import 'dart:developer' as developer;
 import 'package:flutter/material.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:audio_session/audio_session.dart';
+import 'package:samvaad/services/ringtone_service.dart';
 
 class CallLifecycleService with WidgetsBindingObserver {
   static final CallLifecycleService _instance =
@@ -48,7 +49,10 @@ class CallLifecycleService with WidgetsBindingObserver {
     _log('Audio session configured with Bluetooth & speaker support');
   }
 
-  Future<void> onCallStarted() async {
+  Future<void> onCallStarted({
+    String callerName = 'Active Call',
+    String callerNumber = '',
+  }) async {
     if (_isCallActive) return;
     _isCallActive = true;
     try {
@@ -62,7 +66,15 @@ class CallLifecycleService with WidgetsBindingObserver {
     } catch (e) {
       _log('Failed to enable wakelock: $e');
     }
-    _log('Call started - audio session activated and wakelock acquired');
+    try {
+      await RingtoneService().startCallForeground(
+        callerName: callerName,
+        callerNumber: callerNumber,
+      );
+    } catch (e) {
+      _log('Failed to start call foreground service: $e');
+    }
+    _log('Call started - audio session activated, wakelock acquired, and foreground service started');
   }
 
   Future<void> onCallEnded() async {
@@ -72,6 +84,11 @@ class CallLifecycleService with WidgetsBindingObserver {
       await WakelockPlus.disable();
     } catch (e) {
       _log('Failed to disable wakelock: $e');
+    }
+    try {
+      await RingtoneService().stopCallForeground();
+    } catch (e) {
+      _log('Failed to stop call foreground service: $e');
     }
     try {
       final session = await AudioSession.instance;

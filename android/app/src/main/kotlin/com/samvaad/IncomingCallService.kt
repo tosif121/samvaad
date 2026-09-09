@@ -20,9 +20,20 @@ class IncomingCallService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    private fun cleanNumber(number: String): String {
+        var n = number.trim()
+        if (n.startsWith("+91")) n = n.substring(3)
+        if (n.startsWith("0091")) n = n.substring(4)
+        if (n.startsWith("91") && n.length == 12 && n.all { it.isDigit() }) n = n.substring(2)
+        if (n.startsWith("+")) n = n.substring(1)
+        return n.trim()
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val callerName = intent?.getStringExtra("caller_name") ?: "Unknown Caller"
-        val callerNumber = intent?.getStringExtra("fcm_number") ?: ""
+        val rawCallerName = intent?.getStringExtra("caller_name") ?: "Unknown Caller"
+        val rawCallerNumber = intent?.getStringExtra("fcm_number") ?: ""
+        val callerName = cleanNumber(rawCallerName)
+        val callerNumber = cleanNumber(rawCallerNumber)
 
         Log.d(TAG, "IncomingCallService started for $callerName ($callerNumber)")
 
