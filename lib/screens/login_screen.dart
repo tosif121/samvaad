@@ -368,17 +368,36 @@ class _LoginScreenState extends State<LoginScreen> {
                               width: double.infinity,
                               height: 56,
                               child: ElevatedButton(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: cs.primary,
+                                  foregroundColor: Colors.white,
+                                  disabledBackgroundColor:
+                                      cs.primary.withValues(alpha: 0.6),
+                                  disabledForegroundColor: Colors.white70,
+                                  elevation: 2,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(14),
+                                  ),
+                                ),
                                 onPressed: _connecting ? null : _login,
                                 child: _connecting
-                                    ? SizedBox(
+                                    ? const SizedBox(
                                         width: 24,
                                         height: 24,
                                         child: CircularProgressIndicator(
-                                          strokeWidth: 3,
-                                          color: cs.onPrimary,
+                                          strokeWidth: 2.5,
+                                          color: Colors.white,
                                         ),
                                       )
-                                    : const Text('Login'),
+                                    : const Text(
+                                        'Login',
+                                        style: TextStyle(
+                                          fontSize: 18,
+                                          fontWeight: FontWeight.bold,
+                                          color: Colors.white,
+                                          letterSpacing: 0.5,
+                                        ),
+                                      ),
                               ),
                             ),
                           ],
