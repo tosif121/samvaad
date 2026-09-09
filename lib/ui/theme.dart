@@ -153,7 +153,7 @@ abstract final class SamvaadTheme {
           elevation: 0,
           padding: const EdgeInsets.symmetric(
             horizontal: AppSpacing.xxl,
-            vertical: AppSpacing.lg,
+            vertical: AppSpacing.sm,
           ),
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(AppRadii.lg),

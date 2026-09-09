@@ -375,6 +375,8 @@ class _LoginScreenState extends State<LoginScreen> {
                                       cs.primary.withValues(alpha: 0.6),
                                   disabledForegroundColor: Colors.white70,
                                   elevation: 2,
+                                  padding: EdgeInsets.zero,
+                                  alignment: Alignment.center,
                                   shape: RoundedRectangleBorder(
                                     borderRadius: BorderRadius.circular(14),
                                   ),
@@ -389,13 +391,16 @@ class _LoginScreenState extends State<LoginScreen> {
                                           color: Colors.white,
                                         ),
                                       )
-                                    : const Text(
-                                        'Login',
-                                        style: TextStyle(
-                                          fontSize: 18,
-                                          fontWeight: FontWeight.bold,
-                                          color: Colors.white,
-                                          letterSpacing: 0.5,
+                                    : const Center(
+                                        child: Text(
+                                          'Login',
+                                          textAlign: TextAlign.center,
+                                          style: TextStyle(
+                                            fontSize: 18,
+                                            fontWeight: FontWeight.bold,
+                                            color: Colors.white,
+                                            letterSpacing: 0.5,
+                                          ),
                                         ),
                                       ),
                               ),
