@@ -24,7 +24,7 @@ class CallKitService {
     final CallKitParams params = CallKitParams(
       id: uuid,
       nameCaller: callerName.isNotEmpty ? callerName : 'Incoming Call',
-      appName: 'Samvaad',
+      appName: 'Samwad',
       avatar: 'assets/app_icon.png',
       handle: callerNumber.isNotEmpty ? callerNumber : 'Samvaad Call',
       type: 0, // 0: Audio Call, 1: Video Call

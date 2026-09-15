@@ -1,4 +1,4 @@
-package com.samvaad
+package com.samwad.iotcom
 
 import android.content.Context
 import android.content.Intent

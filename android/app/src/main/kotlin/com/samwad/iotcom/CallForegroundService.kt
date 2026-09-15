@@ -1,4 +1,4 @@
-package com.samvaad
+package com.samwad.iotcom
 
 import android.Manifest
 import android.app.Notification
@@ -93,7 +93,7 @@ class CallForegroundService : Service() {
 
     private fun showOnlineNotification(username: String) {
         currentMode = MODE_ONLINE
-        val channelId = "samvaad_online_channel"
+        val channelId = "samwad_online_channel"
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -102,7 +102,7 @@ class CallForegroundService : Service() {
                 "Online Status",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Keeps Samvaad connected for incoming calls"
+                description = "Keeps Samwad connected for incoming calls"
                 setSound(null, null)
                 enableVibration(false)
                 setShowBadge(false)
@@ -127,7 +127,7 @@ class CallForegroundService : Service() {
 
         val notification = NotificationCompat.Builder(this, channelId)
             .setSmallIcon(android.R.drawable.stat_notify_sync)
-            .setContentTitle("Samvaad • Online")
+            .setContentTitle("Samwad • Online")
             .setContentText("Connected as $username — Ready for calls")
             .setContentIntent(contentPendingIntent)
             .setOngoing(true)
@@ -149,7 +149,7 @@ class CallForegroundService : Service() {
 
     private fun showCallNotification(callerName: String, callerNumber: String) {
         currentMode = MODE_CALL
-        val channelId = "samvaad_active_call_channel"
+        val channelId = "samwad_active_call_channel"
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -239,7 +239,7 @@ class CallForegroundService : Service() {
                 val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
                 wakeLock = powerManager.newWakeLock(
                     PowerManager.PARTIAL_WAKE_LOCK,
-                    "Samvaad:ForegroundWakeLock"
+                    "Samwad:ForegroundWakeLock"
                 ).apply {
                     setReferenceCounted(false)
                     acquire()
@@ -256,7 +256,7 @@ class CallForegroundService : Service() {
                 @Suppress("DEPRECATION")
                 wifiLock = wifiManager.createWifiLock(
                     WifiManager.WIFI_MODE_FULL_HIGH_PERF,
-                    "Samvaad:ForegroundWifiLock"
+                    "Samwad:ForegroundWifiLock"
                 ).apply {
                     setReferenceCounted(false)
                     acquire()
@@ -320,11 +320,11 @@ class CallForegroundService : Service() {
         const val MODE_ONLINE = 1
         const val MODE_CALL = 2
 
-        const val ACTION_START_ONLINE = "com.samvaad.action.START_ONLINE"
-        const val ACTION_START_CALL = "com.samvaad.action.START_CALL"
-        const val ACTION_END_CALL_BACK_TO_ONLINE = "com.samvaad.action.END_CALL_BACK_TO_ONLINE"
-        const val ACTION_STOP = "com.samvaad.action.STOP"
-        const val ACTION_END_CALL_FROM_NOTIFICATION = "com.samvaad.action.END_CALL_FROM_NOTIFICATION"
+        const val ACTION_START_ONLINE = "com.samwad.iotcom.action.START_ONLINE"
+        const val ACTION_START_CALL = "com.samwad.iotcom.action.START_CALL"
+        const val ACTION_END_CALL_BACK_TO_ONLINE = "com.samwad.iotcom.action.END_CALL_BACK_TO_ONLINE"
+        const val ACTION_STOP = "com.samwad.iotcom.action.STOP"
+        const val ACTION_END_CALL_FROM_NOTIFICATION = "com.samwad.iotcom.action.END_CALL_FROM_NOTIFICATION"
 
         const val EXTRA_USERNAME = "username"
         const val EXTRA_CALLER_NAME = "caller_name"

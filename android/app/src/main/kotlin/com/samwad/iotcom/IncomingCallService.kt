@@ -1,4 +1,4 @@
-package com.samvaad
+package com.samwad.iotcom
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -58,7 +58,7 @@ class IncomingCallService : Service() {
                 PowerManager.SCREEN_BRIGHT_WAKE_LOCK or
                         PowerManager.ACQUIRE_CAUSES_WAKEUP or
                         PowerManager.ON_AFTER_RELEASE,
-                "Samvaad:CallServiceWakeLock"
+                "Samwad:CallServiceWakeLock"
             )
             wakeLock.acquire(10000)
             wakeLock.release()
@@ -83,7 +83,7 @@ class IncomingCallService : Service() {
         }
         return NotificationCompat.Builder(this, channelId)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setContentTitle("Samvaad")
+            .setContentTitle("Samwad")
             .setContentText("Handling incoming call...")
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)

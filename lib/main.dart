@@ -56,7 +56,7 @@ class SamvaadApp extends StatelessWidget {
       valueListenable: ThemeController.instance.mode,
       builder: (context, mode, _) {
         return MaterialApp(
-          title: 'Samvaad',
+          title: 'Samwad',
           debugShowCheckedModeBanner: false,
           scaffoldMessengerKey: ToastService.messengerKey,
           theme: SamvaadTheme.light(),
