@@ -1673,53 +1673,62 @@ class _DialpadScreenState extends State<DialpadScreen>
             border: Border.all(color: cs.outline.withValues(alpha: 0.5)),
           ),
           constraints: const BoxConstraints(minHeight: 64),
-          child: TextField(
-            controller: _phoneController,
-            focusNode: _phoneFocusNode,
-            readOnly: true,
-            showCursor: false,
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontSize: AppType.display - 2,
-              fontWeight: FontWeight.w800,
-              letterSpacing: 3,
-              color: cs.onSurface,
-            ),
-            decoration: InputDecoration(
-              border: InputBorder.none,
-              enabledBorder: InputBorder.none,
-              focusedBorder: InputBorder.none,
-              filled: false,
-              hintText: 'Enter number',
-              hintStyle: TextStyle(
-                color: cs.onSurface.withValues(alpha: 0.25),
-                fontSize: AppType.heading,
-                letterSpacing: 0,
-                fontWeight: FontWeight.w500,
-              ),
-              suffixIcon: GestureDetector(
-                onTap: _onDeleteTap,
-                onLongPress: _onClearTap,
-                child: Container(
-                  margin: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: cs.surfaceContainer,
-                    shape: BoxShape.circle,
-                    border: Border.all(
-                      color: cs.outline.withValues(alpha: 0.4),
-                    ),
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              TextField(
+                controller: _phoneController,
+                focusNode: _phoneFocusNode,
+                readOnly: true,
+                showCursor: false,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: AppType.display - 4,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 3,
+                  color: cs.onSurface,
+                ),
+                decoration: InputDecoration(
+                  border: InputBorder.none,
+                  enabledBorder: InputBorder.none,
+                  focusedBorder: InputBorder.none,
+                  filled: false,
+                  hintText: 'Enter number',
+                  hintStyle: TextStyle(
+                    color: cs.onSurface.withValues(alpha: 0.25),
+                    fontSize: AppType.heading,
+                    letterSpacing: 0,
+                    fontWeight: FontWeight.w500,
                   ),
-                  child: Icon(
-                    Icons.backspace_outlined,
-                    size: 20,
-                    color: _phoneController.text.isEmpty
-                        ? cs.onSurface.withValues(alpha: 0.15)
-                        : cs.onSurface.withValues(alpha: 0.5),
+                  // Left space is used so 10 digits fit at 28px;
+                  // right side keeps room for the overlaid backspace button.
+                  contentPadding: const EdgeInsets.only(
+                    left: 16,
+                    right: 48,
+                    top: 16,
+                    bottom: 16,
+                  ),
+                ),
+                onChanged: (_) => setState(() {}),
+              ),
+              Positioned(
+                right: 0,
+                child: GestureDetector(
+                  onTap: _onDeleteTap,
+                  onLongPress: _onClearTap,
+                  child: Padding(
+                    padding: const EdgeInsets.all(8),
+                    child: Icon(
+                      Icons.backspace_outlined,
+                      size: 20,
+                      color: _phoneController.text.isEmpty
+                          ? cs.onSurface.withValues(alpha: 0.15)
+                          : cs.onSurface.withValues(alpha: 0.5),
+                    ),
                   ),
                 ),
               ),
-            ),
-            onChanged: (_) => setState(() {}),
+            ],
           ),
         ),
       ],
@@ -4436,8 +4445,14 @@ class _DialpadScreenState extends State<DialpadScreen>
                   ),
                 ),
               ),
-              if (_dtmfNumber.isNotEmpty)
-                IconButton(
+              // Button space is always reserved so typed digits stay
+              // truly centered instead of jumping left on first keypress.
+              Visibility(
+                visible: _dtmfNumber.isNotEmpty,
+                maintainSize: true,
+                maintainAnimation: true,
+                maintainState: true,
+                child: IconButton(
                   iconSize: 24,
                   icon: const Icon(Icons.backspace_outlined),
                   onPressed: () => setState(
@@ -4448,6 +4463,7 @@ class _DialpadScreenState extends State<DialpadScreen>
                   ),
                   color: cs.onSurface.withValues(alpha: 0.5),
                 ),
+              ),
             ],
           ),
         ),
@@ -4524,8 +4540,14 @@ class _DialpadScreenState extends State<DialpadScreen>
                   ),
                 ),
               ),
-              if (_conferenceNumber.isNotEmpty)
-                IconButton(
+              // Button space is always reserved so typed digits stay
+              // truly centered instead of jumping left on first keypress.
+              Visibility(
+                visible: _conferenceNumber.isNotEmpty,
+                maintainSize: true,
+                maintainAnimation: true,
+                maintainState: true,
+                child: IconButton(
                   icon: const Icon(Icons.backspace_outlined),
                   onPressed: () => setState(
                     () => _conferenceNumber = _conferenceNumber.substring(
@@ -4535,6 +4557,7 @@ class _DialpadScreenState extends State<DialpadScreen>
                   ),
                   color: cs.onSurface.withValues(alpha: 0.5),
                 ),
+              ),
             ],
           ),
         ),

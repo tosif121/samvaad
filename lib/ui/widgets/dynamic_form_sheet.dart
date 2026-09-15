@@ -116,6 +116,35 @@ class _DynamicFormSheetState extends State<_DynamicFormSheet> {
   final Map<String, String> _errors = {};
   bool _submitting = false;
 
+  /// Controllers cached per field so rebuilds (every keystroke calls
+  /// setState via _setValue) don't recreate them and yank the cursor
+  /// back to the start of prefilled text.
+  final Map<String, TextEditingController> _controllers = {};
+
+  TextEditingController _controllerFor(String name) {
+    final current = _values[name]?.toString() ?? '';
+    var c = _controllers[name];
+    if (c == null) {
+      c = TextEditingController(text: current);
+      _controllers[name] = c;
+    } else if (c.text != current) {
+      // External value change (prefill/refresh) — adopt it, cursor to end.
+      c.value = TextEditingValue(
+        text: current,
+        selection: TextSelection.collapsed(offset: current.length),
+      );
+    }
+    return c;
+  }
+
+  @override
+  void dispose() {
+    for (final c in _controllers.values) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -622,9 +651,7 @@ class _DynamicFormSheetState extends State<_DynamicFormSheet> {
     final name = _fieldName(field);
     final label = _labelOf(field);
     final icon = _fieldIcon(label, name, _fieldType(field));
-    final controller = TextEditingController(
-      text: _values[name]?.toString() ?? '',
-    );
+    final controller = _controllerFor(name);
     final hint = role == 'callerName' ? 'Caller Name' : 'Alternate Number';
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
@@ -658,9 +685,7 @@ class _DynamicFormSheetState extends State<_DynamicFormSheet> {
     final label = _labelOf(field);
     final cs = Theme.of(context).colorScheme;
     final err = _errors[name];
-    final controller = TextEditingController(
-      text: _values[name]?.toString() ?? '',
-    );
+    final controller = _controllerFor(name);
     final keyboardType = switch (type) {
       'email' => TextInputType.emailAddress,
       'phone' => TextInputType.phone,
@@ -701,9 +726,7 @@ class _DynamicFormSheetState extends State<_DynamicFormSheet> {
     final label = _labelOf(field);
     final cs = Theme.of(context).colorScheme;
     final err = _errors[name];
-    final controller = TextEditingController(
-      text: _values[name]?.toString() ?? '',
-    );
+    final controller = _controllerFor(name);
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: Column(
