@@ -592,6 +592,10 @@ class _DialpadScreenState extends State<DialpadScreen>
           if (mounted) setState(() {});
           break;
 
+        case 'agentStatusChanged':
+          if (mounted) setState(() {});
+          break;
+
         case 'registrationFailed':
           final regCause = (event['cause'] ?? '').toString();
           final authFailed = regCause.contains('401') ||
@@ -3628,7 +3632,25 @@ class _DialpadScreenState extends State<DialpadScreen>
           icon: Icons.queue_rounded,
           iconColor: cs.primary,
           title: 'Calls in Queue',
-          value: _sip.queueCount > 0 ? '$_sip.queueCount' : 'None',
+          value: _sip.queueCount > 0 ? '${_sip.queueCount}' : 'None',
+          trailing: _sip.queueCount > 0
+              ? Icon(
+                  Icons.chevron_right_rounded,
+                  color: cs.onSurface.withValues(alpha: 0.4),
+                )
+              : null,
+          onTap: () {
+            if (_sip.queueCount > 0) {
+              _showQueueSheet();
+            } else if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('No calls in queue'),
+                  duration: Duration(seconds: 2),
+                ),
+              );
+            }
+          },
         ),
         const SizedBox(height: AppSpacing.md),
         SizedBox(

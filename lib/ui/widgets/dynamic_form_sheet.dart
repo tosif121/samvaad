@@ -156,15 +156,32 @@ class _DynamicFormSheetState extends State<_DynamicFormSheet> {
         if (field is! Map) continue;
         final name = _fieldName(field);
         if (name.isEmpty) continue;
-        dynamic val = d[name];
-        if (val == null || val.toString().trim().isEmpty) {
-          final normalizedName = name.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '').toLowerCase();
-          for (final entry in d.entries) {
-            final k = entry.key.toString().replaceAll(RegExp(r'[^a-zA-Z0-9]'), '').toLowerCase();
-            if (k == normalizedName) {
-              val = entry.value;
-              break;
-            }
+        // 1. System-role value first (webphone getSystemFieldValue).
+        final sysValue = _systemFieldValue(field, d);
+        if (sysValue != null && sysValue.trim().isNotEmpty) {
+          _values[name] = sysValue;
+          debugPrint('[DYNAMIC_FORM] Pre-filled field "$name" => "$sysValue" (system role)');
+          continue;
+        }
+        // 2. Three-level lead lookup (webphone getUserCallValue).
+        dynamic val = _leadValue(d, name);
+        if (val != null && val.toString().trim().isNotEmpty) {
+          final type = _fieldType(field);
+          final role = _systemRole(field);
+          // 3. Phone normalize (webphone normalizePhone).
+          if (type == 'phone' ||
+              role == 'callerNumber' ||
+              role == 'alternateNumber') {
+            val = _normalizePhone(val.toString());
+          }
+          // 4. Select/radio/checkbox option matching (webphone).
+          if (val is String &&
+              (type == 'select' ||
+                  type == 'radio' ||
+                  type == 'checkbox' ||
+                  type == 'multiple-options' ||
+                  type == 'single-checkbox')) {
+            val = _matchOption(field, val) ?? val;
           }
         }
         if (val != null && val.toString().trim().isNotEmpty) {
@@ -176,6 +193,93 @@ class _DynamicFormSheetState extends State<_DynamicFormSheet> {
     } else {
       debugPrint('[DYNAMIC_FORM] initialData is null: cannot pre-fill form');
     }
+  }
+
+  /// Webphone normalizePhone: strip +91.
+  String _normalizePhone(String v) =>
+      v.replaceFirst(RegExp(r'^\+91'), '').trim();
+
+  /// Webphone getUserCallValue: exact key -> case-insensitive ->
+  /// fuzzy substring (either direction, key length > 2).
+  dynamic _leadValue(Map<String, dynamic> d, String fieldName) {
+    if (d.containsKey(fieldName)) return d[fieldName];
+    final searchKey = fieldName.trim().toLowerCase();
+    for (final entry in d.entries) {
+      if (entry.key.toString().trim().toLowerCase() == searchKey) {
+        return entry.value;
+      }
+    }
+    for (final entry in d.entries) {
+      final k = entry.key.toString().trim().toLowerCase();
+      if (k.length > 2 && (searchKey.contains(k) || k.contains(searchKey))) {
+        return entry.value;
+      }
+    }
+    return null;
+  }
+
+  /// Case-insensitive direct key read (no fuzzy), for system names.
+  String _directValue(Map<String, dynamic> d, List<String> keys) {
+    for (final k in keys) {
+      if (d.containsKey(k)) {
+        final v = d[k]?.toString().trim() ?? '';
+        if (v.isNotEmpty) return v;
+      }
+    }
+    for (final k in keys) {
+      final search = k.toLowerCase();
+      for (final entry in d.entries) {
+        if (entry.key.toString().trim().toLowerCase() == search) {
+          final v = entry.value?.toString().trim() ?? '';
+          if (v.isNotEmpty) return v;
+        }
+      }
+    }
+    return '';
+  }
+
+  /// Webphone getSystemFieldValue: callerNumber <- call contactNumber,
+  /// callerName <- callerName/caller_name/firstName, alternateNumber <- lead.
+  String? _systemFieldValue(Map field, Map<String, dynamic> d) {
+    final role = _systemRole(field);
+    if (role.isEmpty) return null;
+    if (role == 'callerNumber') {
+      final v = _normalizePhone(widget.contactNumber);
+      return v.isEmpty ? null : v;
+    }
+    if (role == 'callerName') {
+      final v = _directValue(d, ['callerName', 'caller_name', 'firstName']);
+      return v.isEmpty ? null : v;
+    }
+    if (role == 'alternateNumber') {
+      final v = _directValue(d, ['alternateNumber', 'alternate_number']);
+      if (v.isEmpty) return null;
+      final n = _normalizePhone(v);
+      return n.isEmpty ? null : n;
+    }
+    return null;
+  }
+
+  /// Webphone select/option matching: lead value -> option value
+  /// (case-insensitive); stores the option's display label.
+  String? _matchOption(Map field, String value) {
+    final search = value.trim().toLowerCase();
+    if (search.isEmpty) return null;
+    final options = (field['options'] as List?) ?? const [];
+    for (final o in options) {
+      String? optValue;
+      String? display;
+      if (o is Map) {
+        optValue = (o['value'] ?? o['label'])?.toString();
+        display = _optionLabel(o);
+      } else {
+        optValue = display = o.toString();
+      }
+      if (optValue != null && optValue.trim().toLowerCase() == search) {
+        return display ?? optValue;
+      }
+    }
+    return null;
   }
 
   Map<String, dynamic> get _formConfig => widget.formConfig;
@@ -205,25 +309,37 @@ class _DynamicFormSheetState extends State<_DynamicFormSheet> {
       (field['type'] ?? 'text').toString().toLowerCase();
 
   /// Webphone `systemField` roles: callerNumber / callerName / alternateNumber.
+  /// Mirrors getFieldSystemRole: explicit systemField first, then
+  /// normalized name / label heuristics.
   String _systemRole(Map field) {
     final sf = (field['systemField'] ?? '').toString().toLowerCase();
     if (sf.isNotEmpty) return sf;
-    final name = _fieldName(field).toLowerCase();
-    final label = _labelOf(field).toLowerCase();
-    if (name.contains('callernumber') ||
-        name.contains('contactnumber') ||
+    final name = _fieldName(field).trim().toLowerCase();
+    final label = _labelOf(field).trim().toLowerCase();
+    if (name == 'contactnumber' ||
+        name == 'callernumber' ||
+        name == 'mobile_no' ||
+        name == 'mobileno' ||
         name == 'number' ||
+        name.contains('callernumber') ||
+        name.contains('contactnumber') ||
         label.contains('caller number') ||
-        label.contains('contact number')) {
+        label.contains('contact number') ||
+        label.contains('mobile no') ||
+        label == 'mobile') {
       return 'callerNumber';
     }
-    if (name.contains('alternatenumber') ||
-        label.contains('alternate number') ||
-        label.contains('alt number')) {
-      return 'alternateNumber';
-    }
-    if (name.contains('callername') || label.contains('caller name')) {
+    if (name == 'caller_name' ||
+        name == 'callername' ||
+        name.contains('callername') ||
+        label.contains('caller name')) {
       return 'callerName';
+    }
+    if (name == 'alternatenumber' ||
+        name == 'alternate_number' ||
+        name.contains('alternatenumber') ||
+        label.contains('alternate')) {
+      return 'alternateNumber';
     }
     return '';
   }
