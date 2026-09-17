@@ -19,7 +19,7 @@ Samvaad is a robust Flutter SIP client application that supports both audio and 
 - **Missed Calls**: Polled every 30s from `/userMissedCalls/{username}`, grouped by caller with one-tap call-back (`/dialmissedcall`); 12-hour timestamps from the API when available.
 - **Follow-up Calls**: Scheduled callbacks parsed from `followUpDispoes` (`/userconnection`), with call-back that marks them complete (`/callback/update-status`).
 - **Take Break**: Break options loaded from the login token (`userData.breakoptions`) with contextual icons and a live elapsed timer; set/remove via the `/user/breakuser:{username}` and `/user/removebreakuser:{username}` endpoints.
-- **Call Disposition**: Post-call disposition sheet with auto-dispose fallback (`Auto Disposed`); when webforms are enabled a mandatory contact form (dynamic form, or a static UserCall-style form) is shown first.
+- **Call Disposition & Dynamic Forms**: Post-call disposition sheet with auto-dispose fallback (`Auto Disposed`); when webforms are enabled a mandatory contact form (dynamic form, or a static UserCall-style form) is shown first. Contact summary and conversation records from `/contact/:number/summary` are fetched to pre-fill conversation-specific dynamic fields, and active call `bridgeId` is bound as `callReference` upon submission.
 - **Call Source / Contact Info**: Dial-source modal and contact info surfaced from the call context API.
 
 ## Getting Started

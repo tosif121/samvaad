@@ -917,20 +917,34 @@ class _DialpadScreenState extends State<DialpadScreen>
           ? 'incoming'
           : 'outgoing';
       var contactData = _lastContactData;
-      if (contactData == null && cleanNumber.isNotEmpty) {
+      Map<String, dynamic>? latestConversation;
+
+      if (cleanNumber.isNotEmpty) {
         try {
-          debugPrint('[POST_CALL_FLOW] _lastContactData is null, fetching /useroncall for $cleanNumber...');
-          final res = await _sip.fetchUserOnCall(cleanNumber);
-          debugPrint('[POST_CALL_FLOW] /useroncall response in post-call flow: $res');
-          if (res != null && res['contactData'] is Map && (res['contactData'] as Map).isNotEmpty) {
-            contactData = Map<String, dynamic>.from(res['contactData'] as Map);
-            _lastContactData = contactData;
-            debugPrint('[POST_CALL_FLOW] Loaded contactData: $contactData');
-          } else {
-            debugPrint('[POST_CALL_FLOW] No contactData found in /useroncall response');
+          final summary = await _sip.fetchContactSummary(cleanNumber);
+          if (summary != null) {
+            if (summary['latestConversation'] is Map) {
+              latestConversation = Map<String, dynamic>.from(summary['latestConversation'] as Map);
+              debugPrint('[POST_CALL_FLOW] Loaded latestConversation keys: ${latestConversation.keys.toList()}');
+            }
+            if (contactData == null && summary['contact'] is Map) {
+              contactData = Map<String, dynamic>.from(summary['contact'] as Map);
+              _lastContactData = contactData;
+              debugPrint('[POST_CALL_FLOW] Loaded contactData from summary: $contactData');
+            }
+          }
+          if (contactData == null) {
+            debugPrint('[POST_CALL_FLOW] _lastContactData is null, fetching /useroncall for $cleanNumber...');
+            final res = await _sip.fetchUserOnCall(cleanNumber);
+            debugPrint('[POST_CALL_FLOW] /useroncall response in post-call flow: $res');
+            if (res != null && res['contactData'] is Map && (res['contactData'] as Map).isNotEmpty) {
+              contactData = Map<String, dynamic>.from(res['contactData'] as Map);
+              _lastContactData = contactData;
+              debugPrint('[POST_CALL_FLOW] Loaded contactData: $contactData');
+            }
           }
         } catch (e) {
-          debugPrint('[POST_CALL_FLOW] Error fetching useroncall in postCallFlow: $e');
+          debugPrint('[POST_CALL_FLOW] Error fetching contact details in postCallFlow: $e');
         }
       }
       final formResult = await _sip.fetchDynamicFormConfig(callType: callType);
@@ -941,13 +955,15 @@ class _DialpadScreenState extends State<DialpadScreen>
           // until the user submits a valid form.
           bool submitted = false;
           while (mounted && !submitted) {
-            debugPrint('[POST_CALL_FLOW] Showing DynamicFormSheet with cleanNumber="$cleanNumber", contactData=$contactData');
+            debugPrint('[POST_CALL_FLOW] Showing DynamicFormSheet with cleanNumber="$cleanNumber", contactData=$contactData, conversation=$latestConversation');
             submitted = await showDynamicFormSheet(
               context,
               formConfig: formConfig,
               callType: callType,
               contactNumber: cleanNumber,
               initialData: contactData,
+              initialConversationData: latestConversation,
+              callReference: bridgeId,
               onSubmit: (payload) => _sip.addModifyContact(payload),
             );
           }
@@ -963,6 +979,7 @@ class _DialpadScreenState extends State<DialpadScreen>
               callType: callType,
               contactNumber: cleanNumber,
               initialData: contactData,
+              callReference: bridgeId,
               onSubmit: (payload) => _sip.addModifyContact(payload),
             );
           }

@@ -2074,6 +2074,33 @@ class SipSocketService implements sip.SipUaHelperListener {
     return null;
   }
 
+  Future<Map<String, dynamic>?> fetchContactSummary(String phoneNumber) async {
+    try {
+      final cleanNum = UserData.cleanPhoneNumber(phoneNumber);
+      if (cleanNum.isEmpty) return null;
+      _log('[CONTACT_SUMMARY] Requesting /contact/$cleanNum/summary');
+      final headers = await _getAuthHeaders();
+      final response = await http
+          .get(
+            Uri.parse('https://app.samvaad.io/contact/${Uri.encodeComponent(cleanNum)}/summary'),
+            headers: headers,
+          )
+          .timeout(const Duration(seconds: 6));
+      _log('[CONTACT_SUMMARY] Response status=${response.statusCode}');
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map && decoded['result'] is Map) {
+          final result = Map<String, dynamic>.from(decoded['result'] as Map);
+          _log('[CONTACT_SUMMARY] Fetched contact summary with keys: ${result.keys.toList()}');
+          return result;
+        }
+      }
+    } catch (e) {
+      _log('[CONTACT_SUMMARY] Error fetching contact summary: $e');
+    }
+    return null;
+  }
+
   Future<void> sendCallEnded({
     String? leadLockToken,
     String callType = 'Manual',

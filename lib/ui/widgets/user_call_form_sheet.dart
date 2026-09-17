@@ -24,6 +24,7 @@ Future<bool> showUserCallFormSheet(
   required String callType,
   required String contactNumber,
   Map<String, dynamic>? initialData,
+  String? callReference,
   required Future<bool> Function(Map<String, dynamic> payload) onSubmit,
 }) {
   return showModalBottomSheet<bool>(
@@ -37,6 +38,7 @@ Future<bool> showUserCallFormSheet(
         callType: callType,
         contactNumber: _normalizeContactNumber(contactNumber),
         initialData: initialData,
+        callReference: callReference,
         onSubmit: onSubmit,
       ),
     ),
@@ -48,12 +50,14 @@ class _UserCallFormSheet extends StatefulWidget {
     required this.callType,
     required this.contactNumber,
     this.initialData,
+    this.callReference,
     required this.onSubmit,
   });
 
   final String callType;
   final String contactNumber;
   final Map<String, dynamic>? initialData;
+  final String? callReference;
   final Future<bool> Function(Map<String, dynamic> payload) onSubmit;
 
   @override
@@ -171,7 +175,7 @@ class _UserCallFormSheetState extends State<_UserCallFormSheet> {
         'formType': widget.callType,
         'callType': widget.callType,
         'entryMode': 'call',
-        'callReference': '',
+        'callReference': widget.callReference ?? '',
       },
       'data': {
         'firstName': _firstName.text.trim(),

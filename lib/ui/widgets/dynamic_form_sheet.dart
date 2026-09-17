@@ -70,6 +70,8 @@ Future<bool> showDynamicFormSheet(
   required String callType, // 'outgoing' | 'incoming'
   required String contactNumber,
   Map<String, dynamic>? initialData,
+  Map<String, dynamic>? initialConversationData,
+  String? callReference,
   required Future<bool> Function(Map<String, dynamic> payload) onSubmit,
 }) {
   final cleanNumber = UserData.cleanPhoneNumber(contactNumber);
@@ -86,6 +88,8 @@ Future<bool> showDynamicFormSheet(
         callType: callType,
         contactNumber: cleanNumber,
         initialData: initialData,
+        initialConversationData: initialConversationData,
+        callReference: callReference,
         onSubmit: onSubmit,
       ),
     ),
@@ -98,6 +102,8 @@ class _DynamicFormSheet extends StatefulWidget {
     required this.callType,
     required this.contactNumber,
     this.initialData,
+    this.initialConversationData,
+    this.callReference,
     required this.onSubmit,
   });
 
@@ -105,6 +111,8 @@ class _DynamicFormSheet extends StatefulWidget {
   final String callType;
   final String contactNumber;
   final Map<String, dynamic>? initialData;
+  final Map<String, dynamic>? initialConversationData;
+  final String? callReference;
   final Future<bool> Function(Map<String, dynamic> payload) onSubmit;
 
   @override
@@ -149,32 +157,47 @@ class _DynamicFormSheetState extends State<_DynamicFormSheet> {
   void initState() {
     super.initState();
     final d = widget.initialData;
-    debugPrint('[DYNAMIC_FORM] initState: contactNumber="${widget.contactNumber}", initialData keys=${d?.keys.toList()}');
-    debugPrint('[DYNAMIC_FORM] Full initialData: $d');
-    if (d != null) {
+    final conv = widget.initialConversationData;
+    debugPrint('[DYNAMIC_FORM] initState: contactNumber="${widget.contactNumber}", dKeys=${d?.keys.toList()}, convKeys=${conv?.keys.toList()}');
+    if (d != null || conv != null) {
       for (final field in _allFields) {
         if (field is! Map) continue;
         final name = _fieldName(field);
         if (name.isEmpty) continue;
-        // 1. System-role value first (webphone getSystemFieldValue).
-        final sysValue = _systemFieldValue(field, d);
-        if (sysValue != null && sysValue.trim().isNotEmpty) {
-          _values[name] = sysValue;
-          debugPrint('[DYNAMIC_FORM] Pre-filled field "$name" => "$sysValue" (system role)');
-          continue;
+
+        final storage = (field['storageTarget'] ?? '').toString().toLowerCase();
+        final isConversation = storage == 'conversation';
+
+        // 1. System-role value first (from contact data)
+        if (d != null) {
+          final sysValue = _systemFieldValue(field, d);
+          if (sysValue != null && sysValue.trim().isNotEmpty) {
+            _values[name] = sysValue;
+            debugPrint('[DYNAMIC_FORM] Pre-filled field "$name" => "$sysValue" (system role)');
+            continue;
+          }
         }
-        // 2. Three-level lead lookup (webphone getUserCallValue).
-        dynamic val = _leadValue(d, name);
+
+        // 2. Lookup priority based on storageTarget:
+        dynamic val;
+        if (isConversation && conv != null) {
+          val = _leadValue(conv, name);
+        }
+        if (val == null && d != null) {
+          val = _leadValue(d, name);
+        }
+        if (val == null && !isConversation && conv != null) {
+          val = _leadValue(conv, name);
+        }
+
         if (val != null && val.toString().trim().isNotEmpty) {
           final type = _fieldType(field);
           final role = _systemRole(field);
-          // 3. Phone normalize (webphone normalizePhone).
           if (type == 'phone' ||
               role == 'callerNumber' ||
               role == 'alternateNumber') {
             val = _normalizePhone(val.toString());
           }
-          // 4. Select/radio/checkbox option matching (webphone).
           if (val is String &&
               (type == 'select' ||
                   type == 'radio' ||
@@ -183,15 +206,13 @@ class _DynamicFormSheetState extends State<_DynamicFormSheet> {
                   type == 'single-checkbox')) {
             val = _matchOption(field, val) ?? val;
           }
-        }
-        if (val != null && val.toString().trim().isNotEmpty) {
           _values[name] = val;
-          debugPrint('[DYNAMIC_FORM] Pre-filled field "$name" => "$val"');
+          debugPrint('[DYNAMIC_FORM] Pre-filled field "$name" => "$val" (storage=$storage)');
         }
       }
       debugPrint('[DYNAMIC_FORM] Finished prefill. Total _values count: ${_values.length}, values: $_values');
     } else {
-      debugPrint('[DYNAMIC_FORM] initialData is null: cannot pre-fill form');
+      debugPrint('[DYNAMIC_FORM] initialData and conversationData are null');
     }
   }
 
@@ -515,7 +536,7 @@ class _DynamicFormSheetState extends State<_DynamicFormSheet> {
         'formType': formType,
         'callType': widget.callType,
         'entryMode': 'call',
-        'callReference': '',
+        'callReference': widget.callReference ?? '',
         ...conversationFields,
       },
       'data': {
