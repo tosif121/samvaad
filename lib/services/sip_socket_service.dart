@@ -2074,6 +2074,37 @@ class SipSocketService implements sip.SipUaHelperListener {
     return null;
   }
 
+  Future<Map<String, dynamic>?> fetchContactHistory(
+    String phoneNumber, {
+    int limit = 10,
+    int skip = 0,
+  }) async {
+    try {
+      final cleanNum = UserData.cleanPhoneNumber(phoneNumber);
+      if (cleanNum.isEmpty) return null;
+      _log('[CONTACT_HISTORY] Requesting /contact/$cleanNum/history?limit=$limit&skip=$skip');
+      final headers = await _getAuthHeaders();
+      final response = await http
+          .get(
+            Uri.parse('https://app.samvaad.io/contact/${Uri.encodeComponent(cleanNum)}/history?limit=$limit&skip=$skip'),
+            headers: headers,
+          )
+          .timeout(const Duration(seconds: 6));
+      _log('[CONTACT_HISTORY] Response status=${response.statusCode}');
+      if (response.statusCode == 200) {
+        final decoded = jsonDecode(response.body);
+        if (decoded is Map && decoded['result'] is Map) {
+          final result = Map<String, dynamic>.from(decoded['result'] as Map);
+          _log('[CONTACT_HISTORY] Fetched contact history with keys: ${result.keys.toList()}');
+          return result;
+        }
+      }
+    } catch (e) {
+      _log('[CONTACT_HISTORY] Error fetching contact history: $e');
+    }
+    return null;
+  }
+
   Future<Map<String, dynamic>?> fetchContactSummary(String phoneNumber) async {
     try {
       final cleanNum = UserData.cleanPhoneNumber(phoneNumber);

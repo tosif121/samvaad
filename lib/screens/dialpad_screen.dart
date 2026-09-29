@@ -921,6 +921,14 @@ class _DialpadScreenState extends State<DialpadScreen>
 
       if (cleanNumber.isNotEmpty) {
         try {
+          final history = await _sip.fetchContactHistory(cleanNumber, limit: 10, skip: 0);
+          if (history != null && history['conversations'] is List && (history['conversations'] as List).isNotEmpty) {
+            final firstConv = (history['conversations'] as List).first;
+            if (firstConv is Map) {
+              latestConversation = Map<String, dynamic>.from(firstConv);
+              debugPrint('[POST_CALL_FLOW] Loaded latestConversation from history: ${latestConversation.keys.toList()}');
+            }
+          }
           final summary = await _sip.fetchContactSummary(cleanNumber);
           if (summary != null) {
             if (summary['latestConversation'] is Map) {
